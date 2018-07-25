@@ -489,3 +489,17 @@ class Illuminate(object):
     def __call__(self, x):
         x = x * self.illumination
         return x
+
+class PickChannels(object):
+
+    def __init__(self, channels):
+        """Pick a set of channels from a given image.
+
+        Arguments
+        ---------
+        channels : list of channels to pick from the image.
+        """
+        self.channels = torch.LongTensor(channels)
+
+    def __call__(self, x):
+        return x.index_select(0, self.channels)

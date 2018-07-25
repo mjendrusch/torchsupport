@@ -1,5 +1,6 @@
 from skimage import io
 import torch
+import numpy as np
 
 def imread(path, type='float32'):
   """Reads a given image from file, returning a float tensor."""
