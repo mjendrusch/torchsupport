@@ -22,16 +22,25 @@ class MetricNetwork(nn.Module):
     self.embedding = embedding
     self.metric = metric
     self.task_embedding = task_embedding
+    self.task_representation = None
+    self.frozen = False
 
-  def forward(self, input, task):
-    task_representation = self.task_embedding(self.embedding(task))
+  def embed_task(self, task):
+    """Embeds a single task, and freezes the network for inference.
+    """
+    self.task_representation = self.task_embedding(self.embedding(task))
+    self.frozen = True
+
+  def forward(self, input, task=None):
+    if task != None and not self.frozen:
+      self.task_representation = self.task_embedding(self.embedding(task))
     input_representation = self.embedding(input)
 
-    result = torch.Variable(torch.Tensor(task_representation.size()[0]))
+    result = torch.Variable(torch.Tensor(self.task_representation.size()[0]))
 
-    for idx in range(task_representation.size()[0]):
-      element = task_representation[idx, :]
-      result[idx] = self.metric(input_representation, task_representation)
+    for idx in range(self.task_representation.size()[0]):
+      element = self.task_representation[idx, :]
+      result[idx] = self.metric(input_representation, self.task_representation)
     
     return result
 
@@ -53,7 +62,7 @@ class PrototypicalMetricNetwork(MetricNetwork):
       metric
     )
 
-  def forward(self, input, task):
+  def forward(self, input, task=None):
     super(PrototypicalMetricNetwork, self).forward(input, task)
 
 class ReductionMetricNetwork(MetricNetwork):
@@ -72,5 +81,5 @@ class ReductionMetricNetwork(MetricNetwork):
       metric
     )
 
-  def forward(self, input, task):
+  def forward(self, input, task=None):
     super(ReductionMetricNetwork, self).forward(input, task)
