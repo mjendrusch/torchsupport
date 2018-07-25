@@ -6,7 +6,7 @@ class Conv1x1(nn.Module):
   def __init__(self, width, stride, input, kernels, kernels11,
                activation=func.leaky_relu,
                activation_1x1=func.leaky_relu):
-    super(Conv1x1Module, self).__init__()
+    super(Conv1x1, self).__init__()
     self.conv = nn.Conv2d(input, kernels, width, stride, 1)
     self.bn = nn.BatchNorm2d(kernels)
     self.x11 = nn.Conv2d(kernels, kernels11, 1, 1)
