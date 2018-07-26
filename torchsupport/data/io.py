@@ -21,3 +21,18 @@ def imread(path, type='float32'):
   image = np.transpose(image,(2,0,1))
   image = torch.from_numpy(image)
   return image
+
+def netwrite(path, network):
+  """Writes a given neural network to a file."""
+  writing = True
+  while writing:
+    try:
+      torch.save(network.state_dict(), path)
+      writing = False
+    except OSError as e:
+      if e.errno == 121:
+        print("Attempting to recover from Remote IO Error ...")
+        time.sleep(10)
+      else:
+        print("Unexpected OSError. Aborting ...")
+        raise e
