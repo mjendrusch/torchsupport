@@ -5,6 +5,7 @@ import torch.nn.functional as func
 import torchsupport.modules.dynamic as dyn
 import torchsupport.modules.compact as com
 import torchsupport.modules.reduction as red
+import torchsupport.modules.combination as comb
 
 class MetricNetwork(nn.Module):
   def __init__(self, embedding, task_embedding, metric):
@@ -39,13 +40,14 @@ class MetricNetwork(nn.Module):
     result = torch.Variable(torch.Tensor(self.task_representation.size()[0]))
 
     for idx in range(self.task_representation.size()[0]):
-      element = self.task_representation[idx, :]
-      result[idx] = self.metric(input_representation, self.task_representation)
+      subtask = self.task_representation[idx, :]
+      result[idx] = self.metric(input_representation, subtask)
     
     return result
 
 class ConvexMetricNetwork(MetricNetwork):
   # TODO
+  pass
 
 class PrototypicalMetricNetwork(MetricNetwork):
   def __init__(self, embedding, metric):
@@ -83,3 +85,22 @@ class ReductionMetricNetwork(MetricNetwork):
 
   def forward(self, input, task=None):
     super(ReductionMetricNetwork, self).forward(input, task)
+
+class StatefulReductionMetricNetwork(MetricNetwork):
+  def __init__(self, embedding, reduction, metric):
+    """Learns a representation of data, tasks and a metric relating datapoints and tasks.
+
+    Arguments
+    ---------
+    embedding : an embedding for tasks and network inputs.
+    reduction : a reduction function compressing multiple datapoints into one.
+    metric : a distance function between an embeded input and an embedded task.
+    """
+    super(StatefulReductionMetricNetwork, self).__init__(
+      embedding,
+      red.StatefulTaskReduction(embedding, reduction),
+      metric
+    )
+
+  def forward(self, input, task=None):
+    super(StatefulReductionMetricNetwork, self).forward(input, task)

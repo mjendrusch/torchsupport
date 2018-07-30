@@ -17,19 +17,18 @@ class Prototype(nn.Module):
     def forward(self, task):
         inputs = task[0]
         labels = task[1]
-        length = len(inputs)
 
         unique_labels = []
         for label in labels:
-        if label not in unique_labels:
-            unique_labels.append(label)
+            if label not in unique_labels:
+                unique_labels.append(label)
         num_labels = len(unique_labels)
 
         input_representation = self.embedding(inputs)
         result = torch.Variable(torch.zeros(num_labels))
 
         for idx, label in enumerate(unique_labels):
-        mask = labels == label
+            mask = labels == label
         result[idx] = torch.sum(input_representation[labels == label], 0)
         result[idx] /= sum(mask).float()
 
@@ -55,19 +54,18 @@ class Reduction(nn.Module):
     def forward(self, task):
         inputs = task[0]
         labels = task[1]
-        length = len(inputs)
 
         unique_labels = []
         for label in labels:
-        if label not in unique_labels:
-            unique_labels.append(label)
+            if label not in unique_labels:
+                unique_labels.append(label)
         num_labels = len(unique_labels)
 
         input_representation = self.embedding(inputs)
         result = torch.Variable(torch.zeros(num_labels))
 
         for idx, label in enumerate(unique_labels):
-        mask = labels == label
+            mask = labels == label
         label_tensor = input_representation[mask]
         for idy in range(label_tensor.size()[0]):
             result[idx] = self.reduction(result[idx], label_tensor[idy])
@@ -82,27 +80,26 @@ class TaskPrototype(nn.Module):
         ---------
         embedding : an input embedding function.
         """
-        super(Prototype, self).__init__()
+        super(TaskPrototype, self).__init__()
         self.embedding = embedding
 
     def forward(self, task):
         inputs = task[0]
         labels = task[1]
-        length = len(inputs)
 
         unique_labels = []
         for label in labels:
-        if label not in unique_labels:
-            unique_labels.append(label)
+            if label not in unique_labels:
+                unique_labels.append(label)
         num_labels = len(unique_labels)
 
         input_representation = self.embedding(inputs)
         result = torch.Variable(torch.zeros(num_labels))
 
         for idx, label in enumerate(unique_labels):
-        mask = labels == label
-        result[idx] = torch.sum(input_representation[labels == label], 0)
-        result[idx] /= sum(mask).float()
+            mask = labels == label
+            result[idx] = torch.sum(input_representation[labels == label], 0)
+            result[idx] /= sum(mask).float()
 
         return result
 
@@ -118,26 +115,25 @@ class TaskReduction(nn.Module):
                     a single task representation by reduction, generalizing prototypical
                     networks.
         """
-        super(Reduction, self).__init__()
+        super(TaskReduction, self).__init__()
         self.embedding = embedding
         self.reduction = reduction
 
     def forward(self, task):
         inputs = task[0]
         labels = task[1]
-        length = len(inputs)
 
         unique_labels = []
         for label in labels:
-        if label not in unique_labels:
-            unique_labels.append(label)
+            if label not in unique_labels:
+                unique_labels.append(label)
         num_labels = len(unique_labels)
 
         input_representation = self.embedding(inputs)
         result = torch.Variable(torch.zeros(num_labels))
 
         for idx, label in enumerate(unique_labels):
-        mask = labels == label
+            mask = labels == label
         label_tensor = input_representation[mask]
         for idy in range(label_tensor.size()[0]):
             result[idx] = self.reduction(result[idx], label_tensor[idy])
@@ -157,26 +153,25 @@ class StatefulTaskReduction(nn.Module):
                     a single task representation by reduction, generalizing prototypical
                     networks.
         """
-        super(Reduction, self).__init__()
+        super(StatefulTaskReduction, self).__init__()
         self.embedding = embedding
         self.reduction = reduction
 
     def forward(self, task):
         inputs = task[0]
         labels = task[1]
-        length = len(inputs)
 
         unique_labels = []
         for label in labels:
-        if label not in unique_labels:
-            unique_labels.append(label)
+            if label not in unique_labels:
+                unique_labels.append(label)
         num_labels = len(unique_labels)
 
         input_representation = self.embedding(inputs)
         result = torch.Variable(torch.zeros(num_labels))
 
         for idx, label in enumerate(unique_labels):
-        mask = labels == label
+            mask = labels == label
         label_tensor = input_representation[mask]
         state = self.reduction.initState()
         for idy in range(label_tensor.size()[0]):
