@@ -4,7 +4,14 @@ import numpy as np
 import time
 
 def imread(path, type='float32'):
-  """Reads a given image from file, returning a float tensor."""
+  """Reads a given image from file, returning a :class:`Tensor`.
+  
+  Arguments
+  ---------
+  path : path to an image file.
+
+  type : the desired type of the output tensor, defaults to 'float32'.
+  """
   reading = True
   while reading:
     try:
@@ -22,8 +29,15 @@ def imread(path, type='float32'):
   image = torch.from_numpy(image)
   return image
 
-def netwrite(path, network):
-  """Writes a given neural network to a file."""
+def netwrite(network, path):
+  """Writes a given neural network to a file.
+  
+  Arguments
+  ---------
+  network : the network to be written, needs to inherit from :class:`Module`.
+
+  path : path to the file where the network will be written.
+  """
   writing = True
   while writing:
     try:
