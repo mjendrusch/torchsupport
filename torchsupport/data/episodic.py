@@ -2,35 +2,50 @@ import torch
 import random
 import pandas as pd
 from io import imread
-from torch.utils.data import Dataset, DataLoader, Sampler
+from torch.utils.data import Dataset, DataLoader, Sampler, SubsetRandomSampler
+import os
 
 class SubDataset(Dataset):
   def __init__(self, dataset, indices):
-    """The subset of a Dataset, defined by a set of indices."""
+    """The subset of a Dataset, defined by a set of indices.
+    
+    Arguments
+    ---------
+    dataset : a :class:`Dataset` from which a subset is chosen.
+
+    indices : a :class:`list` of indices making up the chosen subset.
+    """
     self.dataset = dataset
     self.indices = indices
   
   def __len__(self):
     return len(self.indices)
 
-  def __getindex__(self, index):
+  def __getitem__(self, index):
     idx = self.indices[index]
-    img_name = os.path.join(self.annotation.iloc[idx, 0])
+    img_name = os.path.join(self.dataset.annotation.iloc[idx, 0])
     image = imread(img_name)
-    labelname = self.annotation.iloc[idx, 1]
-    label = torch.LongTensor([[self.classmap[labelname]]])
+    labelname = self.dataset.annotation.iloc[idx, 1]
+    label = torch.LongTensor([[self.dataset.classmap[labelname]]])
 
-    if self.transform != None:
-      image = self.transform(image)
+    if self.dataset.transform != None:
+      image = self.dataset.transform(image)
 
     sample = {
       "image": image,
       "label": label
     }
 
+    return sample
+
 class LabelPartitionedDataset(Dataset):
   def __init__(self, dataset):
-    """A dataset partitioned by its labels."""
+    """A :class:`Dataset` partitioned by its labels.
+    
+    Arguments
+    ---------
+    dataset : a :class:`Dataset` to be partitioned.
+    """
     self.dataset = dataset
     self.labelindices = {}
     self.labels = []
@@ -42,12 +57,17 @@ class LabelPartitionedDataset(Dataset):
         self.labels.append(label)
       self.labelindices[label].append(idx)
   
-  def __getindex__(self, label):
+  def __getitem__(self, label):
     return SubDataset(self.dataset, self.labelindices[label])
 
 class UnionSampler(Sampler):
   def __init__(self, samplers):
-    """Samples randomly from a union of samplers."""
+    """Samples randomly from a union of samplers.
+    
+    Arguments
+    ---------
+    samplers : a :class:`list` of :class:`Sampler`s to be unified.
+    """
     self.samplers = samplers
   
   def __len__(self):
@@ -59,21 +79,26 @@ class UnionSampler(Sampler):
   def __iter__(self):
     iters = [iter(sampler) for sampler in self.samplers]
     def iterator():
-      for idx in range(len(self)):
-        next = None
-        while next == None:
+      for _ in range(len(self)):
+        next_val = None
+        while next_val == None:
           it = random.choice(iters)
           try:
-            next = next(it)
+            next_val = next(it)
           except StopIteration:
-            next = None
+            next_val = None
             iters.remove(it)
-        yield next
-    return iterator
+        yield next_val
+    return iterator()
 
 class LabelPartitionedSampler(object):
   def __init__(self, dataset):
-    """Partition of a `Dataset` into multiple `Samplers`, by label."""
+    """Partition of a :class:`Dataset` into multiple class:`Sampler`s, by label.
+    
+    Arguments
+    ---------
+    dataset : a :class:`Dataset` to be partitioned by label.
+    """
     self.dataset = dataset
     self.labelindices = {}
     self.labels = []
@@ -87,11 +112,10 @@ class LabelPartitionedSampler(object):
       self.labelindices[label].append(idx)
     for label in self.labels:
       self.samplers[label] = SubsetRandomSampler(
-        self.dataset,
         self.labelindices[label]
       )
   
-  def __getindex__(self, label):
+  def __getitem__(self, label):
     result = None
     if isinstance(label, list):
       samplers = []
@@ -100,7 +124,7 @@ class LabelPartitionedSampler(object):
       result = UnionSampler(samplers)
     else:
       result = self.samplers[label]
-    return SubsetRandomSampler(self.dataset, indices)
+    return result
 
 class EpisodicSampler(Sampler):
   def __init__(self, dataset,
@@ -110,7 +134,7 @@ class EpisodicSampler(Sampler):
       
     Arguments
     ---------
-    dataset : a `Dataset` to be packed into episodes.
+    dataset : a :class:`Dataset` to be packed into episodes.
 
     batch_size : the batch size for each episode.
 
@@ -140,7 +164,7 @@ class EpisodicSampler(Sampler):
       labelsampler = self.labelsampler[label]
       for idx in range(self.shot_size):
         supportindices.append(next(labelsampler))
-    return batchindices + supportindices
+    return iter(batchindices + supportindices)
 
   def __len__(self):
     return self.max_episodes
@@ -149,25 +173,26 @@ class _EpisodicOverlay(object):
   def __init__(self, loader, batch_size):
     """Wraps a DataLoader to separate its batches into batch and support."""
     self.loader = loader
+    self.batch_size = batch_size
 
   def __len__(self):
-    return len(loader)
+    return len(self.loader)
 
   def __iter__(self):
     def iterator():
-      for elem in loader:
+      for elem in self.loader:
         data, labels = elem.values()
-        batch = data[:batch_size, :, :, :]
-        support = data[batch_size:, :, :, :]
-        batchlabels = labels[:batch_size, :, :]
-        supportlabels = labels[batch_size:, :, :]
+        batch = data[:self.batch_size, :, :, :]
+        support = data[self.batch_size:, :, :, :]
+        batchlabels = labels[:self.batch_size, :, :]
+        supportlabels = labels[self.batch_size:, :, :]
         yield {
           "batch": batch,
           "batchlabels": batchlabels,
           "support": support,
           "supportlabels": supportlabels
         }
-    return iterator
+    return iterator()
 
 def EpisodicLoader(dataset, batch_size=128, label_size=2,
                    shot_size=1, max_episodes=1000, num_workers=None):
@@ -175,7 +200,7 @@ def EpisodicLoader(dataset, batch_size=128, label_size=2,
   
   Arguments
   ---------
-  dataset : a `Dataset` to be packed into episodes.
+  dataset : a :class:`Dataset` to be packed into episodes.
 
   batch_size : the batch size for each episode.
 
