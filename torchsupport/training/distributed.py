@@ -14,12 +14,13 @@ class SynchronousDistributedTraining(BasicTraining):
     super(SynchronousDistributedTraining, self).__init__(*args, **kwargs)
     self.world_size = distributed.get_world_size()
     self.rank = distributed.get_rank()
+    self.group = distributed.new_group(ranks=list(range(world_size)))
 
   def step(self, data, label):
     predictions = self.net(data)
     loss_val = self.loss(predictions, label)
     loss_val.backwards()
-    _average_gradients(self.net, self.world_size)
+    _average_gradients(self.net, self.world_size, self.group)
     self.optimizer.step()
     self.training_loss = loss_val.item()
   
@@ -36,12 +37,18 @@ class AsynchronousDistributedTraining(BasicTraining):
     self.gossip_step = 0
     self.world_size = distributed.get_world_size()
     self.rank = distributed.get_rank()
+    self.groups = []
+    for idx in range(self.world_size - 1):
+      partner = (self.rank + idx + 1) % world_size
+      group = distributed.new_group(ranks=[rank, partner])
+      self.groups.append(group)
 
   def step(self, data, label):
     predictions = self.net(data)
     loss_val = self.loss(predictions, label)
     loss_val.backwards()
-    _gossip_grad(self.net, self.world_size, self.rank, self.step)
+    _gossip_grad(self.net, self.world_size, self.rank,
+                 self.groups, self.step)
     self.step += 1
     if self.step == self.world_size - 1:
       self.step = 0
@@ -52,9 +59,8 @@ class AsynchronousDistributedTraining(BasicTraining):
     if self.rank == 0:
       super(AsynchronousDistributedTraining, self).checkpoint()
 
-def _average_gradients(net, world_size, cuda=False):
+def _average_gradients(net, world_size, group, cuda=False):
   for p in net.parameters():
-    group = distributed.new_group(ranks=list(range(world_size)))
     tensor = p.grad.data.cpu()
     distributed.all_reduce(tensor,
                            op=distributed.reduce_op.SUM,
@@ -65,9 +71,8 @@ def _average_gradients(net, world_size, cuda=False):
     else:
       p.grad.data = tensor
 
-def _gossip_grad(net, world_size, rank, step):
-  partner = (rank + step + 1) % world_size
-  group = distributed.new_group(ranks=[rank, partner])
+def _gossip_grad(net, world_size, rank, groups, step):
+  group = groups[step]
   for p in net.parameters():
     tensor = p.grad.data.cpu()
     distributed.all_reduce(tensor,
