@@ -461,6 +461,26 @@ class Normalize(object):
             x[idx, :, :] = (x[idx, :, :] - xmean) / xstd
         return x
 
+class Crop(object):
+
+    def __init__(self, min_width, max_width, min_height, max_height):
+        self.min_width = min_width
+        self.max_width = max_width
+        self.min_height = min_height
+        self.max_height = max_height
+
+    def __call__(self, x):
+        img_height = x.size(1)
+        img_width = x.size(2)
+        height = random.randrange(self.min_height, self.max_height)
+        width = random.randrange(self.min_width, self.max_width)
+        dh = img_height - height
+        dw = img_width - width
+        random_y = random.randrange(0, dh)
+        random_x = random.randrange(0, dw)
+        x = x[:, random_y:random_y+height, random_x:random_x+width]
+        return x
+
 class Perturb(object):
 
     def __init__(self, mean=0.0, std=0.1):

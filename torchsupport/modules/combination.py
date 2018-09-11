@@ -46,7 +46,7 @@ def _concatenate(input, task):
     concatenated = torch.cat([
       flattened_input,
       batchexpand(flattened_task, flattened_input)
-    ], 1)
+    ], 1).unsqueeze(1)
     return concatenated
 
 class ConnectedCombination(Concatenation):
@@ -70,10 +70,12 @@ class ConnectedCombination(Concatenation):
             self.bn = None
 
     def forward(self, input, task):
-        concatenated = super(ConnectedCombination, self).forward(input, task)
-        result = self.connected(concatenated)
+        concatenated = _concatenate(input, task)
+        combined = self.connected(concatenated)
+        combined = func.dropout(combined, training=True)
         if self.bn != None:
-            result = self.bn(result)
+            combined = self.bn(flatten(combined, batch=True)).unsqueeze(1)
+        result = self.evaluator(combined)
         return result
 
 class BilinearCombination(Combination):

@@ -25,12 +25,12 @@ class Prototype(nn.Module):
         num_labels = len(unique_labels)
 
         input_representation = self.embedding(inputs)
-        result = torch.Variable(torch.zeros(num_labels))
+        result = torch.zeros(num_labels)
 
         for idx, label in enumerate(unique_labels):
-            mask = labels == label
-        result[idx] = torch.sum(input_representation[labels == label], 0)
-        result[idx] /= sum(mask).float()
+            mask = (labels == label)[:, 0, 0]
+            result[idx] = torch.sum(input_representation[mask], 0)
+            result[idx] /= sum(mask).float()
 
         return result
 
@@ -62,10 +62,10 @@ class Reduction(nn.Module):
         num_labels = len(unique_labels)
 
         input_representation = self.embedding(inputs)
-        result = torch.Variable(torch.zeros(num_labels))
+        result = torch.zeros(num_labels)
 
         for idx, label in enumerate(unique_labels):
-            mask = labels == label
+            mask = (labels == label)[:, 0, 0]
         label_tensor = input_representation[mask]
         for idy in range(label_tensor.size()[0]):
             result[idx] = self.reduction(result[idx], label_tensor[idy])
@@ -94,13 +94,15 @@ class TaskPrototype(nn.Module):
         num_labels = len(unique_labels)
 
         input_representation = self.embedding(inputs)
-        result = torch.Variable(torch.zeros(num_labels))
+        result = torch.zeros((num_labels, *(input_representation.size()[1:])))
 
         for idx, label in enumerate(unique_labels):
-            mask = labels == label
-            result[idx] = torch.sum(input_representation[labels == label], 0)
-            result[idx] /= sum(mask).float()
+            mask = (labels == label)[:, 0, 0]
+            result[idx, :] = torch.sum(input_representation[mask], 0)
+            result[idx, :] /= sum(mask).float().item()
 
+        result = result.to(inputs.device)
+        print(result.device)
         return result
 
 class TaskReduction(nn.Module):
@@ -130,13 +132,13 @@ class TaskReduction(nn.Module):
         num_labels = len(unique_labels)
 
         input_representation = self.embedding(inputs)
-        result = torch.Variable(torch.zeros(num_labels))
+        result = torch.zeros(num_labels, input_representation.size()[1])
 
         for idx, label in enumerate(unique_labels):
-            mask = labels == label
+            mask = (labels == label)[:, 0, 0]
         label_tensor = input_representation[mask]
         for idy in range(label_tensor.size()[0]):
-            result[idx] = self.reduction(result[idx], label_tensor[idy])
+            result[idx, :] = self.reduction(result[idx, :], label_tensor[idy])
         
         return result
 
@@ -168,10 +170,10 @@ class StatefulTaskReduction(nn.Module):
         num_labels = len(unique_labels)
 
         input_representation = self.embedding(inputs)
-        result = torch.Variable(torch.zeros(num_labels))
+        result = torch.zeros(num_labels)
 
         for idx, label in enumerate(unique_labels):
-            mask = labels == label
+            mask = (labels == label)[:, 0, 0]
         label_tensor = input_representation[mask]
         state = self.reduction.initState()
         for idy in range(label_tensor.size()[0]):

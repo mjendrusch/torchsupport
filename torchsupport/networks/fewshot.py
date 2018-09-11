@@ -7,6 +7,22 @@ import torchsupport.modules.compact as com
 import torchsupport.modules.reduction as red
 import torchsupport.modules.combination as comb
 
+from torchsupport.ops.shape import flatten
+
+class MetricLoss(nn.Module):
+  """Loss designed to train a true metric, as opposed to a
+  sigmoid classifier.
+  """
+  def __init__(self):
+    super(MetricLoss, self).__init__()
+
+  def forward(self, input, target):
+    weight = (1.0 - target)
+    weight /= weight.sum()
+    weight += target / target.size(0)
+    tensor_result = weight * (input - target) ** 2
+    return tensor_result.sum()
+
 class MetricNetwork(nn.Module):
   def __init__(self, embedding, task_embedding, metric):
     """Learns a representation of data, together with a metric relating two datapoints.
@@ -29,19 +45,21 @@ class MetricNetwork(nn.Module):
   def embed_task(self, task):
     """Embeds a single task, and freezes the network for inference.
     """
-    self.task_representation = self.task_embedding(self.embedding(task))
+    self.task_representation = self.task_embedding(task)
     self.frozen = True
 
   def forward(self, input, task=None):
     if task != None and not self.frozen:
-      self.task_representation = self.task_embedding(self.embedding(task))
+      self.task_representation = self.task_embedding(task)
     input_representation = self.embedding(input)
 
-    result = torch.Variable(torch.Tensor(self.task_representation.size()[0]))
+    result = torch.zeros((input_representation.size()[0], self.task_representation.size()[0]))
+    result = result.to(input.device)
 
     for idx in range(self.task_representation.size()[0]):
       subtask = self.task_representation[idx, :]
-      result[idx] = self.metric(input_representation, subtask)
+      subresult = flatten(self.metric(input_representation, subtask))
+      result[:, idx] = func.sigmoid(subresult)
     
     return result
 
@@ -65,7 +83,7 @@ class PrototypicalMetricNetwork(MetricNetwork):
     )
 
   def forward(self, input, task=None):
-    super(PrototypicalMetricNetwork, self).forward(input, task)
+    return super(PrototypicalMetricNetwork, self).forward(input, task)
 
 class ReductionMetricNetwork(MetricNetwork):
   def __init__(self, embedding, reduction, metric):
@@ -84,7 +102,7 @@ class ReductionMetricNetwork(MetricNetwork):
     )
 
   def forward(self, input, task=None):
-    super(ReductionMetricNetwork, self).forward(input, task)
+    return super(ReductionMetricNetwork, self).forward(input, task)
 
 class StatefulReductionMetricNetwork(MetricNetwork):
   def __init__(self, embedding, reduction, metric):
@@ -103,4 +121,4 @@ class StatefulReductionMetricNetwork(MetricNetwork):
     )
 
   def forward(self, input, task=None):
-    super(StatefulReductionMetricNetwork, self).forward(input, task)
+    return super(StatefulReductionMetricNetwork, self).forward(input, task)

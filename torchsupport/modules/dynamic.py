@@ -11,7 +11,7 @@ class DynamicOp(nn.Module):
     weights = self.generator(generation_input)
     size = x.size()
     batch_size = size[0]
-    result = Variable(torch.Tensor(size[0], size[1], size[2], size[3]))
+    result = torch.Tensor(size[0], size[1], size[2], size[3])
     for idx in range(x.shape[0]):
       result[idx, :, :, :] = self.op(x[idx, :, :, :])
     return result

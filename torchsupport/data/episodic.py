@@ -1,8 +1,12 @@
 import torch
 import random
 import pandas as pd
-from io import imread
-from torch.utils.data import Dataset, DataLoader, Sampler, SubsetRandomSampler
+from torchsupport.data.io import imread
+from torch.utils.data import Dataset, DataLoader
+if True:
+  from torch.utils.data.sampler import Sampler, SubsetRandomSampler
+else:
+  from torch.utils.data import Sampler, SubsetRandomSampler
 import os
 
 class SubDataset(Dataset):
@@ -22,21 +26,26 @@ class SubDataset(Dataset):
     return len(self.indices)
 
   def __getitem__(self, index):
-    idx = self.indices[index]
-    img_name = os.path.join(self.dataset.annotation.iloc[idx, 0])
-    image = imread(img_name)
-    labelname = self.dataset.annotation.iloc[idx, 1]
-    label = torch.LongTensor([[self.dataset.classmap[labelname]]])
-
-    if self.dataset.transform != None:
-      image = self.dataset.transform(image)
-
     sample = {
-      "image": image,
-      "label": label
+      "image": self.getimage(index),
+      "label": self.getlabel(index)
     }
 
     return sample
+
+  def getimage(self, index):
+    idx = self.indices[index]
+    img_name = os.path.join(self.dataset.annotation.iloc[idx, 0])
+    image = imread(img_name)
+    if self.dataset.transform != None:
+      image = self.dataset.transform(image)
+    return image
+
+  def getlabel(self, index):
+    idx = self.indices[index]
+    labelname = self.dataset.annotation.iloc[idx, 1]
+    label = torch.LongTensor([[self.dataset.classmap[labelname]]])
+    return label
 
 class LabelPartitionedDataset(Dataset):
   def __init__(self, dataset):
@@ -50,7 +59,7 @@ class LabelPartitionedDataset(Dataset):
     self.labelindices = {}
     self.labels = []
     for idx in range(len(self.dataset)):
-      labelindex = self.dataset[idx]["label"][0][0]
+      labelindex = self.dataset.getlabel(idx)[0][0]
       label = self.dataset.classmap_inv[labelindex]
       if label not in self.labels:
         self.labelindices[label] = []
@@ -71,15 +80,18 @@ class UnionSampler(Sampler):
     self.samplers = samplers
   
   def __len__(self):
-    result = 0
-    for sampler in self.samplers:
-      result += len(sampler)
-    return result
+    try:
+      result = 0
+      for sampler in self.samplers:
+        result += len(sampler)
+      return result
+    except:
+      return None
   
   def __iter__(self):
     iters = [iter(sampler) for sampler in self.samplers]
     def iterator():
-      for _ in range(len(self)):
+      while len(iters) > 0:
         next_val = None
         while next_val == None:
           it = random.choice(iters)
@@ -89,6 +101,25 @@ class UnionSampler(Sampler):
             next_val = None
             iters.remove(it)
         yield next_val
+    return iterator()
+
+class ReplacementRandomSampler(Sampler):
+  def __init__(self, indices):
+    """Samples randomly with replacement from a indices.
+
+    Arguments:
+      indices (list[int]): a list of indices to be randomly sampled from.
+    """
+    self.indices = indices
+
+  def __len__(self):
+    return None
+
+  def __iter__(self):
+    def iterator():
+      while True:
+        index = random.choice(range(len(self.indices)))
+        yield self.indices[index]
     return iterator()
 
 class LabelPartitionedSampler(object):
@@ -104,14 +135,14 @@ class LabelPartitionedSampler(object):
     self.labels = []
     self.samplers = {}
     for idx in range(len(self.dataset)):
-      labelindex = self.dataset[idx]["label"][0][0]
+      labelindex = self.dataset.getlabel(idx)[0][0]
       label = self.dataset.classmap_inv[labelindex]
       if label not in self.labels:
         self.labelindices[label] = []
         self.labels.append(label)
       self.labelindices[label].append(idx)
     for label in self.labels:
-      self.samplers[label] = SubsetRandomSampler(
+      self.samplers[label] = ReplacementRandomSampler(
         self.labelindices[label]
       )
   
@@ -151,20 +182,25 @@ class EpisodicSampler(Sampler):
     self.label_size = label_size
     self.shot_size = shot_size
     self.max_episodes = max_episodes
+    print("EPISODIC SAMPLER SIZE: ", sum(1 for _ in iter(self)))
 
   def __iter__(self):
-    num_episode_labels = random.randrange(2, self.label_size + 1)
-    episode_labels = random.sample(self.labelsampler.labels, num_episode_labels)
-    sampler = iter(self.labelsampler[episode_labels])
-    batchindices = []
-    supportindices = []
-    for idx in range(self.batch_size):
-      batchindices.append(sampler[idx])
-    for label in episode_labels:
-      labelsampler = self.labelsampler[label]
-      for idx in range(self.shot_size):
-        supportindices.append(next(labelsampler))
-    return iter(batchindices + supportindices)
+    def iterator():
+      for idx in range(self.max_episodes):
+        print("EPISODE: ", idx)
+        num_episode_labels = random.randrange(2, self.label_size + 1)
+        episode_labels =  random.sample(self.labelsampler.labels, num_episode_labels)
+        sampler = iter(self.labelsampler[episode_labels])
+        batchindices = []
+        supportindices = []
+        for idx in range(self.batch_size):
+          batchindices.append(next(sampler))
+        for label in episode_labels:
+          labelsampler = iter(self.labelsampler[label])
+          for idx in range(self.shot_size):
+            supportindices.append(next(labelsampler))
+        yield batchindices + supportindices
+    return iterator()
 
   def __len__(self):
     return self.max_episodes
@@ -174,23 +210,50 @@ class _EpisodicOverlay(object):
     """Wraps a DataLoader to separate its batches into batch and support."""
     self.loader = loader
     self.batch_size = batch_size
+    print("BATCH SIZE: ", self.batch_size)
 
   def __len__(self):
     return len(self.loader)
 
   def __iter__(self):
     def iterator():
-      for elem in self.loader:
+      for elem in iter(self.loader):
         data, labels = elem.values()
         batch = data[:self.batch_size, :, :, :]
         support = data[self.batch_size:, :, :, :]
         batchlabels = labels[:self.batch_size, :, :]
         supportlabels = labels[self.batch_size:, :, :]
+
+        # FINISH
+        labelmap = []
+        count = 0
+        total = 0
+        inverse_labelmap = {}
+        for label_tensor in supportlabels[:, 0, 0]:
+          label = label_tensor.item()
+          if label not in labelmap:
+            print("LABEL: ", label)
+            labelmap.append(label)
+            inverse_labelmap[label] = count
+            count += 1
+          total += 1
+
+        batchonehot = torch.zeros((self.batch_size, count))
+
+        for idx in range(self.batch_size):
+          batchlabels[idx, 0, 0] = inverse_labelmap[batchlabels[idx, 0, 0].item()]
+          batchonehot[idx, batchlabels[idx, 0, 0].item()] = 1.0
+        for idx in range(supportlabels.size()[0]):
+          supportlabels[idx, 0, 0] = inverse_labelmap[supportlabels[idx, 0, 0].item()]
+        
         yield {
           "batch": batch,
           "batchlabels": batchlabels,
+          "batchonehot": batchonehot,
           "support": support,
-          "supportlabels": supportlabels
+          "supportlabels": supportlabels,
+          "classes": count,
+          "shots": total
         }
     return iterator()
 
