@@ -19,7 +19,7 @@ class MetricLoss(nn.Module):
   def forward(self, input, target):
     weight = (1.0 - target)
     weight /= weight.sum()
-    weight += target / target.size(0)
+    weight += target / target.sum()
     tensor_result = weight * (input - target) ** 2
     return tensor_result.sum()
 

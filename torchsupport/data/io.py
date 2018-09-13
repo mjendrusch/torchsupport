@@ -90,8 +90,8 @@ def netread(network, path):
   reading = True
   while reading:
     try:
-      state_dict = torch.load(path)
-      network.load_state_dict(state_dict)
+      state_dict = torch.load(path, map_location='cpu')
+      network.load_state_dict(state_dict, strict=True)
       reading = False
     except OSError as e:
       if e.errno == 121:

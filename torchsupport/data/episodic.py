@@ -60,7 +60,7 @@ class LabelPartitionedDataset(Dataset):
     self.labels = []
     for idx in range(len(self.dataset)):
       labelindex = self.dataset.getlabel(idx)[0][0]
-      label = self.dataset.classmap_inv[labelindex]
+      label = labelindex.item()#self.dataset.classmap_inv[labelindex]
       if label not in self.labels:
         self.labelindices[label] = []
         self.labels.append(label)
@@ -136,7 +136,7 @@ class LabelPartitionedSampler(object):
     self.samplers = {}
     for idx in range(len(self.dataset)):
       labelindex = self.dataset.getlabel(idx)[0][0]
-      label = self.dataset.classmap_inv[labelindex]
+      label = labelindex.item()#self.dataset.classmap_inv[labelindex]
       if label not in self.labels:
         self.labelindices[label] = []
         self.labels.append(label)
@@ -182,13 +182,11 @@ class EpisodicSampler(Sampler):
     self.label_size = label_size
     self.shot_size = shot_size
     self.max_episodes = max_episodes
-    print("EPISODIC SAMPLER SIZE: ", sum(1 for _ in iter(self)))
 
   def __iter__(self):
     def iterator():
       for idx in range(self.max_episodes):
-        print("EPISODE: ", idx)
-        num_episode_labels = random.randrange(2, self.label_size + 1)
+        num_episode_labels = self.label_size# FIXME! #random.randrange(2, self.label_size + 1)
         episode_labels =  random.sample(self.labelsampler.labels, num_episode_labels)
         sampler = iter(self.labelsampler[episode_labels])
         batchindices = []
@@ -210,7 +208,6 @@ class _EpisodicOverlay(object):
     """Wraps a DataLoader to separate its batches into batch and support."""
     self.loader = loader
     self.batch_size = batch_size
-    print("BATCH SIZE: ", self.batch_size)
 
   def __len__(self):
     return len(self.loader)
@@ -232,7 +229,6 @@ class _EpisodicOverlay(object):
         for label_tensor in supportlabels[:, 0, 0]:
           label = label_tensor.item()
           if label not in labelmap:
-            print("LABEL: ", label)
             labelmap.append(label)
             inverse_labelmap[label] = count
             count += 1

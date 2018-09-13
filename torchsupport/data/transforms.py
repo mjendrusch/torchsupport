@@ -459,6 +459,8 @@ class Normalize(object):
             xmean = torch.mean(x[idx, :, :])
             xstd = torch.std(x[idx, :, :])
             x[idx, :, :] = (x[idx, :, :] - xmean) / xstd
+            if xstd == 0:
+                x[idx, :, :] = 0.0
         return x
 
 class Crop(object):

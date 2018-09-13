@@ -94,15 +94,19 @@ class TaskPrototype(nn.Module):
         num_labels = len(unique_labels)
 
         input_representation = self.embedding(inputs)
-        result = torch.zeros((num_labels, *(input_representation.size()[1:])))
+        # result = torch.zeros((num_labels, *(input_representation.size()[1:])))
+
+        results = []
 
         for idx, label in enumerate(unique_labels):
             mask = (labels == label)[:, 0, 0]
-            result[idx, :] = torch.sum(input_representation[mask], 0)
-            result[idx, :] /= sum(mask).float().item()
+            sumval = torch.sum(input_representation[mask], 0) / sum(mask).float().item()
+            results.append(sumval.unsqueeze(0))
+            # result[idx, :] = torch.sum(input_representation[mask], 0)
+            # result[idx, :] /= sum(mask).float().item()
 
+        result = torch.cat(results, dim=0)
         result = result.to(inputs.device)
-        print(result.device)
         return result
 
 class TaskReduction(nn.Module):
