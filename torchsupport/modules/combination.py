@@ -44,9 +44,10 @@ def _concatenate(input, task):
     flattened_input = flatten(input, batch=True)
     flattened_task = flatten(task, batch=False)
     concatenated = torch.cat([
-      flattened_input,
-      batchexpand(flattened_task, flattened_input)
-    ], 1).unsqueeze(1)
+      flattened_input.unsqueeze(1),
+      batchexpand(flattened_task, flattened_input).unsqueeze(1)
+    ], 1)
+    print("CONCSHAPE: ", concatenated.size())
     return concatenated
 
 class ConnectedCombination(Concatenation):

@@ -265,6 +265,55 @@ class Rotation(object):
             else:
                 return x_transformed
 
+class Rotation4(object):
+
+    def __init__(self,
+                 fill_mode='constant', 
+                 fill_value=0., 
+                 target_fill_mode='nearest', 
+                 target_fill_value=0., 
+                 lazy=False):
+        """Randomly rotate an image between (-degrees, degrees). If the image
+        has multiple channels, the same rotation will be applied to each channel.
+
+        Arguments
+        ---------
+        rotation_range : integer or float
+            image will be rotated between (-degrees, degrees) degrees
+
+        fill_mode : string in {'constant', 'nearest'}
+            how to fill the empty space caused by the transform
+
+        fill_value : float
+            the value to fill the empty space with if fill_mode='constant'
+
+        lazy    : boolean
+            if true, perform the transform on the tensor and return the tensor
+            if false, only create the affine transform matrix and return that
+        """
+        self.fill_mode = fill_mode
+        self.fill_value = fill_value
+        self.target_fill_mode = target_fill_mode
+        self.target_fill_value = target_fill_value
+        self.lazy = lazy
+
+    def __call__(self, x, y=None):
+        degree = random.choice([0, math.pi/2, math.pi, 3 * math.pi/2])
+        theta = math.pi / 180 * degree
+        rotation_matrix = np.array([[math.cos(theta), -math.sin(theta), 0],
+                                    [math.sin(theta), math.cos(theta), 0],
+                                    [0, 0, 1]])
+        if self.lazy:
+            return rotation_matrix
+        else:
+            x_transformed = torch.from_numpy(apply_transform(x.numpy(), rotation_matrix,
+                fill_mode=self.fill_mode, fill_value=self.fill_value))
+            if y:
+                y_transformed = torch.from_numpy(apply_transform(y.numpy(), rotation_matrix,
+                fill_mode=self.target_fill_mode, fill_value=self.target_fill_value))
+                return x_transformed, y_transformed
+            else:
+                return x_transformed
 
 class Translation(object):
 

@@ -109,6 +109,26 @@ class TaskPrototype(nn.Module):
         result = result.to(inputs.device)
         return result
 
+class TaskBinaryPrototype(nn.Module):
+    def __init__(self, embedding):
+        """Embeds a task according to a given combination heuristic.
+
+        Arguments
+        ---------
+        embedding : an input embedding function.
+        """
+        super(TaskBinaryPrototype, self).__init__()
+        self.embedding = embedding
+
+    def forward(self, task):
+        inputs = task[0]
+        labels = task[1]
+
+        input_representation = self.embedding(inputs)
+
+        result = torch.sum(input_representation, 0) / float(input_representation.size(0))
+        return result
+
 class TaskReduction(nn.Module):
     def __init__(self, embedding, reduction):
         """Embeds a variable number of labelled support examples by a trainable

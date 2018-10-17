@@ -187,12 +187,62 @@ class EpisodicSampler(Sampler):
     def iterator():
       for idx in range(self.max_episodes):
         num_episode_labels = self.label_size# FIXME! #random.randrange(2, self.label_size + 1)
-        episode_labels =  random.sample(self.labelsampler.labels, num_episode_labels)
+        episode_labels = random.sample(self.labelsampler.labels, num_episode_labels)
         sampler = iter(self.labelsampler[episode_labels])
         batchindices = []
         supportindices = []
         for idx in range(self.batch_size):
           batchindices.append(next(sampler))
+        for label in episode_labels:
+          labelsampler = iter(self.labelsampler[label])
+          for idx in range(self.shot_size):
+            supportindices.append(next(labelsampler))
+        yield batchindices + supportindices
+    return iterator()
+
+  def __len__(self):
+    return self.max_episodes
+
+class EpisodicBinarySampler(Sampler):
+  def __init__(self, dataset,
+               batch_size=128,
+               shot_size=1,
+               max_episodes=1000):
+    """Samples episodes from a dataset.
+      
+    Arguments
+    ---------
+    dataset : a :class:`Dataset` to be packed into episodes.
+
+    batch_size : the batch size for each episode.
+
+    label_size : the maximum number of labels per episode.
+
+    shot_size : the maximum size of the support set for each given class.
+
+    max_episodes : the number of episodes per epoch.
+
+    """
+    self.dataset = dataset
+    self.labelsampler = LabelPartitionedSampler(dataset)
+    self.batch_size = batch_size
+    self.shot_size = shot_size
+    self.max_episodes = max_episodes
+
+  def __iter__(self):
+    def iterator():
+      for idx in range(self.max_episodes):
+        num_episode_labels = 1#self.label_size# FIXME! #random.randrange(2, self.label_size + 1)
+        episode_labels = random.sample(self.labelsampler.labels, num_episode_labels)
+        anti_labels = [label for label in self.labelsampler.labels
+                             if label not in episode_labels]
+        sampler = iter(self.labelsampler[episode_labels])
+        antisampler = iter(self.labelsampler[anti_labels])
+        samplers = [sampler, antisampler]
+        batchindices = []
+        supportindices = []
+        for idx in range(self.batch_size):
+          batchindices.append(next(random.choice(samplers)))
         for label in episode_labels:
           labelsampler = iter(self.labelsampler[label])
           for idx in range(self.shot_size):
@@ -221,7 +271,6 @@ class _EpisodicOverlay(object):
         batchlabels = labels[:self.batch_size, :, :]
         supportlabels = labels[self.batch_size:, :, :]
 
-        # FINISH
         labelmap = []
         count = 0
         total = 0
@@ -241,6 +290,58 @@ class _EpisodicOverlay(object):
           batchonehot[idx, batchlabels[idx, 0, 0].item()] = 1.0
         for idx in range(supportlabels.size()[0]):
           supportlabels[idx, 0, 0] = inverse_labelmap[supportlabels[idx, 0, 0].item()]
+        
+        yield {
+          "batch": batch,
+          "batchlabels": batchlabels,
+          "batchonehot": batchonehot,
+          "support": support,
+          "supportlabels": supportlabels,
+          "classes": count,
+          "shots": total
+        }
+    return iterator()
+
+class _EpisodicBinaryOverlay(object):
+  def __init__(self, loader, batch_size):
+    """Wraps a DataLoader to separate its batches into batch and support."""
+    self.loader = loader
+    self.batch_size = batch_size
+
+  def __len__(self):
+    return len(self.loader)
+
+  def __iter__(self):
+    def iterator():
+      for elem in iter(self.loader):
+        data, labels = elem.values()
+        batch = data[:self.batch_size, :, :, :]
+        support = data[self.batch_size:, :, :, :]
+        batchlabels = labels[:self.batch_size, :, :]
+        supportlabels = labels[self.batch_size:, :, :]
+
+        labelmap = []
+        count = 0
+        total = 0
+        inverse_labelmap = {}
+        for label_tensor in supportlabels[:, 0, 0]:
+          label = label_tensor.item()
+          if label not in labelmap:
+            labelmap.append(label)
+            inverse_labelmap[label] = count
+            count += 1
+          total += 1
+
+        batchonehot = torch.zeros((self.batch_size, 2))
+
+        for idx in range(self.batch_size):
+          if batchlabels[idx, 0, 0].item() in inverse_labelmap:
+            batchlabels[idx, 0, 0] = 0
+          else:
+            batchlabels[idx, 0, 0] = 1
+          batchonehot[idx, batchlabels[idx, 0, 0].item()] = 1.0
+        for idx in range(supportlabels.size()[0]):
+          supportlabels[idx, 0, 0] = 0
         
         yield {
           "batch": batch,
@@ -284,3 +385,35 @@ def EpisodicLoader(dataset, batch_size=128, label_size=2,
     num_workers=num_workers
   )
   return _EpisodicOverlay(loader, batch_size)
+
+def EpisodicBinaryLoader(dataset, batch_size=128,
+                         shot_size=1, max_episodes=1000,
+                         num_workers=None):
+  """Creates a loader for episodic training.
+  
+  Arguments
+  ---------
+  dataset : a :class:`Dataset` to be packed into episodes.
+
+  batch_size : the batch size for each episode.
+
+  label_size : the maximum number of labels per episode.
+
+  shot_size : the maximum size of the support set for each given class.
+
+  max_episodes : the number of episodes per epoch.
+
+  num_workers : the number of processes to use for data loading.
+
+  """
+  sampler = EpisodicBinarySampler(
+    dataset,
+    batch_size=batch_size,
+    shot_size=shot_size,
+    max_episodes=max_episodes
+  )
+  loader = DataLoader(
+    dataset, batch_sampler=sampler,
+    num_workers=num_workers
+  )
+  return _EpisodicBinaryOverlay(loader, batch_size)

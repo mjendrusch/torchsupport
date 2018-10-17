@@ -23,6 +23,42 @@ class MetricLoss(nn.Module):
     tensor_result = weight * (input - target) ** 2
     return tensor_result.sum()
 
+class BinaryMetricNetwork(nn.Module):
+  def __init__(self, embedding, task_embedding, metric):
+    """Learns a representation of data, together with a metric relating two datapoints.
+    
+    Arguments
+    ---------
+    embedding : An embedding function for network inputs.
+    metric : a distance function between an embedded input and an embedded task.
+    task_embedding : An embedding function for network tasks. A Task is represented by
+                     a pair of Datastructures, one containing the input, the other
+                     containing its annotation.
+    """
+    super(BinaryMetricNetwork, self).__init__()
+    self.embedding = embedding
+    self.metric = metric
+    self.task_embedding = task_embedding
+    self.task_representation = None
+    self.frozen = False
+
+  def embed_task(self, task):
+    """Embeds a single task, and freezes the network for inference.
+    """
+    self.task_representation = self.task_embedding(task)
+    self.frozen = True
+
+  def forward(self, input, task=None):
+    if task != None and not self.frozen:
+      self.task_representation = self.task_embedding(task)
+    input_representation = self.embedding(input)
+
+    result = self.metric(input_representation,
+                         self.task_representation)
+    result = func.sigmoid(result)
+    
+    return result
+
 class MetricNetwork(nn.Module):
   def __init__(self, embedding, task_embedding, metric):
     """Learns a representation of data, together with a metric relating two datapoints.
@@ -84,6 +120,24 @@ class PrototypicalMetricNetwork(MetricNetwork):
 
   def forward(self, input, task=None):
     return super(PrototypicalMetricNetwork, self).forward(input, task)
+
+class PrototypicalBinaryMetricNetwork(MetricNetwork):
+  def __init__(self, embedding, metric):
+    """Learns a representation of data, together with a metric relating two datapoints.
+
+    Arguments
+    ---------
+    embedding : an embedding for both tasks and network inputs.
+    metric : a distance function between an embedded input and an embedded task.
+    """
+    super(PrototypicalBinaryMetricNetwork, self).__init__(
+      embedding,
+      red.TaskBinaryPrototype(embedding),
+      metric
+    )
+
+  def forward(self, input, task=None):
+    return super(PrototypicalBinaryMetricNetwork, self).forward(input, task)
 
 class ReductionMetricNetwork(MetricNetwork):
   def __init__(self, embedding, reduction, metric):
