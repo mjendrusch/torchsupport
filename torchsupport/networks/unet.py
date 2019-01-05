@@ -27,7 +27,7 @@ class WNet(nn.Module):
     if self.down_block == None:
       self.down_block = StandardWNetDown
     if self.up_block == None:
-      self.up_block = lambda i, o, p: StandardWNetUp(i, o, p, depth=depth)
+      self.up_block = StandardWNetUp
     seg_channels = 2 ** first_filters
     unseg_channels = 2 ** first_filters
     self.seg_unet = UNet(down_block, up_block, n_classes,
@@ -38,14 +38,20 @@ class WNet(nn.Module):
                            first_filters=first_filters, up_mode=up_mode)
     self.seg_layer = nn.Conv2d(seg_channels, n_classes, 1)
     self.rec_layer = nn.Conv2d(unseg_channels, in_channels, 1)
-  
-  def forward(self, input):
+
+  def infer(self, input):
     out = self.seg_unet(input)
     out = self.seg_layer(out)
     out = func.softmax(out)
-    out = self.unseg_unet(out)
+    return out
+
+  def reconstruct(self, input):
+    out = self.unseg_unet(input)
     out = self.rec_layer(out)
     return out
+  
+  def forward(self, input):
+    return self.reconstruct(self.infer(input))
 
 class StandardWNetDown(nn.Module):
   def __init__(self, in_channels, out_channels, position):
@@ -68,17 +74,16 @@ class StandardWNetDown(nn.Module):
     return self.block_1(self.block_0(input))
 
 class StandardWNetUp(nn.Module):
-  def __init__(self, in_channels, out_channels, position, depth=5):
+  def __init__(self, in_channels, out_channels, position):
     """
     Default up convolution block for the WNet.
     Args:
       in_channels (int): number of input channels.
       out_channels (int): number of output channels.
       position (int): position of the block within the WNet.
-      depth (int): depth of the WNet.
     """
     super(StandardWNetUp, self).__init__()
-    if position == depth - 1:
+    if position == 0:
       self.block_0 = nn.Conv2d(in_channels, out_channels, 3)
       self.block_1 = nn.Conv2d(in_channels, out_channels, 3)
     else:
@@ -107,28 +112,52 @@ class UNet(nn.Module):
     assert up_mode in ('upconv', 'upsample')
     self.depth = depth
     self.pooling = pooling
+    self.down_path = UNet.down_part(down_block, pooling, in_channels, depth, first_filters)
+    self.up_path = UNet.up_part(up_block, pooling, in_channels, depth, first_filters, up_mode)
+
+  @staticmethod
+  def down_part(down_block=StandardUNetConv, pooling=func.avg_pool2d, in_channels=1, depth=5, first_filters=6):
     prev_channels = in_channels
-    self.down_path = nn.ModuleList()
-
+    result = nn.ModuleList()
     for i in range(depth):
-        self.down_path.append(UNetDownBlock(down_block, prev_channels, 2**(first_filters+i), i))
-        prev_channels = 2**(first_filters+i)
-
-    self.up_path = nn.ModuleList()
+      result.append(UNetDownBlock(down_block, prev_channels, 2**(first_filters+i), i))
+      prev_channels = 2**(first_filters+i)
+    return UNetDownPart(result)
+  
+  @staticmethod
+  def up_part(up_block=StandardUNetConv, pooling=func.avg_pool2d, in_channels=1, depth=5, first_filters=6, up_mode='upconv'):
+    prev_channels = 2**(first_filters+depth-1)
+    result = nn.ModuleList()
     for i in reversed(range(depth - 1)):
-        self.up_path.append(UNetUpBlock(up_block, prev_channels, 2**(first_filters+i), up_mode, i))
-        prev_channels = 2**(first_filters+i)
+      result.append(UNetUpBlock(up_block, prev_channels, 2**(first_filters+i), up_mode, i))
+      prev_channels = 2**(first_filters+i)
+    return UNetUpPart(result)
+
+  def forward(self, x):
+    x, blocks = self.down_part(x)
+    x = self.up_part(x, blocks)
+    return x
+
+class UNetDownPart(nn.Module):
+  def __init__(self, module_list):
+    self.modules = module_list
 
   def forward(self, x):
     blocks = []
-    for i, down in enumerate(self.down_path):
-        x = down(x)
-        if i != len(self.down_path)-1:
-            blocks.append(x)
-            x = self.pooling(x, 2)
+    for i, down in enumerate(self.modules):
+      x = down(x)
+      if i != len(self.modules)-1:
+        blocks.append(x)
+        x = self.pooling(x, 2)
+    return x, blocks
 
-    for i, up in enumerate(self.up_path):
-        x = up(x, blocks[-i-1])
+class UNetUpPart(nn.Module):
+  def __init__(self, module_list):
+    self.modules = module_list
+
+  def forward(self, x, blocks):
+    for i, up in enumerate(self.modules):
+      x = up(x, blocks[-i-1])
     return x
 
 class UNetDownBlock(nn.Module):
