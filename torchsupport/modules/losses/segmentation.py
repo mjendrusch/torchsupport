@@ -34,6 +34,14 @@ def intra_class_variance(classes, features):
   variance = ((weighted - mean) ** 2).sum(dim=-2) / unbiased
   return variance
 
+def region_cohesion(classes):
+  dx = torch.conv2d(classes, torch.tensor([[1, -2, 1]]))
+  dy = torch.conv2d(classes, torch.tensor([[1], [-2], [1]]))
+  mag = torch.sqrt(dx ** 2 + dy ** 2)
+  total_mag = mag.sum(dim=-2)
+  total_class = classes.sum(dim=-2)
+  return total_mag / total_class
+
 def mask_size(classes):
   """
   Computes per-class segmentation mask size.
