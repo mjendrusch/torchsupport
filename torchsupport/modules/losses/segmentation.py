@@ -20,6 +20,10 @@ def intra_class_variance(classes, features):
   """
   Computes the intra-class variance of a tensor of features segmented by
   a tensor of classes.
+  Args:
+    classes (torch.Tensor): a softmaxed tensor of classes per pixel.
+    features (torch.Tensor): a tensor of features whose intra-class variance
+                             has to be computed.
   """
   dim_b = classes.size(0)
   dim_x = classes.size(1)
@@ -35,6 +39,10 @@ def intra_class_variance(classes, features):
   return variance
 
 def region_cohesion(classes):
+  """
+  Computes a measure of region cohesion, that is, the ratio between
+  class edges and surface.
+  """
   dx = torch.conv2d(classes, torch.tensor([[1, -2, 1]]))
   dy = torch.conv2d(classes, torch.tensor([[1], [-2], [1]]))
   mag = torch.sqrt(dx ** 2 + dy ** 2)
