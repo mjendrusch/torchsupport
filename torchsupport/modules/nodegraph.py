@@ -1,12 +1,10 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as func
-from copy import copy
+from copy import copy, deepcopy
 
 class NodeGraphTensor(object):
   def __init__(self, graphdesc=None):
-    self.maximum_edge_size = None
-
     self.is_subgraph = False
     self.offset = 0
 
@@ -25,46 +23,106 @@ class NodeGraphTensor(object):
 
   @property
   def adjacency(self):
-    start = 0 if self.offset == 0 else self.nodes_including(self.offset - 1)
-    stop = self.nodes_including(self.offset)
-    return self._adjacency[start:stop]
+    if self.is_subgraph:
+      start = 0 if self.offset == 0 else self.nodes_including(self.offset - 1)
+      stop = self.nodes_including(self.offset)
+      return self._adjacency[start:stop]
+    else:
+      return self._adjacency
 
   @property
   def node_tensor(self):
-    start = 0 if self.offset == 0 else self.nodes_including(self.offset - 1)
-    stop = self.nodes_including(self.offset)
-    return self._node_tensor[start:stop]
+    if self.is_subgraph:
+      start = 0 if self.offset == 0 else self.nodes_including(self.offset - 1)
+      stop = self.nodes_including(self.offset)
+      return self._node_tensor[start:stop]
+    else:
+      return self._adjacency
 
   @node_tensor.setter
   def node_tensor(self, value):
-    start = 0 if self.offset == 0 else self.nodes_including(self.offset - 1)
-    stop = self.nodes_including(self.offset)
-    self._node_tensor[start:stop] = value
+    if self.is_subgraph:
+      start = 0 if self.offset == 0 else self.nodes_including(self.offset - 1)
+      stop = self.nodes_including(self.offset)
+      self._node_tensor[start:stop] = value
+    else:
+      self._node_tensor = value
 
   def nodes_including(self, graph_index):
     return sum(self.graph_nodes[:graph_index+1])
 
   def add_node(self, node_tensor):
+    assert (self.num_graphs == 1)
     self.graph_nodes[self.offset] += 1
     self._adjacency.append([])
     self._node_tensor = torch.cat(
       (self._node_tensor[:self.nodes_including(self.offset)],
        node_tensor.unsqueeze(0).unsqueeze(0),
        self._node_tensor[self.nodes_including(self.offset):]), 0)
-    return self.node_tensor.size(0) - 1
+    return self._node_tensor.size(0) - 1
 
   def add_edge(self, source, target):
     self.adjacency[source].append(target)
     self.adjacency[target].append(source)
     return len(self.adjacency[source]) - 1
 
+  def __getitem__(self, idx):
+    assert (self.num_graphs > 1)
+    # TODO
+    return None
+
   def append(self, graph_tensor):
     assert(self.offset == 0)
     self.num_graphs += graph_tensor.num_graphs
+    self.adjacency += list(map(
+      lambda x: x + len(self._adjacency), graph_tensor.adjacency))
     self.graph_nodes += graph_tensor.graph_nodes
-    self.maximum_edge_size = max(self.maximum_edge_size, graph_tensor.maximum_edge_size)
-
     self._node_tensor = torch.cat((self.node_tensor, graph_tensor.node_tensor), 0)
+
+class PartitionedNodeGraphTensor(NodeGraphTensor):
+  def __init__(self, graphdesc=None):
+    super(PartitionedNodeGraphTensor, self).__init__(graphdesc=graphdesc)
+    self.partition_view = None
+    if graphdesc == None:
+      self.partition = { None: [] }
+    else:
+      self.partition = graphdesc["partition"]
+
+  def none(self):
+    view = copy(self)
+    view.partition_view = 'none'
+    return view
+
+  def all(self):
+    view = copy(self)
+    view.partition_view = None
+    return view
+  
+  def add_kind(self, name):
+    self.partition[name] = []
+    def _function():
+      view = copy(self)
+      view.partition_view = name
+      return view
+    self.__dict__[name] = _function
+    return self.partition[name]
+
+  def add_node(self, node_tensor, kind=None):
+    node = super(PartitionedNodeGraphTensor, self).add_node(node_tensor)
+    self.partition[kind].append(node)
+    return node
+
+  def append(self, graph_tensor):
+    for kind in self.partition:
+      self.partition[kind] += list(map(
+        lambda x: x + len(self._adjacency), graph_tensor.partition[kind]))
+    super(self, PartitionedNodeGraphTensor).append(graph_tensor)
+
+def batch_graphs(graphs):
+  result = deepcopy(graph[0])
+  for idx in range(1, len(graphs)):
+    result.append(graphs[idx])
+  return result
 
 class AllNodes(nn.Module):
   def __init__(self, node_update):
@@ -72,7 +130,11 @@ class AllNodes(nn.Module):
     self.node_update = node_update
 
   def forward(self, graph):
-    graph._node_tensor = self.node_update(graph._node_tensor)
+    if isinstance(graph, PartitionedNodeGraphTensor) and graph.partition_view != None:
+      partition = graph.partition[graph.partition_view]
+      graph._node_tensor[partition, :] = self.node_update(graph._node_tensor[partition, :])
+    else:
+      graph._node_tensor = self.node_update(graph._node_tensor)
     return graph
 
 def LinearOnNodes(insize, outsize):
@@ -111,7 +173,10 @@ class NodeGraphNeighbourhood(nn.Module):
 
   def forward(self, graph, include_self=True):
     full_nodes = []
-    for node in range(graph._node_tensor.size(0)):
+    partition = range(graph._node_tensor.size(0))
+    if isinstance(graph, PartitionedNodeGraphTensor) and graph.partition_view != None:
+      partition = graph.partition[graph.partition_view]
+    for node in partition:
       nodes = self.traversal(graph, node)
       if self.order != None:
         nodes = self.order(graph, nodes)
@@ -122,10 +187,10 @@ class NodeGraphNeighbourhood(nn.Module):
 
 def _node_neighbourhood_attention(att):
   def reducer(graph, nodes):
-    new_node_tensor = torch.zeros_like(graph.node_tensor)
+    new_node_tensor = torch.zeros_like(graph._node_tensor)
     for idx, node in enumerate(nodes):
-      local_tensor = graph.node_tensor[node]
-      attention = att(torch.cat((local_tensor, graph.node_tensor[idx])))
+      local_tensor = graph._node_tensor[node]
+      attention = att(torch.cat((local_tensor, graph._node_tensor[idx])))
       reduced = torch.Tensor.sum(attention * local_tensor, dim=1)
       new_node_tensor[idx] = reduced if isinstance(reduced, torch.Tensor) else reduced[0]
     return new_node_tensor
