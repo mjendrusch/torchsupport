@@ -215,10 +215,11 @@ class PoolingPyramid(nn.Module):
     return self.merger(outputs)
 
 class ContextAggregation(nn.Module):
-  def __init__(self, modules, branch_from_layers=[], reduce=False):
+  def __init__(self, modules, branch_from_layers=[], refine=False, activation=nn.Tanh()):
     """
     Aggregates the output of a given network into a pyramid.
-    TODO
+    Args:
+      
     """
     self.is_module = False
     if isinstance(modules, nn.Module):
@@ -229,10 +230,18 @@ class ContextAggregation(nn.Module):
     if self.is_module:
       def hook(module, input, output):
         self.outputs.append(output)
-      for module_name, downsampling in self.branch:
+      for module_name, channels in self.branch:
         self.modules.__dict__[module_name].register_forward_hook(hook)
-    if self.reduce:
-      self.reduction_path = None # TODO
+    if self.refine:
+      self.attention_refinements = nn.ModuleList([
+        nn.Sequential(
+          nn.AdaptiveAvgPool2d(1),
+          nn.Conv2d(channels, channels),
+          nn.BatchNorm2d(channels),
+          activation
+        )
+        for branch, channels in self.branch
+      ])
   
   def forward(self, input):
     upsize = tuple(input.size()[-2:])
@@ -254,7 +263,8 @@ class ContextAggregation(nn.Module):
       out = func.adaptive_avg_pool2d(input, 1)
       out = func.interpolate(out, size=upsize)
       outputs.append(out)
-    if self.reduce:
-      return self.reduction_path(outputs)
-    else:
-      return torch.cat(outputs, dim=1)
+    if self.refine:
+      for idx, output in enumerate(outputs):
+        if idx < len(outputs) - 1:
+          outputs[idx] = self.attention_refinements(idx) * output
+    return torch.cat(outputs, dim=1)
