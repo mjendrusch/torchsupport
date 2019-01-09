@@ -1,9 +1,27 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as func
+from torchsupport.modules.attention import AttentionBranch
+
+class Autoscale(nn.Module):
+  def __init__(self, multigrid_module, preprocess=None, activation=func.tanh):
+    """
+    Pixel-wise feature scale selection layer using attention.
+    Args:
+      multigrid_module (nn.Module): module performing a multi-grid convolution.
+      preprocess (nn.Module): module performing feature preprocessing for attention.
+      activation (nn.Module): activation function for attention computation. 
+    """
+    in_channels = multigrid_module.levels[0].in_channels
+    self.branch = AttentionBranch2d(multigrid_module, in_channels,
+                                    preprocess=preprocess, activation=activation)
+
+  def forward(self, input):
+    return self.branch(input)
 
 class DilationCascade(nn.Module):
-  def __init__(self, channels, kernel_size, levels=[1,2,4,8], merger=None):
+  def __init__(self, channels, kernel_size, levels=[1,2,4,8], merger=None,
+               batch_norm=True, activation=nn.ReLU):
     """
     Performs a series of dilated convolutions on a single input.
     Args:
@@ -18,24 +36,38 @@ class DilationCascade(nn.Module):
                 dilation=level, padding=(kernel_size // 2) * level)
       for level in levels
     ])
+    self.activation = activation
+    self.batch_norms = None
+    if batch_norm:
+      self.batch_norms = nn.ModuleList([
+        nn.BatchNorm2d(out_channels)
+        for level in levels
+      ])
 
   def forward(self, input):
     if self.merger != None
       outputs = []
       out = input
-      for level in self.levels:
+      for idx, level in enumerate(self.levels):
         out = level(out)
+        if self.batch_norms != None:
+          out = self.batch_norms[idx](out)
+        out = self.activation(out)
         outputs.append(out)
       return self.merger(outputs)
     else:
       out = input
-      for level in self.levels:
+      for idx, level in enumerate(self.levels):
         out = level(out)
+        if self.batch_norms != None:
+          out = self.batch_norms[idx](out)
+        out = self.activation(out)
       return out
 
 class DilatedMultigrid(nn.Module):
   def __init__(self, in_channels, out_channels, kernel_size, levels=[0,1,2,4],
-               merger=lambda x: torch.cat(x, dim=1)):
+               merger=lambda x: torch.cat(x, dim=1), batch_norm=True,
+               activation=nn.ReLU):
     """
     Dilated multi-grid convolution block.
     Args:
@@ -53,23 +85,40 @@ class DilatedMultigrid(nn.Module):
       if level != 0 else nn.Conv2d(in_channels, out_channels, 1)
       for level in levels
     ])
+    self.activation = activation
+    self.batch_norms = None
+    if batch_norm:
+      self.batch_norms = nn.ModuleList([
+        nn.BatchNorm2d(out_channels)
+        for level in levels
+      ])
+
+  def __len__(self):
+    return len(self.levels)
 
   def forward(self, input):
     outputs = []
-    for level in self.levels:
-      outputs.append(level(input))
+    for idx, level in enumerate(self.levels):
+      out = level(input)
+      if self.batch_norms != None:
+        out = self.batch_norms[idx](out)
+      out = self.activation(out)
+      outputs.append(out)
     return self.merger(outputs)
 
 def DilatedPyramid(channels, kernel_size, levels=[1,2,4,8],
-                   merger=lambda x: torch.cat(x, dim=1)):
+                   merger=lambda x: torch.cat(x, dim=1),
+                   batch_norm=True, activation=nn.ReLU):
   """
   Pyramid construction version of `DilationCascade`. See `DilationCascade`.
   """
-  return DilationCascade(channels, kernel_size, levels=levels, merger=merger)
+  return DilationCascade(channels, kernel_size, levels=levels, merger=merger,
+                         batch_norm=batch_norm, activation=activation)
 
 class PoolingMultigrid(nn.Module):
   def __init__(self, in_channels, out_channels, kernel_size, levels=[3,5,7,9],
-               merger=lambda x: torch.cat(x, dim=1)):
+               merger=lambda x: torch.cat(x, dim=1), batch_norm=True,
+               activation=nn.ReLU):
     """
     Pooled multi-grid convolution block.
     Args:
@@ -89,16 +138,31 @@ class PoolingMultigrid(nn.Module):
       if level != 0 else nn.Conv2d(in_channels, out_channels, 1)
       for level in levels
     ])
+    self.activation = activation
+    self.batch_norms = None
+    if batch_norm:
+      self.batch_norms = nn.ModuleList([
+        nn.BatchNorm2d(out_channels)
+        for level in levels
+      ])
+
+  def __len__(self):
+    return len(self.levels)
 
   def forward(self, input):
     outputs = []
-    for level in self.levels:
-      outputs.append(level(input))
+    for idx, level in enumerate(self.levels):
+      out = level(input)
+      if self.batch_norms != None:
+        out = self.batch_norms[idx](out)
+      out = self.activation(out)
+      outputs.append(out)
     return self.merger(outputs)
 
 class PoolingPyramid(nn.Module):
   def __init__(self, channels, kernel_size, pooling_size, depth=4,
-               merger=lambda x: torch.cat(x, dim=1)):
+               merger=lambda x: torch.cat(x, dim=1), batch_norm=False,
+               activation=activation):
     """
     Iterative pooling image pyramid construction.
     Args:
@@ -111,21 +175,41 @@ class PoolingPyramid(nn.Module):
     super(PoolingPyramid, self).__init__()
     self.merger = merger
     self.levels = nn.ModuleList([
-      nn.Sequential(
-        nn.Conv2d(channels, channels, kernel_size, padding=kernel_size // 2),
-        nn.MaxPool2d(pooling_size)
-      )
+      nn.Conv2d(channels, channels, kernel_size, padding=kernel_size // 2)
+      for _ in range(depth)
+    ])
+    self.pools = nn.ModuleList([
+      nn.MaxPool2d(pooling_size, padding=pooling_size // 2)
       for _ in range(depth)
     ])
     self.post_levels = nn.ModuleList([
       nn.Conv2d(channels, channels, kernel_size, padding=kernel_size // 2)
       for _ in range(depth)
     ])
+    self.activation = activation
+    self.batch_norms = None
+    self.post_batch_norms = None
+    if batch_norm:
+      self.batch_norms = nn.ModuleList([
+        nn.BatchNorm2d(channels)
+        for _ in range(depth)
+      ])
+      self.post_batch_norms = nn.ModuleList([
+        nn.BatchNorm2d(channels)
+        for _ in range(depth)
+      ])
 
   def forward(self, input):
     outputs = []
     pass_through = input
     for idx, level in enumerate(self.levels):
       pass_through = level(pass_through)
-      outputs.append(self.post_levels(pass_through))
+      if self.batch_norms != None:
+        pass_through = self.batch_norms[idx](pass_through)
+      pass_through = self.activation(pass_through)
+      out = self.post_levels(pass_through)
+      if self.post_batch_norms != None:
+        out = self.post_batch_norms[idx](out)
+      out = self.activation(out)
+      outputs.append(out)
     return self.merger(outputs)
