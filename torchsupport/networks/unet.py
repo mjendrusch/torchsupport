@@ -54,7 +54,7 @@ class WNet(nn.Module):
     return self.reconstruct(self.infer(input))
 
 class StandardWNetDown(nn.Module):
-  def __init__(self, in_channels, out_channels, position):
+  def __init__(self, in_channels, out_channels, position, activation=nn.ReLU()):
     """
     Default down convolution block for the WNet.
     Args:
@@ -63,6 +63,7 @@ class StandardWNetDown(nn.Module):
       position (int): position of the block within the WNet.
     """
     super(StandardWNetDown, self).__init__()
+    self.activation = activation
     if position == 0:
       self.block_0 = nn.Conv2d(in_channels, out_channels, 3)
       self.block_1 = nn.Conv2d(in_channels, out_channels, 3)
@@ -71,10 +72,10 @@ class StandardWNetDown(nn.Module):
       self.block_1 = DepthWiseSeparableConv2d(out_channels, out_channels, 3)
 
   def forward(self, input):
-    return self.block_1(self.block_0(input))
+    return self.activation(self.block_1(self.activation(self.block_0(input))))
 
 class StandardWNetUp(nn.Module):
-  def __init__(self, in_channels, out_channels, position):
+  def __init__(self, in_channels, out_channels, position, activation=nn.ReLU()):
     """
     Default up convolution block for the WNet.
     Args:
@@ -83,6 +84,7 @@ class StandardWNetUp(nn.Module):
       position (int): position of the block within the WNet.
     """
     super(StandardWNetUp, self).__init__()
+    self.activation = activation
     if position == 0:
       self.block_0 = nn.Conv2d(in_channels, out_channels, 3)
       self.block_1 = nn.Conv2d(in_channels, out_channels, 3)
@@ -91,10 +93,12 @@ class StandardWNetUp(nn.Module):
       self.block_1 = DepthWiseSeparableConv2d(out_channels, out_channels, 3)
 
   def forward(self, input):
-    return self.block_1(self.block_0(input))
+    return self.activation(self.block_1(self.activation(self.block_0(input))))
 
 class UNet(nn.Module):
-  def __init__(self, down_block=StandardUNetConv, up_block=StandardUNetConv, pooling=func.avg_pool2d, in_channels=1, depth=5, first_filters=6, up_mode='upconv'):
+  def __init__(self, down_block=StandardUNetConv, up_block=StandardUNetConv,
+               pooling=func.max_pool2d, in_channels=1, depth=5, first_filters=6,
+               up_mode='upconv'):
     """
     Template for general U-Net-like architectures.
     Args:
@@ -116,7 +120,7 @@ class UNet(nn.Module):
     self.up_path = UNet.up_part(up_block, pooling, in_channels, depth, first_filters, up_mode)
 
   @staticmethod
-  def down_part(down_block=StandardUNetConv, pooling=func.avg_pool2d, in_channels=1, depth=5, first_filters=6):
+  def down_part(down_block=StandardUNetConv, pooling=func.max_pool2d, in_channels=1, depth=5, first_filters=6):
     prev_channels = in_channels
     result = nn.ModuleList()
     for i in range(depth):
@@ -125,7 +129,7 @@ class UNet(nn.Module):
     return UNetDownPart(result)
   
   @staticmethod
-  def up_part(up_block=StandardUNetConv, pooling=func.avg_pool2d, in_channels=1, depth=5, first_filters=6, up_mode='upconv'):
+  def up_part(up_block=StandardUNetConv, pooling=func.max_pool2d, in_channels=1, depth=5, first_filters=6, up_mode='upconv'):
     prev_channels = 2**(first_filters+depth-1)
     result = nn.ModuleList()
     for i in reversed(range(depth - 1)):
@@ -196,7 +200,7 @@ class UNetUpBlock(nn.Module):
     return self.block(out)
 
 class StandardUNetConv(nn.Module):
-  def __init__(self, in_channels, out_channels, position):
+  def __init__(self, in_channels, out_channels, position, activation=nn.ReLU()):
     """
     Default UNet convolution.
     Args:
@@ -208,4 +212,29 @@ class StandardUNetConv(nn.Module):
     self.block_1 = nn.Conv2d(out_channels, out_channels, 3)
 
   def forward(self, input):
-    return self.block_1(self.block_0(input))
+    return self.activation(self.block_1(self.activation(self.block_0(input))))
+
+class DilatedUNetConv(nn.Module):
+  def __init__(self, in_channels, out_channels, position, activation=nn.ELU()):
+    """
+    Dilated UNet convolution (DRUNET).
+    Args:
+      in_channels (int): number of input channels.
+      out_channels (int): number of output channels.
+      position (int): position within the UNet.
+    """
+    self.activation = activation
+    self.block_0 = nn.Conv2d(in_channels, out_channels, 3, dilation=2**position)
+    self.block_1 = nn.Conv2d(out_channels, out_channels, 3, dilation=2**position)
+    self.shortcut = None
+    if position != 0:
+      self.shortcut = nn.Conv2d(in_channels, out_channels, 1)
+
+  def forward(self, input):
+    out = input
+    out = self.activation(self.block_0(input))
+    out = self.activation(self.block_1(input))
+    if self.shortcut != None:
+      res = self.activation(self.shortcut(input))
+      out = out + res
+    return out
