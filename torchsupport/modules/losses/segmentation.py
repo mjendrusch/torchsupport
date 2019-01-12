@@ -17,9 +17,9 @@ class KernelCutLoss(nn.Module):
     pass
 
 def intra_class_variance(classes, features):
-  """
-  Computes the intra-class variance of a tensor of features segmented by
-  a tensor of classes.
+  """Computes the intra-class variance of a tensor of features segmented
+  by a tensor of classes.
+  
   Args:
     classes (torch.Tensor): a softmaxed tensor of classes per pixel.
     features (torch.Tensor): a tensor of features whose intra-class variance
@@ -39,8 +39,7 @@ def intra_class_variance(classes, features):
   return variance
 
 def region_cohesion(classes):
-  """
-  Computes a measure of region cohesion, that is, the ratio between
+  """Computes a measure of region cohesion, that is, the ratio between
   class edges and surface.
   """
   dx = torch.conv2d(classes, torch.tensor([[1, -2, 1]]))
@@ -51,15 +50,13 @@ def region_cohesion(classes):
   return total_mag / total_class
 
 def mask_size(classes):
-  """
-  Computes per-class segmentation mask size.
-  """
+  """Computes per-class segmentation mask size."""
   return classes.sum(dim=-2)
 
 class SegmentReconstructionLoss(nn.Module):
   def __init__(self, reconstructor, loss=nn.MSELoss()):
-    """
-    Reconstruction loss for reconstruction from semantic segmentation labels.
+    """Reconstruction loss for reconstruction from semantic segmentation labels.
+    
     Args:
       reconstructor (torch.nn.Module): module performing the reconstruction.
       loss (torch.nn.Module): module computing the reconstruction loss.
@@ -76,8 +73,8 @@ class SegmentReconstructionLoss(nn.Module):
 
 class NCutLoss(nn.Module):
   def __init__(self, n_classes, radius=2, size=(224, 224), sigma_dist=1, sigma_feat=1):
-    """
-    Soft normalized cut loss (TODO: requires optimization).
+    """Soft normalized cut loss (TODO: requires optimization).
+    
     Args:
       n_classes (int): number of semantic labels.
       radius (int): radius of the gaussian distance kernel.
@@ -94,9 +91,7 @@ class NCutLoss(nn.Module):
     self.in_radius_indices = self._in_radius_indices()
 
   def _in_radius_indices(self):
-    """
-    TODO: optimize
-    """
+    """TODO: optimize"""
     result = []
     for idx_0 in range(self.size[0]):
       for idy_0 in range(self.size[1]):
@@ -129,9 +124,7 @@ class NCutLoss(nn.Module):
     )
 
   def forward(self, classification, features):
-    """
-    TODO: check correctness
-    """
+    """TODO: check correctness"""
     weights = self._weight(features)
     S = classification
     Sp = torch.transpose(classification, 0, 1, 3, 2)

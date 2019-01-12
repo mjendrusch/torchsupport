@@ -5,8 +5,8 @@ import torch.nn.functional as func
 class DepthWiseSeparableConv1d(nn.Module):
   def __init__(in_channels, out_channels, kernel_size,
                stride=1, padding=0, dilation=1, bias=True):
-    """
-    Depthwise separable 1D convolution.
+    """Depthwise separable 1D convolution.
+
     Args:
       in_channels (int): number of input channels.
       out_channels (int): number of output channels.
@@ -24,8 +24,8 @@ class DepthWiseSeparableConv1d(nn.Module):
 class DepthWiseSeparableConv2d(nn.Module):
   def __init__(in_channels, out_channels, kernel_size,
                stride=1, padding=0, dilation=1, bias=True):
-    """
-    Depthwise separable 2D convolution.
+    """Depthwise separable 2D convolution.
+
     Args:
       in_channels (int): number of input channels.
       out_channels (int): number of output channels.

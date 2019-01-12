@@ -5,14 +5,14 @@ import torchsupport.modules.reduction as red
 class Conv1x1(nn.Module):
   r"""Submodule encoding convolution plus 1x1 convolution.
   
-  Arguments:
-    width (int) : integer kernel width.
-    stride (int) : integer convolution stride.
-    input (int) : number of input features.
-    kernels (int) : number of standard kernels.
-    kernels11 (int) : number of 1-by-1 convolution kernels.
-    activation (function) : activation of the standard convolution layers, defaults to `leaky_relu`.
-    activation_1x1 (function) : activation of the 1-by-1 convolution kernels.
+  Args:
+    width (int): integer kernel width.
+    stride (int): integer convolution stride.
+    input (int): number of input features.
+    kernels (int): number of standard kernels.
+    kernels11 (int): number of 1-by-1 convolution kernels.
+    activation (function): activation of the standard convolution layers, defaults to `leaky_relu`.
+    activation_1x1 (function): activation of the 1-by-1 convolution kernels.
   """
   def __init__(self, width, stride, input, kernels, kernels11,
                activation=func.leaky_relu,
@@ -37,14 +37,14 @@ class Conv1x1(nn.Module):
 class UpConv1x1(nn.Module):
   r"""Submodule encoding convolution plus 1x1 convolution.
   
-  Arguments:
-    width (int) : integer kernel width.
-    stride (int) : integer convolution stride.
-    input (int) : number of input features.
-    kernels (int) : number of standard kernels.
-    kernels11 (int) : number of 1-by-1 convolution kernels.
-    activation (function) : activation of the standard convolution layers, defaults to `leaky_relu`.
-    activation_1x1 (function) : activation of the 1-by-1 convolution kernels.
+  Args:
+    width (int): integer kernel width.
+    stride (int): integer convolution stride.
+    input (int): number of input features.
+    kernels (int): number of standard kernels.
+    kernels11 (int): number of 1-by-1 convolution kernels.
+    activation (function): activation of the standard convolution layers, defaults to `leaky_relu`.
+    activation_1x1 (function): activation of the 1-by-1 convolution kernels.
   """
   def __init__(self, width, stride, input, kernels, kernels11,
                activation=func.leaky_relu,
@@ -84,7 +84,7 @@ def DownUp1x1(width, stride, input, kernels, kernels11,
   return sdown, sup
   
 class MobileConv(nn.Module):
-  """"""
+  """TODO"""
   def __init__(self, width, stride, input, kernels, kernels11):
     pass
 

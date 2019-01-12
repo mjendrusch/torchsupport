@@ -5,6 +5,11 @@ from copy import copy, deepcopy
 
 class NodeGraphTensor(object):
   def __init__(self, graphdesc=None):
+    """Node-only graph tensor.
+
+    Args:
+      graphdesc (dict): dictionary of graph parameters.
+    """
     self.is_subgraph = False
     self.offset = 0
 
@@ -139,6 +144,7 @@ class NodeGraphTensor(object):
 
 class PartitionedNodeGraphTensor(NodeGraphTensor):
   def __init__(self, graphdesc=None):
+    """Node-only graph tensor with multiple node types. See `NodeGraphTensor`."""
     super(PartitionedNodeGraphTensor, self).__init__(graphdesc=graphdesc)
     self.partition_view = None
     if graphdesc == None:
@@ -206,6 +212,11 @@ def batch_graphs(graphs):
 
 class AllNodes(nn.Module):
   def __init__(self, node_update):
+    """Applies a node update function to all nodes in a graph.
+
+    Args:
+      node_update (nn.Module): update to apply to all nodes.
+    """
     super(AllNodes, self).__init__()
     self.node_update = node_update
 
@@ -220,6 +231,15 @@ class AllNodes(nn.Module):
     return out
 
 def LinearOnNodes(insize, outsize):
+  """Applies a linear module at each node in a graph.
+  
+  Args:
+    insize (int): number of input features.
+    outsize (int): number of output features.
+
+  Returns:
+    `AllNodes` wrapping a `nn.Linear` module.
+  """
   lin = nn.Linear(insize, outsize)
   def mod(x):
     x = x.view(x.size()[0], -1)
@@ -248,6 +268,13 @@ def standard_node_traversal(depth):
 
 class NodeGraphNeighbourhood(nn.Module):
   def __init__(self, reducer, traversal=standard_node_traversal(1), order=None):
+    """Applies a reduction function to the neighbourhood of each node.
+
+    Args:
+      reducer (callable): reduction function.
+      traversal (callable): node traversal for generating node neighbourhoods.
+      order (callable): optional sorting function for sorting node neighbourhoods.
+    """
     super(NodeGraphNeighbourhood, self).__init__()
     self.reducer = reducer
     self.traversal = traversal
@@ -280,6 +307,12 @@ def _node_neighbourhood_attention(att):
   return reducer
 
 def NodeNeighbourhoodAttention(attention, traversal=standard_node_traversal(1)):
+  """Aggregates a node neighbourhood using an attention mechanism.
+  
+  Args:
+    attention (callable): attention mechanism to be used.
+    traversal (callable): node traversal for generating node neighbourhoods.
+  """
   return NodeGraphNeighbourhood(
     _node_neighbourhood_attention(attention),
     traversal=traversal
@@ -307,6 +340,12 @@ def _node_neighbourhood_sparse_attention(embedding, att, att_p):
   return reducer
 
 def NodeNeighbourhoodSparseAttention(size, traversal=standard_node_traversal(1)):
+  """Aggregates a node neighbourhood using a sparse attention mechanism.
+
+  Args:
+    size (int): size of the attention embedding.
+    traversal (callable): node traversal for generating node neighbourhoods.
+  """
   embedding = nn.Linear(size, size)
   att = torch.randn(size, requires_grad=True)
   att_p = torch.randn(size, requires_grad=True)
@@ -327,6 +366,12 @@ def _node_neighbourhood_dot_attention(embedding, att, att_p):
   return reducer
 
 def NodeNeighbourhoodDotAttention(size, traversal=standard_node_traversal(1)):
+  """Aggregates a node neighbourhood using a pairwise dot-product attention mechanism.
+  
+  Args:
+    size (int): size of the attention embedding.
+    traversal (callable): node traversal for generating node neighbourhoods.
+  """
   embedding = nn.Linear(size, size)
   att = torch.randn(size, requires_grad=True)
   att_p = torch.randn(size, requires_grad=True)
@@ -345,24 +390,28 @@ def _node_neighbourhood_reducer(red):
   return reducer
 
 def NodeNeighbourhoodMean(traversal=standard_node_traversal(1)):
+  """Aggregates a node neighbourhood using the mean of neighbour features."""
   return NodeGraphNeighbourhood(
     _node_neighbourhood_reducer(torch.Tensor.mean),
     traversal=traversal
   )
 
 def NodeNeighbourhoodSum(traversal=standard_node_traversal(1)):
+  """Aggregates a node neighbourhood using the sum of neighbour features."""
   return NodeGraphNeighbourhood(
     _node_neighbourhood_reducer(torch.Tensor.sum),
     traversal=traversal
   )
 
 def NodeNeighbourhoodMax(traversal=standard_node_traversal(1)):
+  """Aggregates a node neighbourhood using the maximum of neighbour features."""
   return NodeGraphNeighbourhood(
     _node_neighbourhood_reducer(torch.Tensor.max),
     traversal=traversal
   )
 
 def NodeNeighbourhoodMin(traversal=standard_node_traversal(1)):
+  """Aggregates a node neighbourhood using the minimum of neighbour features."""
   return NodeGraphNeighbourhood(
     _node_neighbourhood_reducer(torch.Tensor.min),
     traversal=traversal
@@ -372,11 +421,11 @@ class ColorPool(nn.Module):
   def __init__(self, pooling, order=None,
                coloring=standard_node_coloring(2),
                traversal=standard_node_traversal(1)):
-    """
-    Generalization of (maximum-) pooling from images to graphs.
+    """Generalization of (maximum-) pooling from images to graphs.
     Chooses a set of pooling centers using a user specified `coloring`,
     and pools the pooling centers' neighbourhoods generated using a user
     specified `traversal` according to a `pooling` function.
+    
     Args:
       pooling (callable): pooling function.
       order (callable): function specifying a sort order for nodes to be pooled.
@@ -435,10 +484,11 @@ class ColorPool(nn.Module):
 
 class ColorUnpool(nn.Module):
   def __init__(self, unpool):
-    """
+    """Generalization of (maximum-) unpooling from images to graphs.
     Unpools a graph previously pooled using `ColorPool` by applying
     a partial inverse unpool operation broadcasting data from pooling
     centers to pooled nodes.
+    
     Args:
       unpool (callable): unpooling operation.
     """

@@ -5,8 +5,8 @@ import sys
 
 class AttentionBranch(nn.Module):
   def __init__(self, N, branches, in_channels, preprocess=None, activation=func.tanh):
-    """
-    Pixel-wise branch selection layer using attention.
+    """Pixel-wise branch selection layer using attention.
+
     Args:
       N (int): dimensionality of convolutions.
       branches (iterable nn.Module): neural network branches to choose from.
@@ -46,9 +46,7 @@ class AttentionBranch(nn.Module):
 for dim in range(1, 4):
   def _generating_function_outer(N):
     def _inner(branches, in_channels, preprocess=None, activation=func.tanh)
-      """
-      See `AttentionBranch`.
-      """
+      """See `AttentionBranch`."""
       return AttentionBranch(N, branches, in_channels, preprocess=preprocess, activation=activation)
   setattr(sys.modules[__name__], f"AttentionBranch{dim}d", _generating_function_outer(N))
 
@@ -56,8 +54,8 @@ class GuidedAttention(nn.Module):
   def __init__(self, N, in_channels, out_channels, hidden=32,
                inner_activation=func.relu, outer_activation=func.tanh,
                reduce=True):
-    """
-    Pixel-wise attention gated by a guide image.
+    """Pixel-wise attention gated by a guide image.
+
     Args:
       N (int): dimensionality of convolutions.
       in_channels (int): number of input channels.
@@ -95,9 +93,7 @@ for dim in range(1, 4):
     def _inner(branches, in_channels, out_channels=1, hidden=32,
                inner_activation=func.relu, outer_activation=func.tanh,
                reduce=False)
-      """
-      See `GuidedAttention`.
-      """
+      """See `GuidedAttention`."""
       return GuidedAttention(N, branches, in_channels, out_channels, hidden=hidden,
                              inner_activation=inner_activation, outer_activation=outer_activation,
                              reduce=reduce)

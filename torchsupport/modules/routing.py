@@ -3,31 +3,36 @@ import torch.nn as nn
 import torch.nn.functional as func
 
 class Router(nn.Module):
-  """
-    Router(predictor, [experts...])
-  Mixture-of-experts routing module, distributing an input onto
-  a set of "expert" modules, given a prediction, which expert is
-  most relevant to a given input.
-  """
   def __init__(self, predictor, experts):
-    super(self, Router).__init__(self)
+    """Mixture-of-experts hard-attention routing module.
+    Distributes an input onto a set of "expert" modules,
+    given a prediction, which expert is most relevant to a given input.
+
+    Args:
+      predictor (nn.Module): hard attention module.
+      experts (iterable): iterable of expert modules.
+    """
+    super(Router, self).__init__()
     self.predictor = predictor
-    self.experts = experts
+    self.experts = nn.ModuleList(experts)
 
   def forward(self, predicate, input):
     index = func.argmax(self.predictor(predicate))
     return self.experts[input](index)
 
 class SoftRouter(nn.Module):
-  """
-    SoftRouter(predictor, [experts...], top_n = 3)
-  Mixture-of-experts routing module, distributing an input onto
-  a set of "expert" modules, given a prediction, which expert is
-  most relevant to a given input, averaging over the `top_n` most
-  relevant experts.
-  """
   def __init__(self, predictor, experts, top_n = 3):
-    super(self, SoftRouter).__init__(self)
+    """Mixture-of-experts sparse soft-attention routing module.
+    Distributes an input onto a set of "expert" modules,
+    given a prediction, which expert is most relevant to
+    a given input, averaging over the `top_n` most relevant experts.
+    
+    Args:
+      predictor (nn.Module): soft attention module.
+      experts (iterable): iterable of expert modules.
+      top_n (int): number of experts for averaging.
+    """
+    super(SoftRouter, self).__init__()
     self.predictor = predictor
     self.experts = experts
     self.top_n = top_n
