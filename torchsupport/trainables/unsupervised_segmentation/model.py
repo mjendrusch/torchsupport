@@ -111,7 +111,7 @@ class ScalePreprocessor(nn.Module):
     return out
 
 class MultiScaleModel(nn.Module):
-  def __init__(self, inner_model, scales):
+  def __init__(self, inner_model, scales, is_inverted=False):
     super(MultiScaleModel, self).__init__()
     self.inner_model = inner_model
     self.scales = scales
@@ -121,14 +121,17 @@ class MultiScaleModel(nn.Module):
     ])
 
   def wnet_decoder(self):
-    pass # TODO
+    return MultiScaleModel(self.inner_model.wnet_decoder(),
+                           scales, is_inverted=True)
 
   def forward(self, input):
-    scales = [
-      self.scale_preprocessors[idx](
-        input[:, idx * 3:(idx + 1) * 3, :, :]
-      )
-      for idx in range(self.scales)
-    ]
-    out = torch.cat(scales, dim=1)
+    out = input
+    if not self.is_inverted:
+      scales = [
+        self.scale_preprocessors[idx](
+          out[:, idx * 3:(idx + 1) * 3, :, :]
+        )
+        for idx in range(self.scales)
+      ]
+      out = torch.cat(scales, dim=1)
     return self.inner_model(out)
