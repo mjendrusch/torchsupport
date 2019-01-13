@@ -10,6 +10,10 @@ class NodeGraphTensor(object):
     Args:
       graphdesc (dict): dictionary of graph parameters.
     """
+    self.recompute_adjacency_matrix = True
+    self.adjacency_matrix = None
+    self.recompute_laplacian = True
+    self.laplacian = None
     self.is_subgraph = False
     self.offset = 0
 
@@ -26,6 +30,58 @@ class NodeGraphTensor(object):
 
       self._node_tensor = graphdesc["node_tensor"]
 
+  def laplacian_element(self, i, j):
+    if i == j:
+      return len(self._adjacency[i])
+    else:
+      return -int(j in self._adjacency[i])
+
+  def compute_laplacian(self):
+    self.recompute_laplacian = False
+    indices = [
+      (node, edges)
+      for node, edges in enumerate(self._adjacency)
+      for edge in edges + [node]
+    ]
+    values = torch.zeros(len(indices))
+    for idx, index in enumerate(indices):
+      values[idx] = self.laplacian_element(*index)
+    self.laplacian = torch.sparse_coo_tensor(
+      indices, values,
+      (len(self._adjacency), len(self._adjacency))
+    )
+
+  def decompute_laplacian(self):
+    self.laplacian = None
+    self.recompute_laplacian = True
+
+  def laplacian_action(self, vector):
+    if self.recompute_laplacian:
+      self.compute_laplacian()
+    return self.laplacian.spmm(vector)
+
+  def compute_adjacency_matrix(self):
+    self.recompute_adjacency_matrix = False
+    indices = [
+      (node, edges)
+      for node, edges in enumerate(self._adjacency)
+      for edge in edges + [node]
+    ]
+    values = torch.ones(len(indices))
+    self.adjacency_matrix = torch.sparse_coo_tensor(
+      indices, values,
+      (len(self._adjacency), len(self._adjacency))
+    )
+
+  def decompute_adjacency_matrix(self):
+    self.recompute_adjacency_matrix = True
+    self.adjacency_matrix = None
+
+  def adjacency_action(self, vector):
+    if self.recompute_adjacency_matrix:
+      self.compute_adjacency_matrix()
+    return self.adjacency_matrix(vector)
+
   def new_like(self):
     result = NodeGraphTensor()
     result.is_subgraph = self.is_subgraph
@@ -33,6 +89,8 @@ class NodeGraphTensor(object):
     result.num_graphs = self.num_graphs
     result.graph_nodes = deepcopy(self.graph_nodes)
     result._adjacency = deepcopy(self._adjacency)
+    result.decompute_laplacian()
+    result.decompute_adjacency_matrix()
     return result
 
   def clone(self):
@@ -71,6 +129,9 @@ class NodeGraphTensor(object):
     return sum(self.graph_nodes[:graph_index+1])
 
   def add_node(self, node_tensor):
+    self.decompute_adjacency_matrix()
+    self.decompute_laplacian()
+
     assert (self.num_graphs == 1)
     self.graph_nodes[self.offset] += 1
     self._adjacency.append([])
@@ -81,6 +142,9 @@ class NodeGraphTensor(object):
     return self._node_tensor.size(0) - 1
 
   def add_edge(self, source, target):
+    self.decompute_adjacency_matrix()
+    self.decompute_laplacian()
+
     self._adjacency[source].append(target)
     self._adjacency[target].append(source)
     return len(self._adjacency[source]) - 1
@@ -90,6 +154,9 @@ class NodeGraphTensor(object):
       self.add_edge(*edge)
 
   def delete_nodes(self, nodes):
+    self.decompute_adjacency_matrix()
+    self.decompute_laplacian()
+
     nodes_to_keep = []
     new_adjacency = []
     nodes = sorted(nodes)
@@ -122,6 +189,9 @@ class NodeGraphTensor(object):
     self.delete_nodes([node])
 
   def delete_edge(self, source, target):
+    self.decompute_adjacency_matrix()
+    self.decompute_laplacian()
+
     self._adjacency[source] = [x in self._adjacency[source] if x != target]
     self._adjacency[target] = [x in self._adjacency[target] if x != source]
 
@@ -135,12 +205,47 @@ class NodeGraphTensor(object):
     return None
 
   def append(self, graph_tensor):
+    self.decompute_adjacency_matrix()
+    self.decompute_laplacian()
+
     assert(self.offset == 0)
     self.num_graphs += graph_tensor.num_graphs
     self.adjacency += list(map(
       lambda x: x + len(self._adjacency), graph_tensor.adjacency))
     self.graph_nodes += graph_tensor.graph_nodes
     self._node_tensor = torch.cat((self.node_tensor, graph_tensor.node_tensor), 0)
+
+# generate arithmetic ops on NodeGraphTensors
+def _gen_placeholder_arithmetic(op):
+  def _placeholder_arithmetic(self, other):
+    assert other._node_tensor.size() = self._node_tensor.size()
+    out = self.new_like()
+    out._node_tensor = self._node_tensor.__dict__[op](other._node_tensor)
+    return out
+  return _placeholder_arithmetic
+
+for op in ["__add__", "__sub__", "__mul__", "__truediv__",
+           "__mod__", "__pow__", "__and__", "__xor__", "__or__"]:
+  setattr(NodeGraphTensor, op, _gen_placeholder_arithmetic(op))
+
+def cat(graphs, dim=0):
+  """Contatenates a list of `NodeGraphTensor`s into a single `NodeGraphTensor`.
+
+  Args:
+    graphs (iterable): iterable of `NodeGraphTensor`s to be concatentated.
+    dim (int): dimension along which to concatenate the `NodeGraphTensor`s.
+
+  Returns:
+    A `NodeGraphTensor` containing the concatenation of the input graphs along
+      the input dimension.
+  """
+  if dim == 0:
+    return _batch_graphs(graphs)
+  else:
+    out = graphs[0].new_like()
+    node_tensors = [graph._node_tensor for graph in graphs]
+    out._node_tensor = torch.cat(node_tensors, dim=dim)
+    return out
 
 class PartitionedNodeGraphTensor(NodeGraphTensor):
   def __init__(self, graphdesc=None):
@@ -204,8 +309,13 @@ class PartitionedNodeGraphTensor(NodeGraphTensor):
         lambda x: x + len(self._adjacency), graph_tensor.partition[kind]))
     super(self, PartitionedNodeGraphTensor).append(graph_tensor)
 
-def batch_graphs(graphs):
-  result = deepcopy(graph[0])
+def _batch_graphs(graphs):
+  """Concatenates a list of graphs along the batch dimension.
+
+  Args:
+    graphs (iterable): graphs to be concatenated.
+  """
+  result = graphs[0].clone()
   for idx in range(1, len(graphs)):
     result.append(graphs[idx])
   return result
@@ -248,7 +358,7 @@ def LinearOnNodes(insize, outsize):
     return x
   return AllNodes(mod)
 
-def standard_node_traversal(depth):
+def StandardNodeTraversal(depth):
   def function(graph, entity, d=depth):
     if d == 0:
         return [entity]
@@ -267,7 +377,7 @@ def standard_node_traversal(depth):
   return function
 
 class NodeGraphNeighbourhood(nn.Module):
-  def __init__(self, reducer, traversal=standard_node_traversal(1), order=None):
+  def __init__(self, reducer, traversal=StandardNodeTraversal(1), order=None):
     """Applies a reduction function to the neighbourhood of each node.
 
     Args:
@@ -306,7 +416,7 @@ def _node_neighbourhood_attention(att):
     return new_node_tensor
   return reducer
 
-def NodeNeighbourhoodAttention(attention, traversal=standard_node_traversal(1)):
+def NodeNeighbourhoodAttention(attention, traversal=StandardNodeTraversal(1)):
   """Aggregates a node neighbourhood using an attention mechanism.
   
   Args:
@@ -339,7 +449,7 @@ def _node_neighbourhood_sparse_attention(embedding, att, att_p):
     return new_node_tensor
   return reducer
 
-def NodeNeighbourhoodSparseAttention(size, traversal=standard_node_traversal(1)):
+def NodeNeighbourhoodSparseAttention(size, traversal=StandardNodeTraversal(1)):
   """Aggregates a node neighbourhood using a sparse attention mechanism.
 
   Args:
@@ -365,7 +475,7 @@ def _node_neighbourhood_dot_attention(embedding, att, att_p):
     return new_node_tensor
   return reducer
 
-def NodeNeighbourhoodDotAttention(size, traversal=standard_node_traversal(1)):
+def NodeNeighbourhoodDotAttention(size, traversal=StandardNodeTraversal(1)):
   """Aggregates a node neighbourhood using a pairwise dot-product attention mechanism.
   
   Args:
@@ -389,38 +499,60 @@ def _node_neighbourhood_reducer(red):
     return new_node_tensor
   return reducer
 
-def NodeNeighbourhoodMean(traversal=standard_node_traversal(1)):
+def NodeNeighbourhoodMean(traversal=StandardNodeTraversal(1)):
   """Aggregates a node neighbourhood using the mean of neighbour features."""
   return NodeGraphNeighbourhood(
     _node_neighbourhood_reducer(torch.Tensor.mean),
     traversal=traversal
   )
 
-def NodeNeighbourhoodSum(traversal=standard_node_traversal(1)):
+def NodeNeighbourhoodSum(traversal=StandardNodeTraversal(1)):
   """Aggregates a node neighbourhood using the sum of neighbour features."""
   return NodeGraphNeighbourhood(
     _node_neighbourhood_reducer(torch.Tensor.sum),
     traversal=traversal
   )
 
-def NodeNeighbourhoodMax(traversal=standard_node_traversal(1)):
+def NodeNeighbourhoodMax(traversal=StandardNodeTraversal(1)):
   """Aggregates a node neighbourhood using the maximum of neighbour features."""
   return NodeGraphNeighbourhood(
     _node_neighbourhood_reducer(torch.Tensor.max),
     traversal=traversal
   )
 
-def NodeNeighbourhoodMin(traversal=standard_node_traversal(1)):
+def NodeNeighbourhoodMin(traversal=StandardNodeTraversal(1)):
   """Aggregates a node neighbourhood using the minimum of neighbour features."""
   return NodeGraphNeighbourhood(
     _node_neighbourhood_reducer(torch.Tensor.min),
     traversal=traversal
   )
 
+class GraphResBlock(nn.Module):
+  def __init__(self, channels, aggregate=NodeNeighbourhoodMax,
+               activation=nn.ReLU()):
+    """Residual block for graph networks.
+
+    Args:
+      channels (int): number of input and output features.
+      aggregate (nn.Module): neighbourhood aggregation function.
+      activation (nn.Module): activation function. Defaults to ReLU.
+    """
+    self.activation = activation
+    self.aggregate = aggregate
+    self.linear = LinearOnNodes(2 * channels, channels)
+
+  def forward(self, input):
+    out = self.aggregate(input)
+    out = self.linear(out)
+    out = self.activation(out + input)
+    return out
+
+# Extra class: learned ColorPool: backprop needs to be taken care of carefully. TODO
+
 class ColorPool(nn.Module):
   def __init__(self, pooling, order=None,
-               coloring=standard_node_coloring(2),
-               traversal=standard_node_traversal(1)):
+               coloring=MaximumEigenvectorNodeColoring(),
+               traversal=StandardNodeTraversal(1)):
     """Generalization of (maximum-) pooling from images to graphs.
     Chooses a set of pooling centers using a user specified `coloring`,
     and pools the pooling centers' neighbourhoods generated using a user
@@ -507,3 +639,42 @@ class ColorUnpool(nn.Module):
             input._node_tensor[indices.index(node)]
           )
     return out
+
+def MinimumDegreeNodeColoring():
+  """Partitions a graph using a heuristic choosing all nodes with non-minimum
+  connectivity in their neighbourhood.
+  """
+  def color(graph):
+    chosen = []
+    for idx in range(len(graph._adjacency)):
+      lengths = [len(graph._adjacency[edge]) for edge in graph._adjacency[idx]]
+      self_length = len(graph._adjacency[idx])
+      minimum = min(lengths + [self_length])
+      if self_length != minimum:
+        chosen.append(idx)
+    return torch.LongTensor(chosen)
+  return color
+
+def MaximumEigenvectorNodeColoring(n_iter=2):
+  """Partitions a graph using its Laplacian's largest eigenvector.
+
+  Args:
+    n_iter (int): number of power iterations for eigenvector estimate.
+
+  Returns:
+    graph partition obtained by choosing all nodes with values > 0
+    in an approximation to the largest-eigenvalue eigenvector of the
+    graph Laplacian, obtained by power iteration.
+
+  Note:
+    For large graphs and batch sizes, this may result in excessive
+    memory consumption, as well as high computational load.
+  """
+  def color(graph):
+    values = func.normalize(torch.randn(*graph._node_tensor.size()))
+    for idx in range(n_iter):
+      values = func.normalize(graph.laplacian_action(values))
+    chosen = (values > 0).nonzero().reshape(-1).numpy()
+    return torch.LongTensor(chosen)
+  return color
+
