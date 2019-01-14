@@ -31,6 +31,14 @@ class NodeGraphTensor(object):
       self._node_tensor = graphdesc["node_tensor"]
 
   def graph_range(self, idx):
+    """Range of nodes contained in the `idx`th graph.
+
+    Args:
+      idx (int): graph whose node range is to be computed.
+
+    Returns:
+      Range of nodes in the `idx`th graph.
+    """
     assert idx < self.num_graphs
     start = 0
     for graph in range(idx):
@@ -39,12 +47,21 @@ class NodeGraphTensor(object):
     return range(start, stop)
 
   def laplacian_element(self, i, j):
+    """Laplacian element.
+
+    Args:
+      i, j (int): position for element calculation.
+
+    Returns:
+      Element of the graph Laplacian at the subscript `i, j`.
+    """
     if i == j:
       return len(self._adjacency[i])
     else:
       return -int(j in self._adjacency[i])
 
   def compute_laplacian(self):
+    """Precomputes the graph Laplacian."""
     self.recompute_laplacian = False
     indices = [
       (node, edges)
@@ -60,10 +77,19 @@ class NodeGraphTensor(object):
     )
 
   def decompute_laplacian(self):
+    """Decomputes the graph Laplacian."""
     self.laplacian = None
     self.recompute_laplacian = True
 
   def laplacian_action(self, vector, matrix_free=True):
+    """Computes the action of the graph Laplacian on a `Tensor`.
+    
+    Args:
+      vector (Tensor): one-dimensional `Tensor` upon which the
+        Laplacian shall act.
+      matrix_free (bool): compute the Laplacian action without
+        materializing the Laplacian?
+    """
     if matrix_free:
       out = torch.zeros_like(vector)
       for node, edges in enumerate(self._adjacency):
@@ -75,6 +101,7 @@ class NodeGraphTensor(object):
       return self.laplacian.spmm(vector)
 
   def compute_adjacency_matrix(self):
+    """Computes the graph adjacency matrix."""
     self.recompute_adjacency_matrix = False
     indices = [
       (node, edges)
@@ -88,10 +115,19 @@ class NodeGraphTensor(object):
     )
 
   def decompute_adjacency_matrix(self):
+    """Decomputes the graph adjacency matrix."""
     self.recompute_adjacency_matrix = True
     self.adjacency_matrix = None
 
   def adjacency_action(self, vector, matrix_free=True):
+    """Computes the action of the graph adjacency matrix on a `Tensor`.
+    
+    Args:
+      vector (Tensor): one-dimensional `Tensor` upon which the
+        adjacency matrix shall act.
+      matrix_free (bool): compute the Laplacian action without
+        materializing the adjacency matrix?
+    """
     if matrix_free:
       out = torch.zeros_like(vector)
       for node, edges in enumerate(self._adjacency):
@@ -103,6 +139,8 @@ class NodeGraphTensor(object):
       return self.adjacency_matrix(vector)
 
   def new_like(self):
+    """Creates a new empty `NodeGraphTensor` with the same
+    connectivity as `self`."""
     result = NodeGraphTensor()
     result.is_subgraph = self.is_subgraph
     result.offset = self.offset
@@ -114,6 +152,7 @@ class NodeGraphTensor(object):
     return result
 
   def clone(self):
+    """Clones a `NodeGraphTensor`."""
     result = self.new_like()
     result._node_tensor = self._node_tensor.clone()
     return result
@@ -149,6 +188,15 @@ class NodeGraphTensor(object):
     return sum(self.graph_nodes[:graph_index+1])
 
   def add_node(self, node_tensor):
+    """Adds a node to the graph.
+    
+    Args:
+      node_tensor (Tensor): tensor of node attributes to be added.
+
+    Note:
+      The graph Laplacian and adjacency matrix need to be recomputed
+      afterwards, if used.
+    """
     self.decompute_adjacency_matrix()
     self.decompute_laplacian()
 
@@ -162,6 +210,15 @@ class NodeGraphTensor(object):
     return self._node_tensor.size(0) - 1
 
   def add_edge(self, source, target):
+    """Adds an edge to the graph.
+
+    Args:
+      source, target (int): the source and target nodes of the edge.
+
+    Note:
+      The graph Laplacian and adjacency matrix need to be recomputed
+      afterwards, if used.
+    """
     self.decompute_adjacency_matrix()
     self.decompute_laplacian()
 
@@ -170,10 +227,28 @@ class NodeGraphTensor(object):
     return len(self._adjacency[source]) - 1
 
   def add_edges(self, edges):
+    """Adds a list of edges to the graph.
+
+    Args:
+      edges (list (tuple int)): list of edges to add.
+
+    Note:
+      The graph Laplacian and adjacency matrix need to be recomputed
+      afterwards, if used.
+    """
     for edge in edges:
       self.add_edge(*edge)
 
   def delete_nodes(self, nodes):
+    """Deletes a list of nodes from the graph.
+
+    Args:
+      nodes (list int): list of nodes to be deleted.
+
+    Note:
+      The graph Laplacian and adjacency matrix need to be recomputed
+      afterwards, if used.
+    """
     self.decompute_adjacency_matrix()
     self.decompute_laplacian()
 
@@ -206,9 +281,27 @@ class NodeGraphTensor(object):
     self._adjacency = new_adjacency
 
   def delete_node(self, node):
+    """Deletes a single node from the graph.
+    
+    Args:
+      node (int): node to be deleted.
+    
+    Note:
+      The graph Laplacian and adjacency matrix need to be recomputed
+      afterwards, if used.  
+    """
     self.delete_nodes([node])
 
   def delete_edge(self, source, target):
+    """Deletes a single edge from the graph.
+
+    Args:
+      source, target (int): source and target of the edge to be deleted.
+
+    Note:
+      The graph Laplacian and adjacency matrix need to be recomputed
+      afterwards, if used.
+    """
     self.decompute_adjacency_matrix()
     self.decompute_laplacian()
 
@@ -216,6 +309,15 @@ class NodeGraphTensor(object):
     self._adjacency[target] = [x in self._adjacency[target] if x != source]
 
   def delete_edges(self, edges):
+    """Deletes a list of edges from the graph.
+    
+    Args:
+      edges (list (tuple int)): list of edges to be deleted.
+    
+    Note:
+      The graph Laplacian and adjacency matrix need to be recomputed
+      afterwards, if used.  
+    """
     for edge in edges:
       self.delete_edge(*edge)
 
@@ -225,6 +327,11 @@ class NodeGraphTensor(object):
     return None
 
   def append(self, graph_tensor):
+    """Appends a `NodeGraphTensor` to the end of an existing `NodeGraphTensor`.
+    
+    Args:
+      graph_tensor (NodeGraphTensor): tensor to be appended.
+    """
     self.decompute_adjacency_matrix()
     self.decompute_laplacian()
 
@@ -245,7 +352,8 @@ def _gen_placeholder_arithmetic(op):
   return _placeholder_arithmetic
 
 for op in ["__add__", "__sub__", "__mul__", "__truediv__",
-           "__mod__", "__pow__", "__and__", "__xor__", "__or__"]:
+           "__mod__", "__pow__", "__and__", "__xor__", "__or__",
+           "dot", "mm"]:
   setattr(NodeGraphTensor, op, _gen_placeholder_arithmetic(op))
 
 def cat(graphs, dim=0):
