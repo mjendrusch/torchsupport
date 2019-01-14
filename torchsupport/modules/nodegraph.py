@@ -30,6 +30,14 @@ class NodeGraphTensor(object):
 
       self._node_tensor = graphdesc["node_tensor"]
 
+  def graph_range(self, idx):
+    assert idx < self.num_graphs
+    start = 0
+    for graph in range(idx):
+      start += self.graph_nodes[graph]
+    stop = start + self.graph_nodes[idx]
+    return range(start, stop)
+
   def laplacian_element(self, i, j):
     if i == j:
       return len(self._adjacency[i])
@@ -55,10 +63,16 @@ class NodeGraphTensor(object):
     self.laplacian = None
     self.recompute_laplacian = True
 
-  def laplacian_action(self, vector):
-    if self.recompute_laplacian:
-      self.compute_laplacian()
-    return self.laplacian.spmm(vector)
+  def laplacian_action(self, vector, matrix_free=True):
+    if matrix_free:
+      out = torch.zeros_like(vector)
+      for node, edges in enumerate(self._adjacency):
+        out[node] = len(edges) - vector[edges].sum()
+      return out
+    else:
+      if self.recompute_laplacian:
+        self.compute_laplacian()
+      return self.laplacian.spmm(vector)
 
   def compute_adjacency_matrix(self):
     self.recompute_adjacency_matrix = False
@@ -77,10 +91,16 @@ class NodeGraphTensor(object):
     self.recompute_adjacency_matrix = True
     self.adjacency_matrix = None
 
-  def adjacency_action(self, vector):
-    if self.recompute_adjacency_matrix:
-      self.compute_adjacency_matrix()
-    return self.adjacency_matrix(vector)
+  def adjacency_action(self, vector, matrix_free=True):
+    if matrix_free:
+      out = torch.zeros_like(vector)
+      for node, edges in enumerate(self._adjacency):
+        out[node] = vector[edges].sum()
+      return out
+    else:
+      if self.recompute_adjacency_matrix:
+        self.compute_adjacency_matrix()
+      return self.adjacency_matrix(vector)
 
   def new_like(self):
     result = NodeGraphTensor()
@@ -547,7 +567,46 @@ class GraphResBlock(nn.Module):
     out = self.activation(out + input)
     return out
 
-# Extra class: learned ColorPool: backprop needs to be taken care of carefully. TODO
+class LearnedColorPool(nn.Module):
+  def __init__(self, channels, pooling, order=None,
+               traversal=StandardNodeTraversal(1),
+               attention_activation=nn.Tanh(),
+               activation=nn.ReLU()):
+    """Generalization of pooling from images to graphs, using learned
+    pooling centers and attention.
+
+    Args:
+      channels (int): number of node features.
+      pooling (callable): pooling function.
+      order (callable): function specifying a sort order for nodes to be pooled.
+      traversal (callable): function computing a neighbourhood traversal for a given node.
+    """
+    super(LearnedColorPool, self).__init__()
+    self.embedding = nn.Linear(channels, channels)
+    self.attention_activation = attention_activation
+    self.activation = activation
+    self.chosen = None
+    self.color_pool = ColorPool(
+      pooling, order=order, coloring=lambda x: self.chosen, traversal=traversal
+    )
+
+  def forward(self, graph):
+    embedding = self.embedding(graph)
+    attention = embedding.dot(graph)
+    all_topk = []
+    graph_sum = 0
+    for idx, graph_nodes in enumerate(graph.graph_nodes):
+      topk, indices = torch.topk(
+        attention._node_tensor[graph.graph_range(idx)],
+        graph_nodes // 2
+      )
+      all_topk.append(indices + graph_sum)
+      graph_sum += graph_nodes
+    all_topk = torch.cat(all_topk, dim=0).reshape(-1)
+    attention._node_tensor = self.attention_activation(attention._node_tensor)
+    attended = self.activation(graph * abs(attention) + graph)
+    self.chosen = all_topk
+    return self.color_pool(attended)
 
 class ColorPool(nn.Module):
   def __init__(self, pooling, order=None,
@@ -655,11 +714,12 @@ def MinimumDegreeNodeColoring():
     return torch.LongTensor(chosen)
   return color
 
-def MaximumEigenvectorNodeColoring(n_iter=2):
+def MaximumEigenvectorNodeColoring(n_iter=2, matrix_free=True):
   """Partitions a graph using its Laplacian's largest eigenvector.
 
   Args:
     n_iter (int): number of power iterations for eigenvector estimate.
+    matrix_free (bool): construct Laplacian elements on the fly?
 
   Returns:
     graph partition obtained by choosing all nodes with values > 0
@@ -668,12 +728,14 @@ def MaximumEigenvectorNodeColoring(n_iter=2):
 
   Note:
     For large graphs and batch sizes, this may result in excessive
-    memory consumption, as well as high computational load.
+    memory consumption if not using `matrix_free = True`. On the
+    other hand, setting `matrix_free = True` results in higher
+    computational load.
   """
   def color(graph):
     values = func.normalize(torch.randn(*graph._node_tensor.size()))
     for idx in range(n_iter):
-      values = func.normalize(graph.laplacian_action(values))
+      values = func.normalize(graph.laplacian_action(values, matrix_free=matrix_free))
     chosen = (values > 0).nonzero().reshape(-1).numpy()
     return torch.LongTensor(chosen)
   return color
