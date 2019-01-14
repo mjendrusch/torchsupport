@@ -81,7 +81,7 @@ class NodeGraphTensor(object):
     self.laplacian = None
     self.recompute_laplacian = True
 
-  def laplacian_action(self, vector, matrix_free=True):
+  def laplacian_action(self, vector, matrix_free=True, normalized=False):
     """Computes the action of the graph Laplacian on a `Tensor`.
     
     Args:
@@ -93,12 +93,18 @@ class NodeGraphTensor(object):
     if matrix_free:
       out = torch.zeros_like(vector)
       for node, edges in enumerate(self._adjacency):
-        out[node] = len(edges) - vector[edges].sum()
+        out[node] = len(edges) - vector[edges].sum(dim=0)
+        if normalized:
+          out[node] /= len(edges)
       return out
     else:
       if self.recompute_laplacian:
         self.compute_laplacian()
-      return self.laplacian.spmm(vector)
+      out = self.laplacian.spmm(vector)
+      if normalized:
+        norm = torch.Tensor([len(edges) for edges in self._adjacency])
+        out /= norm
+      return out
 
   def compute_adjacency_matrix(self):
     """Computes the graph adjacency matrix."""
@@ -131,7 +137,7 @@ class NodeGraphTensor(object):
     if matrix_free:
       out = torch.zeros_like(vector)
       for node, edges in enumerate(self._adjacency):
-        out[node] = vector[edges].sum()
+        out[node] = vector[edges].sum(dim=0)
       return out
     else:
       if self.recompute_adjacency_matrix:
@@ -447,6 +453,84 @@ def _batch_graphs(graphs):
   for idx in range(1, len(graphs)):
     result.append(graphs[idx])
   return result
+
+class ChebyshevConv(nn.Module):
+  def __init__(self, in_channels, out_channels, depth=2,
+               activation=nn.ReLU(), matrix_free=False):
+    """Chebyshev polynomial-based approximate spectral graph convolution.
+    
+    Args:
+      in_channels, out_channels (int): number of input and output features.
+      depth (int): depth of the Chebyshev approximation.
+      activation (callable): activation function.
+      matrix_free (bool): do not materialize Laplacian explicitly?
+    """
+    self.linear = nn.Linear(in_channels, out_channels, bias=False)
+    self.depth = depth
+    self.activation = activation
+    self.matrix_free = matrix_free
+
+  def forward(self, graph):
+    m2_nodes = self.linear(graph._node_tensor)
+    m1_nodes = graph.laplacian_action(m2_nodes)
+    out_nodes = m1_nodes + m2_nodes
+    for idx in range(2, self.depth):
+      m2_nodes = m1_nodes
+      m1_nodes += 2 * graph.laplacian_action(
+        m1_nodes, matrix_free=self.matrix_free, normalized=True
+      ) - m2_nodes
+      out_nodes += m1_nodes
+    out = graph.new_like()
+    out._node_tensor = self.activation(out_nodes)
+    return out
+
+class ARMAConv(nn.Module):
+  def __init__(self, in_channels, out_channels, share=True,
+               width=2, depth=2, activation=nn.ReLU(),
+               matrix_free=False):
+    """Auto-regressive moving average-based approximate spectral graph convolution.
+    
+    Args:
+      in_channels, out_channels (int): number of input and output features.
+      width (int): width of the ARMA filter stack.
+      depth (int): depth of the ARMA approximation.
+      activation (callable): activation function.
+      matrix_free (bool): do not materialize Laplacian explicitly?
+    """
+    self.width = width
+    self.depth = depth
+    self.activation = activation
+    self.matrix_free = matrix_free
+    self.share = share
+
+    # width × different linear ops
+    self.preprocess = nn.ModuleList([
+      nn.Linear(in_channels, out_channels * width)
+      for _ in range(width)
+    ])
+    self.propagate = nn.ModuleList([
+      nn.Conv1d(out_channels * width, out_channels * width, 1, groups=width)
+      for _ in range(width)
+    ])
+    self.merge = nn.ModuleList([
+      nn.Linear(in_channels, out_channels * width)
+      for _ in range(width)
+    ])
+
+  def forward(self, graph):
+    nodes = graph._node_tensor
+
+    out = self.preprocess(nodes)
+    for idx in range(self.depth - 1):
+      out -= graph.laplacian_action(out)
+      out = self.propagate(out)
+      out += self.merge(nodes)
+      out = self.activation(out)
+
+    out = out.reshape(nodes.size(0), nodes.size(1), self.width)
+    return func.adaptive_avg_pool1d(out, 1).reshape(
+      nodes.size(0), out_channels
+    )
 
 class AllNodes(nn.Module):
   def __init__(self, node_update):
