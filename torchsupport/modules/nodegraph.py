@@ -329,8 +329,26 @@ class NodeGraphTensor(object):
 
   def __getitem__(self, idx):
     assert (self.num_graphs > 1)
-    # TODO
-    return None
+    assert isinstance(idx, int) or isinstance(idx, slice)
+
+    out = self.new_like()
+    if isinstance(idx, int):
+      out_range = self.graph_range(idx)
+      out.num_graphs = 1
+      out.graph_nodes = [self.graph_nodes[idx]]
+    elif isinstance(idx, slice):
+      out_range = slice(
+        self.graph_range(idx.start).start,
+        self.graph_range(idx.stop-1).stop
+      )
+      out.num_graphs = max(0, idx.stop - idx.start)
+      out.graph_nodes = [
+        self.graph_nodes[k]
+        for k in range(idx.start, idx.stop)
+      ]
+    out._node_tensor = self._node_tensor[out_range.start:out_range.stop]
+    out._adjacency = self._adjacency[out_range.start:out_range.stop]
+    return out
 
   def append(self, graph_tensor):
     """Appends a `NodeGraphTensor` to the end of an existing `NodeGraphTensor`.
