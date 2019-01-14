@@ -681,6 +681,42 @@ class NodeGraphNeighbourhood(nn.Module):
     out._node_tensor = torch.cat((graph._node_tensor, reduced_nodes), 1)
     return out
 
+def _node_neighbourhood_assignment(linears, source, target):
+  def reducer(graph, nodes):
+    source_tensor = source(graph._node_tensor)
+    target_tensor = target(graph._node_tensor)
+    weight_tensors = []
+    for module in linears:
+      weight_tensors.append(module(graph._node_tensor).unsqueeze(0))
+    weighted = torch.cat(weight_tensors, dim=0)
+    new_node_tensor = torch.zeros_like(graph._node_tensor)
+    for idx, node in enumerate(nodes):
+      assignment_tensor = func.softmax(source_tensor[idx] + target_tensor[node]).unsqueeze(0)
+      new_node_tensor[idx] = (assignment_tensor * weighted[node]).mean(dim=0).squeeze(0)
+    return new_node_tensor
+  return reducer
+
+def NodeNeighbourhoodAssignment(in_channels, out_channels, size,
+                                traversal=StandardNodeTraversal(1)):
+  """Aggregates a node neighbourhood using soft weight assignment. (FeaStNet)
+
+  Args:
+    in_channels (int): number of input features.
+    out_channels (int): number of output features.
+    size (int): number of distinct weight matrices (equivalent to kernel size).
+    traversal (callable): node traversal for generating node neighbourhoods.
+  """
+  linears = nn.ModuleList([
+    nn.Linear(in_channels, out_channels)
+    for _ in range(size)
+  ])
+  source = nn.Linear(in_channels, 1)
+  target = nn.Linear(in_channels, 1)
+  return NodeGraphNeighbourhood(
+    _node_neighbourhood_assignment(linears, source, target),
+    traversal=traversal
+  )
+
 def _node_neighbourhood_attention(att):
   def reducer(graph, nodes):
     new_node_tensor = torch.zeros_like(graph._node_tensor)
