@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as func
+import networkx as nx
 from copy import copy, deepcopy
 
 class NodeGraphTensor(object):
@@ -29,6 +30,39 @@ class NodeGraphTensor(object):
       self._adjacency = graphdesc["adjacency"]
 
       self._node_tensor = graphdesc["node_tensor"]
+
+  @staticmethod
+  def from_networkx(nx_graph, features=[]):
+    """Creates a new `NodeGraphTensor` from an `nx.Graph`.
+    
+    Args:
+      nx_graph (nx.Graph): networkx graph input.
+      features (list str): list of feature keys.
+
+    Returns:
+      `NodeGraphTensor` containing the data from the input `nx.Graph`.
+    """
+    out = NodeGraphTensor()
+    for node in nx_graph.nodes:
+      feats = []
+      for key in features:
+        feats.append(nx_graph.nodes[node][key])
+      if len(features) == 0:
+        feats = [1.0]
+      feats = torch.Tensor(feats)
+      out.add_node(feats)
+    for source, target in nx_graph.edges:
+      out.add_edge(source, target)
+    return out
+
+  def to_networkx(self):
+    """Creates a networkx graph from a `NodeGraphTensor`."""
+    out = nx.Graph()
+    for node, edges in enumerate(self._adjacency):
+      out.add_node(node, features=self._node_tensor[node].numpy())
+      for edge in edges:
+        out.add_edge(node, edge)
+    return out
 
   def graph_range(self, idx):
     """Range of nodes contained in the `idx`th graph.
