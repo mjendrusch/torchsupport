@@ -31,6 +31,15 @@ class NodeGraphTensor(object):
 
       self._node_tensor = graphdesc["node_tensor"]
 
+  def __repr__(self):
+    class_name = self.__class__.__name__
+    graphs = self.num_graphs
+    nodes = len(self._node_tensor)
+    edges = sum([len(edge) for edge in self._adjacency]) // 2
+    adj = self.adjacency_matrix != None
+    lap = self.laplacian != None
+    return f"{class_name}({graphs}, {nodes}, {edges}, has_adjacency={adj}, has_laplacian={lap})" 
+
   @staticmethod
   def from_networkx(nx_graph, features=[]):
     """Creates a new `NodeGraphTensor` from an `nx.Graph`.
@@ -98,13 +107,14 @@ class NodeGraphTensor(object):
     """Precomputes the graph Laplacian."""
     self.recompute_laplacian = False
     indices = [
-      (node, edges)
+      (node, edge)
       for node, edges in enumerate(self._adjacency)
       for edge in edges + [node]
     ]
     values = torch.zeros(len(indices))
     for idx, index in enumerate(indices):
       values[idx] = self.laplacian_element(*index)
+    indices = torch.Tensor(indices).t()
     self.laplacian = torch.sparse_coo_tensor(
       indices, values,
       (len(self._adjacency), len(self._adjacency))
@@ -127,14 +137,14 @@ class NodeGraphTensor(object):
     if matrix_free:
       out = torch.zeros_like(vector)
       for node, edges in enumerate(self._adjacency):
-        out[node] = len(edges) - vector[edges].sum(dim=0)
+        out[node] = len(edges) * vector[node] - vector[edges].sum(dim=0)
         if normalized:
           out[node] /= len(edges)
       return out
     else:
       if self.recompute_laplacian:
         self.compute_laplacian()
-      out = self.laplacian.spmm(vector)
+      out = self.laplacian.mm(vector)
       if normalized:
         norm = torch.Tensor([len(edges) for edges in self._adjacency])
         out /= norm
@@ -143,12 +153,12 @@ class NodeGraphTensor(object):
   def compute_adjacency_matrix(self):
     """Computes the graph adjacency matrix."""
     self.recompute_adjacency_matrix = False
-    indices = [
-      (node, edges)
+    indices = torch.Tensor([
+      (node, edge)
       for node, edges in enumerate(self._adjacency)
       for edge in edges + [node]
-    ]
-    values = torch.ones(len(indices))
+    ]).t()
+    values = torch.ones(indices.size(1))
     self.adjacency_matrix = torch.sparse_coo_tensor(
       indices, values,
       (len(self._adjacency), len(self._adjacency))
@@ -243,10 +253,13 @@ class NodeGraphTensor(object):
     assert (self.num_graphs == 1)
     self.graph_nodes[self.offset] += 1
     self._adjacency.append([])
-    self._node_tensor = torch.cat(
-      (self._node_tensor[:self.nodes_including(self.offset)],
-       node_tensor.unsqueeze(0).unsqueeze(0),
-       self._node_tensor[self.nodes_including(self.offset):]), 0)
+    if self._node_tensor.size(0) == 0:
+      self._node_tensor = node_tensor.unsqueeze(0).unsqueeze(0)
+    else:
+      self._node_tensor = torch.cat(
+        (self._node_tensor[:self.nodes_including(self.offset)],
+        node_tensor.unsqueeze(0).unsqueeze(0),
+        self._node_tensor[self.nodes_including(self.offset):]), 0)
     return self._node_tensor.size(0) - 1
 
   def add_edge(self, source, target):
@@ -345,8 +358,8 @@ class NodeGraphTensor(object):
     self.decompute_adjacency_matrix()
     self.decompute_laplacian()
 
-    self._adjacency[source] = [x in self._adjacency[source] if x != target]
-    self._adjacency[target] = [x in self._adjacency[target] if x != source]
+    self._adjacency[source] = [x for x in self._adjacency[source] if x != target]
+    self._adjacency[target] = [x for x in self._adjacency[target] if x != source]
 
   def delete_edges(self, edges):
     """Deletes a list of edges from the graph.
@@ -403,9 +416,9 @@ class NodeGraphTensor(object):
 # generate arithmetic ops on NodeGraphTensors
 def _gen_placeholder_arithmetic(op):
   def _placeholder_arithmetic(self, other):
-    assert other._node_tensor.size() = self._node_tensor.size()
+    assert other._node_tensor.size() == self._node_tensor.size()
     out = self.new_like()
-    out._node_tensor = self._node_tensor.__dict__[op](other._node_tensor)
+    out._node_tensor = getattr(self._node_tensor, op)(other._node_tensor)
     return out
   return _placeholder_arithmetic
 
@@ -517,6 +530,7 @@ class ChebyshevConv(nn.Module):
       activation (callable): activation function.
       matrix_free (bool): do not materialize Laplacian explicitly?
     """
+    super(ChebyshevConv, self).__init__()
     self.linear = nn.Linear(in_channels, out_channels, bias=False)
     self.depth = depth
     self.activation = activation
@@ -549,6 +563,7 @@ class ARMAConv(nn.Module):
       activation (callable): activation function.
       matrix_free (bool): do not materialize Laplacian explicitly?
     """
+    super(ARMAConv, self).__init__()
     self.width = width
     self.depth = depth
     self.activation = activation
@@ -556,33 +571,30 @@ class ARMAConv(nn.Module):
     self.share = share
 
     # width × different linear ops
-    self.preprocess = nn.ModuleList([
-      nn.Linear(in_channels, out_channels * width)
-      for _ in range(width)
-    ])
-    self.propagate = nn.ModuleList([
-      nn.Conv1d(out_channels * width, out_channels * width, 1, groups=width)
-      for _ in range(width)
-    ])
-    self.merge = nn.ModuleList([
-      nn.Linear(in_channels, out_channels * width)
-      for _ in range(width)
-    ])
+    self.preprocess = nn.Linear(in_channels, out_channels * width)
+    self.propagate = nn.Conv1d(out_channels * width, out_channels * width, 1, groups=width)
+    self.merge = nn.Linear(in_channels, out_channels * width)
 
   def forward(self, graph):
     nodes = graph._node_tensor
 
     out = self.preprocess(nodes)
+    out = out.reshape(out.size(0), out.size(1) * out.size(2), 1)
+    out += self.merge(nodes).reshape(out.size(0), out.size(1) * out.size(2), 1)
+    out = self.activation(out)
     for idx in range(self.depth - 1):
       out -= graph.laplacian_action(out)
       out = self.propagate(out)
-      out += self.merge(nodes)
+      out += self.merge(nodes).reshape(out.size(0), out.size(1) * out.size(2), 1)
       out = self.activation(out)
 
     out = out.reshape(nodes.size(0), nodes.size(1), self.width)
-    return func.adaptive_avg_pool1d(out, 1).reshape(
-      nodes.size(0), out_channels
-    )
+    out = func.adaptive_avg_pool1d(out, 1).reshape(
+      nodes.size(0), -1
+    ).unsqueeze(2)
+    result = graph.new_like()
+    result._node_tensor = out
+    return result
 
 class AllNodes(nn.Module):
   def __init__(self, node_update):
@@ -709,7 +721,7 @@ def _node_neighbourhood_sparse_attention(embedding, att, att_p):
     local_attention = att.dot(embedding)
     neighbour_attention = att_p.dot(embedding)
     adjacency = neighbourhood_to_adjacency(nodes)
-    new_node_tensor = local_attention + torch.spmm(adjacency, neighbour_attention)
+    new_node_tensor = local_attention + torch.mm(adjacency, neighbour_attention)
     return new_node_tensor
   return reducer
 
@@ -852,6 +864,47 @@ class LearnedColorPool(nn.Module):
     self.chosen = all_topk
     return self.color_pool(attended)
 
+def MinimumDegreeNodeColoring():
+  """Partitions a graph using a heuristic choosing all nodes with non-minimum
+  connectivity in their neighbourhood.
+  """
+  def color(graph):
+    chosen = []
+    for idx in range(len(graph._adjacency)):
+      lengths = [len(graph._adjacency[edge]) for edge in graph._adjacency[idx]]
+      self_length = len(graph._adjacency[idx])
+      minimum = min(lengths + [self_length])
+      if self_length != minimum:
+        chosen.append(idx)
+    return torch.LongTensor(chosen)
+  return color
+
+def MaximumEigenvectorNodeColoring(n_iter=2, matrix_free=True):
+  """Partitions a graph using its Laplacian's largest eigenvector.
+
+  Args:
+    n_iter (int): number of power iterations for eigenvector estimate.
+    matrix_free (bool): construct Laplacian elements on the fly?
+
+  Returns:
+    graph partition obtained by choosing all nodes with values > 0
+    in an approximation to the largest-eigenvalue eigenvector of the
+    graph Laplacian, obtained by power iteration.
+
+  Note:
+    For large graphs and batch sizes, this may result in excessive
+    memory consumption if not using `matrix_free = True`. On the
+    other hand, setting `matrix_free = True` results in higher
+    computational load.
+  """
+  def color(graph):
+    values = func.normalize(torch.randn(graph._node_tensor.size(0), 1), dim=0)
+    for idx in range(n_iter):
+      values = func.normalize(graph.laplacian_action(values, matrix_free=matrix_free), dim=0)
+    chosen = (values > 0).reshape(-1).nonzero().numpy()
+    return torch.LongTensor(chosen)
+  return color
+
 class ColorPool(nn.Module):
   def __init__(self, pooling, order=None,
                coloring=MaximumEigenvectorNodeColoring(),
@@ -942,45 +995,3 @@ class ColorUnpool(nn.Module):
             input._node_tensor[indices.index(node)]
           )
     return out
-
-def MinimumDegreeNodeColoring():
-  """Partitions a graph using a heuristic choosing all nodes with non-minimum
-  connectivity in their neighbourhood.
-  """
-  def color(graph):
-    chosen = []
-    for idx in range(len(graph._adjacency)):
-      lengths = [len(graph._adjacency[edge]) for edge in graph._adjacency[idx]]
-      self_length = len(graph._adjacency[idx])
-      minimum = min(lengths + [self_length])
-      if self_length != minimum:
-        chosen.append(idx)
-    return torch.LongTensor(chosen)
-  return color
-
-def MaximumEigenvectorNodeColoring(n_iter=2, matrix_free=True):
-  """Partitions a graph using its Laplacian's largest eigenvector.
-
-  Args:
-    n_iter (int): number of power iterations for eigenvector estimate.
-    matrix_free (bool): construct Laplacian elements on the fly?
-
-  Returns:
-    graph partition obtained by choosing all nodes with values > 0
-    in an approximation to the largest-eigenvalue eigenvector of the
-    graph Laplacian, obtained by power iteration.
-
-  Note:
-    For large graphs and batch sizes, this may result in excessive
-    memory consumption if not using `matrix_free = True`. On the
-    other hand, setting `matrix_free = True` results in higher
-    computational load.
-  """
-  def color(graph):
-    values = func.normalize(torch.randn(*graph._node_tensor.size()))
-    for idx in range(n_iter):
-      values = func.normalize(graph.laplacian_action(values, matrix_free=matrix_free))
-    chosen = (values > 0).nonzero().reshape(-1).numpy()
-    return torch.LongTensor(chosen)
-  return color
-
