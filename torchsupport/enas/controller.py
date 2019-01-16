@@ -143,10 +143,29 @@ class _SearchSpaceManifestation(nn.Module):
       full_trace.append(trace)
     return history, hidden, full_trace
 
+class _FinalModelManifestation(nn.Module):
+  def __init__(self, node_manifestations, inputs, outputs, incoming):
+    self.manifestations = node_manifestations
+    self.inputs = inputs
+    self.outputs = outputs
+    self.incoming = incoming
+
+  def forward(self, inputs):
+    manifested_outputs = [None for _ in range(len(self.manifestations))] 
+    for idx, manifestation in enumerate(self.manifestations):
+      man_inputs = [
+        manifested_outputs[inc] if inc >= 0 else inputs[-inc - 1]
+        for inc in self.incoming[idx]
+      ]
+      manifested_outputs[idx] = manifestation(*man_inputs)
+    return tuple([manifested_outputs[output] for output in self.outputs])
+
 class SearchSpace(object):
-  def __init__(self, nodes=[], edges=[]):
+  def __init__(self, nodes=[], edges=[], inputs=[]):
     self.nodes = nodes
     self.edges = edges
+    self.inputs = inputs
+    self.outputs = outputs
 
   def add_node(self, node : SearchNode):
     self.nodes.append(node)
@@ -157,5 +176,30 @@ class SearchSpace(object):
     self.nodes[source].outgoing.append(self.nodes[target])
     self.nodes[target].incoming.append(self.nodes[source])
 
-  def manifest_choice(self):
-    ...
+  def register_input(self, idx):
+    assert idx < len(self.nodes)
+    self.inputs.append(idx)
+
+  def register_output(self, idx):
+    assert idx < len(self.nodes)
+    self.outputs.append(idx)
+
+  def manifest_choice(self, hidden=100):
+    node_manifestations = []
+    for node in self.nodes:
+      node_manifestations.append(node.manifest_choice(hidden=hidden))
+    node_manifestations = nn.ModuleList(node_manifestations)
+    return _SearchSpaceManifestation(node_manifestations, hidden=hidden)
+
+  def manifest_module(self, choice):
+    node_manifestations = []
+    for idx, node in enumerate(self.nodes):
+      incoming = choice[idx]["incoming"]
+      operations = choice[idx]["operations"]
+      node_manifestations.append(node.manifest_module(incoming, operations))
+    node_manifestations = nn.ModuleList(node_manifestations)
+    return _FinalModelManifestation(node_manifestations, self.inputs, self.outputs, [
+      c["incoming"]
+      for c in choice
+    ])
+    
