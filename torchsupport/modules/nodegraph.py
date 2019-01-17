@@ -89,6 +89,10 @@ class NodeGraphTensor(object):
     stop = start + self.graph_nodes[idx]
     return range(start, stop)
 
+  def graph_slice(self, idx):
+    rng = self.graph_range(idx)
+    return slice(rng.start, rng.stop)
+
   def laplacian_element(self, i, j):
     """Laplacian element.
 
@@ -518,6 +522,101 @@ def _batch_graphs(graphs):
   for idx in range(1, len(graphs)):
     result.append(graphs[idx])
   return result
+
+class ReNode(nn.Module):
+  def __init__(self, reduction):
+    """Turns all edges into nodes and all nodes into edges.
+
+    Args:
+      reduction (callable): reduction function merging two node
+        features into a single edge feature.
+    """
+    super(ReNode, self).__init__()
+    self.reduction = reduction
+  
+  def forward(self, graph):
+    result = type(graph)()
+    edges = (
+      (node, edge)
+      for node, edges in enumerate(graph._adjacency)
+      for edge in edges
+    )
+    lookup = [
+      []
+      for node, edges in enumerate(graph._adjacency)
+    ]
+    new_nodes = []
+    for idx, (source, target) in enumerate(edges):
+      lookup[source].append(idx)
+      lookup[target].append(idx)
+      new_nodes.append(self.reduction(source, target))
+    new_adjacency = [
+      [
+        neighbour
+        for neighbour in lookup[source] + lookup[target]
+        if neighbour != idx
+      ]
+      for idx, (source, target) in enumerate(edges)
+    ]
+    new_graph_nodes = [
+      sum(map(len, graph._adjacency[graph.graph_slice(idx)]))
+      for idx in range(graph.num_graphs)
+    ]
+    new_nodes = torch.cat(new_nodes, dim=0)
+    result.num_graphs = graph.num_graphs
+    result.graph_nodes = new_graph_nodes
+    result._adjacency = new_adjacency
+    result._node_tensor = new_nodes
+    return result
+
+class GCN(nn.Module):
+  def __init__(self, in_channels, out_channels, augment=1, activation=nn.ReLU(), matrix_free=False):
+    """Basic GCN.
+
+    Args:
+      in_channels, out_channels (int): number of in- and output features.
+      augment (int): number of adjacency matrix augmentations.
+      activation (callable): activation function.
+      matrix_free (bool): use matrix-free matrix-vector multiplication?
+    """
+    super(GCN, self).__init__()
+    self.linear = nn.Linear(in_channels, out_channels, bias=False)
+    self.activation = activation
+    self.matrix_free = matrix_free
+    self.augment = augment
+
+  def forward(self, graph):
+    out = graph.new_like()
+    new_nodes = self.linear(graph._node_tensor)
+    normalization = torch.Tensor([len(edges) + 1 for edges in self._adjacency], dtype="float")
+    for idx in range(self.augment):
+      new_nodes = (self.adjacency_action(new_nodes, matrix_free=self.matrix_free) + new_nodes)
+      new_nodes /= normalization
+    out._node_tensor = self.activation(new_nodes)
+    return out
+
+class MultiscaleGCN(nn.Module):
+  def __init__(self, in_channels, out_channels, scales, activation=nn.ReLU, matrix_free=False):
+    """Multiscale GCN.
+
+    Args:
+      in_channels, out_channels (int): number of in- and output features.
+      scales (list int): number of adjacency matrix augmentations.
+      activation (callable): activation function.
+      matrix_free (bool): use matrix-free matrix-vector multiplication?
+    """
+    super(MultiscaleGCN, self).__init__()
+    self.modules = nn.ModuleList([
+      GCN(in_channels, out_channels, augment=scale,
+              activation=activation, matrix_free=matrix_free)
+      for scale in scales
+    ])
+
+  def forward(self, graph):
+    outputs = []
+    for module in self.modules
+      outputs.append(module(graph))
+    return cat(outputs, dim=1)
 
 class ChebyshevConv(nn.Module):
   def __init__(self, in_channels, out_channels, depth=2,
