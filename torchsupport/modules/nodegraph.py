@@ -73,6 +73,22 @@ class NodeGraphTensor(object):
         out.add_edge(node, edge)
     return out
 
+  def node_graph(self, node):
+    """Finds the index of the graph a node belongs to.
+    
+    Args:
+      node (int): node index.
+
+    Returns:
+      Index of the graph `node` belongs to.
+    """
+    assert node < self._node_tensor.size(0)
+    total_nodes = 0
+    for graph, graph_nodes in enumerate(self.graph_nodes):
+      if total_nodes <= node and node < total_nodex + graph_nodes:
+        return graph
+      total_nodes += graph_nodes
+
   def graph_range(self, idx):
     """Range of nodes contained in the `idx`th graph.
 
@@ -379,10 +395,13 @@ class NodeGraphTensor(object):
       self.delete_edge(*edge)
 
   def __getitem__(self, idx):
-    assert (self.num_graphs > 1)
-    assert isinstance(idx, int) or isinstance(idx, slice)
+    assert isinstance(idx, int) or isinstance(idx, slice) or isinstance(idx, tuple)
 
     out = self.new_like()
+    further_indices = None
+    if isinstance(idx, tuple) and len(idx) > 1:
+      further_indices = idx[1:]
+      idx = idx[0]
     if isinstance(idx, int):
       out_range = self.graph_range(idx)
       out.num_graphs = 1
@@ -398,8 +417,16 @@ class NodeGraphTensor(object):
         for k in range(idx.start, idx.stop)
       ]
     out._node_tensor = self._node_tensor[out_range.start:out_range.stop]
+    if further_indices != None:
+      out._node_tensor = out._node_tensor[(slice(None), *further_indices)]
     out._adjacency = self._adjacency[out_range.start:out_range.stop]
     return out
+
+  def __setitem__(self, idx, value):
+    assert isinstance(idx, int) or isinstance(idx, slice) or isinstance(idx, tuple)
+
+    further_indices = None
+    if isinstance(idx, tuple) and len(idx) > 1:
 
   def append(self, graph_tensor):
     """Appends a `NodeGraphTensor` to the end of an existing `NodeGraphTensor`.
@@ -733,12 +760,21 @@ def LinearOnNodes(insize, outsize):
     return x
   return AllNodes(mod)
 
-def StandardNodeTraversal(depth):
+def StandardNodeTraversal(depth, with_self=True):
+  """Computes a standard node traversal for a given node.
+
+  Args:
+    depth (int): number of hops in the n-hop traversal.
+    with_self (bool): include the origin of the traversal? Defaults to `True`.
+
+  Returns:
+    List of traversed nodes.
+  """
   def function(graph, entity, d=depth):
     if d == 0:
-        return [entity]
+        return [entity] if with_self else []
     else:
-      nodes = [entity]
+      nodes = [entity] if with_self else []
       edges = graph.adjacency[entity]
       nodes += edges
       for new_node in edges:
@@ -749,6 +785,59 @@ def StandardNodeTraversal(depth):
           nodes += new_nodes
       nodes = list(set(nodes))
       return nodes
+  return function
+
+def CloseDisconnectedNodeTraversal(reject_depth, radius,
+                                   position_slice=slice(0,3)):
+  """Computes a traversal of nodes within a given distance of a starting node.
+
+  Args:
+    reject_depth (int): nodes connected to the origin node up to this depth
+      are discarded.
+    radius (int): nodes within this distance are accepted.
+    position_slice (slice): slice of input features to be used for distance.
+
+  Returns:
+    Nodes within a given `radius` from the origin node, at least `reject_depth`
+    hops away from the origin node.
+  """
+  reject_node_traversal = StandardNodeTraversal(reject_depth)
+  def function(graph, entity, radius=radius, position_slice=position_slice):
+    reject_nodes = reject_node_traversal(graph, entity)
+    accept_nodes = []
+    graph_slice = graph.graph_slice(graph.node_graph(entity))
+    radius = norm(graph._node_tensor[graph_slice][position_slice] - graph._node_tensor[entity])
+    for node, R in enumerate(radius, graph_slice.start):
+      if R < radius and node not in reject_nodes:
+        accept_nodes.append(node)
+    return accept_nodes
+  return function
+
+def DynamicAttentionNodeTraversal(attention_left, attention_right, top_p=0.8, attention_maps=[]):
+  """Computes a dynamic, attention-guided node neighbourhood.
+
+  Args:
+    attention_left (NodeGraphTensor): node-part of dot-product attention.
+    attention_right (NodeGraphTensor): neighbourhood-part of dot-product attention.
+    top_p (float): percentage of signal to cover.
+    attention_maps (list): output-list of per-node attention maps for further processing.
+
+  Returns:
+    Nodes assigned to a given origin node by global dot-attention.
+  """
+  def function(graph, entity, al=attention_left, ar=attention_right, top_p=top_p):
+    entity_attention = attention_left[entity]
+    entity_slice = graph.graph_slice(graph.node_graph(entity))
+    attention_map = attention_left.dot(attention_right[graph.graph_slice(graph.node_graph(entity))])
+    attention_map = func.softmax(attention_map)
+    sorted_map, indices = torch.sort(attention_map, descending=True)
+    total_percentage = 0
+    index = 0
+    while total_percentage < top_p:
+      total_percentage += sorted_map[index]
+      index += 1
+    attention_maps.append(attention_map)
+    return [index + entity_slice.start for index in list(indices[:index + 1])]
   return function
 
 class NodeGraphNeighbourhood(nn.Module):
