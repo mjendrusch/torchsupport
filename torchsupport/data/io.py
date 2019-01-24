@@ -6,13 +6,11 @@ import time
 import os
 
 def imread(path, type='float32'):
-  """Reads a given image from file, returning a :class:`Tensor`.
+  """Reads a given image from file, returning a `Tensor`.
   
-  Arguments
-  ---------
-  path : path to an image file.
-
-  type : the desired type of the output tensor, defaults to 'float32'.
+  Args:
+    path (str): path to an image file.
+    type (str): the desired type of the output tensor, defaults to 'float32'.
   """
   reading = True
   while reading:
@@ -32,13 +30,11 @@ def imread(path, type='float32'):
   return image
 
 def stackread(path, type='float32'):
-  """Reads a given image from file, returning a :class:`Tensor`.
+  """Reads a given image from file, returning a `Tensor`.
   
-  Arguments
-  ---------
-  path : path to an image file.
-
-  type : the desired type of the output tensor, defaults to 'float32'.
+  Args:
+    path (str): path to an image file.
+    type (str): the desired type of the output tensor, defaults to 'float32'.
   """
   reading = True
   while reading:
@@ -60,11 +56,9 @@ def stackread(path, type='float32'):
 def netwrite(network, path):
   """Writes a given neural network to a file.
   
-  Arguments
-  ---------
-  network : the network to be written, needs to inherit from :class:`Module`.
-
-  path : path to the file where the network will be written.
+  Args:
+    network (nn.Module): the network to be written, needs to inherit from `Module`.
+    path (str): path to the file where the network will be written.
   """
   writing = True
   while writing:
@@ -81,6 +75,10 @@ def netwrite(network, path):
 
 def netread(network, path):
   """Tries to read neural network weights from a file.
+  
+  Args:
+    network (nn.Module): network to be saved.
+    path (str): path at which the network will be saved.
   """
 
   if not os.path.isfile(path):
