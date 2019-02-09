@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as func
-from torchsupport.networks.unet import *
-from torchsupport.modules.multiscale import Autoscale
+from torchsupport.networks.unet import StandardUNetConv, DilatedUNetConv, UNet
+from torchsupport.modules.multiscale import Autoscale, DilatedMultigrid
 
 class UNetModel(nn.Module):
   def __init__(self, depth, dilated, attention, max_classes, in_channels, is_inverted=False):
@@ -24,7 +24,7 @@ class UNetModel(nn.Module):
 
   def wnet_decoder(self):
     result = UNetModel(self.depth, self.dilated, self.attention,
-                       self.in_channels, is_inverted=True)
+                       self.max_classes, self.in_channels, is_inverted=True)
     return result
 
   def forward(self, input):
@@ -44,7 +44,7 @@ class AutofocusResBlock(nn.Module):
 
   def forward(self, input):
     out = self.auto_0(input)
-    out = self.auto_1(output)
+    out = self.auto_1(out)
     out = out + input
     out = func.relu(out)
     return out
@@ -59,12 +59,12 @@ class AutofocusModel(nn.Module):
 
     self.conv_0 = nn.Sequential(
       nn.Conv2d(in_channels, 30, 3),
-      nn.BatchNorm2d(),
+      nn.BatchNorm2d(30),
       nn.ReLU()
     )
     self.conv_1 = nn.Sequential(
       nn.Conv2d(30, 30, 3),
-      nn.BatchNorm2d(),
+      nn.BatchNorm2d(30),
       nn.ReLU()
     )
     self.resblocks = []
@@ -79,7 +79,7 @@ class AutofocusModel(nn.Module):
                             self.max_classes, is_inverted=True)
     if upsample:
       result = nn.Sequential(
-        nn.UpsamplingBilinear(size=(224, 224)),
+        nn.UpsamplingBilinear2d(size=(224, 224)),
         result
       )
 
@@ -122,7 +122,7 @@ class MultiScaleModel(nn.Module):
 
   def wnet_decoder(self):
     return MultiScaleModel(self.inner_model.wnet_decoder(),
-                           scales, is_inverted=True)
+                           self.scales, is_inverted=True)
 
   def forward(self, input):
     out = input

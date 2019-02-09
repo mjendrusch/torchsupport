@@ -12,6 +12,7 @@ class Autoscale(nn.Module):
       preprocess (nn.Module): module performing feature preprocessing for attention.
       activation (nn.Module): activation function for attention computation. 
     """
+    super(Autoscale, self).__init__()
     in_channels = multigrid_module.levels[0].in_channels
     self.branch = AttentionBranch2d(multigrid_module, in_channels,
                                     preprocess=preprocess, activation=activation)
@@ -63,7 +64,7 @@ class DilationCascade(nn.Module):
       levels (list int): list of convolutional scales.
     """
     super(DilationCascade, self).__init__()
-    self.merger = None
+    self.merger = merger
     self.levels = nn.ModuleList([
       nn.Conv2d(channels, channels, kernel_size,
                 dilation=level, padding=(kernel_size // 2) * level)
@@ -73,12 +74,12 @@ class DilationCascade(nn.Module):
     self.batch_norms = None
     if batch_norm:
       self.batch_norms = nn.ModuleList([
-        nn.BatchNorm2d(out_channels)
+        nn.BatchNorm2d(channels)
         for level in levels
       ])
 
   def forward(self, input):
-    if self.merger != None
+    if self.merger != None:
       outputs = []
       out = input
       for idx, level in enumerate(self.levels):
@@ -193,7 +194,7 @@ class PoolingMultigrid(nn.Module):
 class PoolingPyramid(nn.Module):
   def __init__(self, channels, kernel_size, pooling_size, depth=4,
                merger=lambda x: torch.cat(x, dim=1), batch_norm=False,
-               activation=activation):
+               activation=func.relu):
     """Iterative pooling image pyramid construction.
     
     Args:
@@ -270,7 +271,7 @@ class ContextAggregation(nn.Module):
       self.attention_refinements = nn.ModuleList([
         nn.Sequential(
           nn.AdaptiveAvgPool2d(1),
-          nn.Conv2d(channels, channels),
+          nn.Conv2d(channels, channels, 3),
           nn.BatchNorm2d(channels),
           activation
         )
@@ -292,7 +293,7 @@ class ContextAggregation(nn.Module):
       outputs = []
       for idx, module in enumerate(self.modules):
         out = module(outputs)
-        if idx in branch_from_layers:
+        if idx in self.branch:
           outputs.append(out)
       out = func.adaptive_avg_pool2d(input, 1)
       out = func.interpolate(out, size=upsize)

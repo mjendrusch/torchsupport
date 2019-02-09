@@ -45,10 +45,10 @@ class AttentionBranch(nn.Module):
 # Generate variants:
 for dim in range(1, 4):
   def _generating_function_outer(N):
-    def _inner(branches, in_channels, preprocess=None, activation=func.tanh)
+    def _inner(branches, in_channels, preprocess=None, activation=func.tanh):
       """See `AttentionBranch`."""
       return AttentionBranch(N, branches, in_channels, preprocess=preprocess, activation=activation)
-  setattr(sys.modules[__name__], f"AttentionBranch{dim}d", _generating_function_outer(N))
+  setattr(sys.modules[__name__], f"AttentionBranch{dim}d", _generating_function_outer(dim))
 
 class GuidedAttention(nn.Module):
   def __init__(self, N, in_channels, out_channels, hidden=32,
@@ -90,11 +90,11 @@ class GuidedAttention(nn.Module):
 # Generate variants:
 for dim in range(1, 4):
   def _generating_function_outer(N):
-    def _inner(branches, in_channels, out_channels=1, hidden=32,
+    def _inner(in_channels, out_channels=1, hidden=32,
                inner_activation=func.relu, outer_activation=func.tanh,
-               reduce=False)
+               reduce=False):
       """See `GuidedAttention`."""
-      return GuidedAttention(N, branches, in_channels, out_channels, hidden=hidden,
+      return GuidedAttention(N, in_channels, out_channels, hidden=hidden,
                              inner_activation=inner_activation, outer_activation=outer_activation,
                              reduce=reduce)
-  setattr(sys.modules[__name__], f"GuidedAttention{dim}d", _generating_function_outer(N))
+  setattr(sys.modules[__name__], f"GuidedAttention{dim}d", _generating_function_outer(dim))
