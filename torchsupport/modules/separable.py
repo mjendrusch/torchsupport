@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as func
 
 class DepthWiseSeparableConv1d(nn.Module):
-  def __init__(in_channels, out_channels, kernel_size,
+  def __init__(self, in_channels, out_channels, kernel_size,
                stride=1, padding=0, dilation=1, bias=True):
     """Depthwise separable 1D convolution.
 
@@ -13,6 +13,7 @@ class DepthWiseSeparableConv1d(nn.Module):
       kernel_size (int or (int, int)): kernel size.
       kwargs: additional keyword arguments. See `Conv1d` for details. 
     """
+    super(DepthWiseSeparableConv1d, self).__init__()
     self.depth_conv = nn.Conv1d(in_channels, in_channels, kernel_size,
                                 stride=stride, padding=padding,
                                 dilation=dilation, bias=bias)
@@ -22,7 +23,7 @@ class DepthWiseSeparableConv1d(nn.Module):
     return self.point_conv(self.depth_conv(input))
 
 class DepthWiseSeparableConv2d(nn.Module):
-  def __init__(in_channels, out_channels, kernel_size,
+  def __init__(self, in_channels, out_channels, kernel_size,
                stride=1, padding=0, dilation=1, bias=True):
     """Depthwise separable 2D convolution.
 
@@ -32,6 +33,7 @@ class DepthWiseSeparableConv2d(nn.Module):
       kernel_size (int or (int, int)): kernel size.
       kwargs: additional keyword arguments. See `Conv2d` for details. 
     """
+    super(DepthWiseSeparableConv2d, self).__init__()
     self.depth_conv = nn.Conv2d(in_channels, in_channels, kernel_size,
                                 stride=stride, padding=padding,
                                 dilation=dilation, bias=bias)
