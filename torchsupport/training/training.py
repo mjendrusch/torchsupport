@@ -69,7 +69,7 @@ class SupervisedTraining(Training):
       train_data, batch_size=batch_size, num_workers=8, shuffle=True
     )
     self.validate_data = DataLoader(
-      validate_data, batch_size=batch_size, num_workers=8, shuffle=True
+      validate_data, batch_size=batch_size, shuffle=False
     )
     self.net = net.to(self.device)
     self.max_epochs = max_epochs
@@ -93,22 +93,23 @@ class SupervisedTraining(Training):
     loss_val = torch.tensor(0.0).to(self.device)
     for idx, prediction in enumerate(predictions):
       this_loss_val = self.losses[idx](prediction, label[idx])
-      self.training_losses[idx] = this_loss_val.item()
+      self.training_losses[idx] = float(this_loss_val)
       loss_val += this_loss_val
     loss_val.backward()
     self.optimizer.step()
     self.each_step()
 
   def validate(self):
-    vit = iter(self.validate_data)
-    inputs, *label = next(vit)
-    inputs, label = inputs.to(self.device), list(map(lambda x: x.to(self.device), label))
-    predictions = self.net(inputs)
-    for idx, prediction in enumerate(predictions):
-      this_loss_val = self.losses[idx](prediction, label[idx])
-      self.validation_losses[idx] = this_loss_val.item()
-    self.each_validate()
-    self.valid_callback(self, inputs.to("cpu").numpy(), None)
+    with torch.no_grad():
+      vit = iter(self.validate_data)
+      inputs, *label = next(vit)
+      inputs, label = inputs.to(self.device), list(map(lambda x: x.to(self.device), label))
+      predictions = self.net(inputs)
+      for idx, prediction in enumerate(predictions):
+        this_loss_val = self.losses[idx](prediction, label[idx])
+        self.validation_losses[idx] = float(this_loss_val)
+      self.each_validate()
+      self.valid_callback(self, inputs.to("cpu").numpy(), None)
 
   def schedule_step(self):
     self.schedule.step(sum(self.validation_losses))
