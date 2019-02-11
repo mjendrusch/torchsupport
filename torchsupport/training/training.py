@@ -52,8 +52,10 @@ class SupervisedTraining(Training):
                batch_size=64,
                device="cpu",
                network_name="network",
-               path_prefix="."):
+               path_prefix=".",
+               valid_callback=lambda x: None):
     super(SupervisedTraining, self).__init__()
+    self.valid_callback = valid_callback
     self.network_name = network_name
     self.writer = SummaryWriter(network_name)
     self.device = device
@@ -63,8 +65,12 @@ class SupervisedTraining(Training):
     else:
       self.schedule = schedule
     self.losses = losses
-    self.train_data = DataLoader(train_data, batch_size=batch_size, num_workers=8, shuffle=True)
-    self.validate_data = DataLoader(validate_data, batch_size=batch_size, num_workers=8, shuffle=True)
+    self.train_data = DataLoader(
+      train_data, batch_size=batch_size, num_workers=8, shuffle=True
+    )
+    self.validate_data = DataLoader(
+      validate_data, batch_size=batch_size, num_workers=8, shuffle=True
+    )
     self.net = net.to(self.device)
     self.max_epochs = max_epochs
     self.checkpoint_path = f"{path_prefix}/{network_name}-checkpoint"
@@ -102,6 +108,7 @@ class SupervisedTraining(Training):
       this_loss_val = self.losses[idx](prediction, label[idx])
       self.validation_losses[idx] = this_loss_val.item()
     self.each_validate()
+    self.valid_callback(self, inputs.to("cpu").numpy(), None)
 
   def schedule_step(self):
     self.schedule.step(sum(self.validation_losses))
@@ -120,7 +127,7 @@ class SupervisedTraining(Training):
       self.checkpoint()
 
   def train(self):
-    for epoch_id in range(1000):
+    for epoch_id in range(self.max_epochs):
       self.epoch_id = epoch_id
       for data in self.train_data:
         inputs, *label = data

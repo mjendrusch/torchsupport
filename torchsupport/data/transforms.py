@@ -533,7 +533,7 @@ class Crop(object):
         return x
 
 class Elastic(object):
-    def __init__(self, alpha, sigma):
+    def __init__(self, alpha=1000, sigma=30):
         self.alpha = alpha
         self.sigma = sigma
 
@@ -547,24 +547,30 @@ class Elastic(object):
         assert image.ndim == 3
         shape = image.shape[:2]
 
-        dx = gaussian_filter((random_state.rand(*shape) * 2 - 1),
-                            sigma, mode="constant", cval=0) * alpha
-        dy = gaussian_filter((random_state.rand(*shape) * 2 - 1),
-                            sigma, mode="constant", cval=0) * alpha
+        dx = ndi.filters.gaussian_filter(
+            (random_state.rand(*shape) * 2 - 1),
+            sigma, mode="constant", cval=0
+        ) * alpha
+        dy = ndi.filters.gaussian_filter(
+            (random_state.rand(*shape) * 2 - 1),
+            sigma, mode="constant", cval=0
+        ) * alpha
 
         x, y = np.meshgrid(np.arange(shape[0]), np.arange(shape[1]), indexing='ij')
         indices = [np.reshape(x + dx, (-1, 1)), np.reshape(y + dy, (-1, 1))]
         result = np.empty_like(image)
         for i in range(image.shape[2]):
-            result[:, :, i] = map_coordinates(
-                image[:, :, i], indices, order=spline_order, mode=mode).reshape(shape)
+            result[:, :, i] = ndi.interpolation.map_coordinates(
+                image[:, :, i], indices, order=spline_order, mode=mode
+            ).reshape(shape)
         return result
 
     def __call__(self, x):
         array = x.numpy().transpose(1, 2, 0)
         result = self._elastic_transform(
-            np.random.uniform(*self.alpha),
-            np.random.uniform(*self.sigma)
+            array,
+            np.random.uniform(*self.alpha) if isinstance(self.alpha, (list, tuple)) else self.alpha,
+            np.random.uniform(*self.sigma) if isinstance(self.sigma, (list, tuple)) else self.sigma
         )
         return torch.Tensor(result.transpose(2, 0, 1))
 
@@ -577,6 +583,9 @@ class Perturb(object):
     def __call__(self, x):
         noise = x.data.new(x.size()).normal_(
             self.mean, self.std
+        ) if not isinstance(self.std, tuple) else \
+        x.data.new(x.size()).normal_(
+            self.mean, np.random.uniform(*self.std)
         )
         x = x + noise
         return x
