@@ -75,7 +75,7 @@ def netwrite(network, path):
 
 def netread(network, path):
   """Tries to read neural network weights from a file.
-  
+
   Args:
     network (nn.Module): network to be saved.
     path (str): path at which the network will be saved.

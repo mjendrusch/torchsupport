@@ -24,7 +24,7 @@ class DepthWiseSeparableConv1d(nn.Module):
 
 class DepthWiseSeparableConv2d(nn.Module):
   def __init__(self, in_channels, out_channels, kernel_size,
-               stride=1, padding=0, dilation=1, bias=True):
+               stride=1, padding=1, dilation=1, bias=True):
     """Depthwise separable 2D convolution.
 
     Args:

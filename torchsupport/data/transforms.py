@@ -76,7 +76,7 @@ class Affine(object):
                  shear_range=None, 
                  zoom_range=None, 
                  fill_mode='constant',
-                 fill_value=0., 
+                 fill_value=0.,
                  target_fill_mode='nearest', 
                  target_fill_value=0.):
         """Perform an affine transforms with various sub-transforms, using

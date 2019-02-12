@@ -49,7 +49,7 @@ class SupervisedTraining(Training):
                optimizer=torch.optim.Adam,
                schedule=None,
                max_epochs=50,
-               batch_size=64,
+               batch_size=128,
                device="cpu",
                network_name="network",
                path_prefix=".",
@@ -59,9 +59,9 @@ class SupervisedTraining(Training):
     self.network_name = network_name
     self.writer = SummaryWriter(network_name)
     self.device = device
-    self.optimizer = optimizer(net.parameters())
+    self.optimizer = optimizer(net.parameters(), weight_decay=1e-4)
     if schedule is None:
-      self.schedule = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer)
+      self.schedule = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, patience=2)
     else:
       self.schedule = schedule
     self.losses = losses
@@ -69,7 +69,7 @@ class SupervisedTraining(Training):
       train_data, batch_size=batch_size, num_workers=8, shuffle=True
     )
     self.validate_data = DataLoader(
-      validate_data, batch_size=2 * batch_size, shuffle=True
+      validate_data, batch_size=batch_size, shuffle=True
     )
     self.net = net.to(self.device)
     self.max_epochs = max_epochs
@@ -94,6 +94,8 @@ class SupervisedTraining(Training):
     for idx, prediction in enumerate(predictions):
       this_loss_val = self.losses[idx](prediction, label[idx])
       self.training_losses[idx] = float(this_loss_val)
+      for lbl in label[idx].to("cpu").numpy():
+        print(lbl)
       loss_val += this_loss_val
     loss_val.backward()
     self.optimizer.step()
@@ -109,7 +111,7 @@ class SupervisedTraining(Training):
         this_loss_val = self.losses[idx](prediction, label[idx])
         self.validation_losses[idx] = float(this_loss_val)
       self.each_validate()
-      self.valid_callback(self, inputs.to("cpu").numpy(), None)
+      self.valid_callback(self, inputs.to("cpu").numpy(), list(map(lambda x: x.to("cpu"), label)))
 
   def schedule_step(self):
     self.schedule.step(sum(self.validation_losses))
