@@ -64,7 +64,7 @@ def apply_transform(x, transform, fill_mode='nearest', fill_value=0.):
     final_affine_matrix = transform[:2, :2]
     final_offset = transform[:2, 2]
     channel_images = [ndi.interpolation.affine_transform(x_channel, final_affine_matrix,
-            final_offset, order=0, mode=fill_mode, cval=fill_value) for x_channel in x]
+            final_offset, order=3, mode=fill_mode, cval=fill_value) for x_channel in x]
     x = np.stack(channel_images, axis=0)
     return x
 
@@ -135,7 +135,7 @@ class Affine(object):
             self.transforms.append(shear_tform) 
 
         if zoom_range:
-            zoom_tform = Translation(zoom_range, lazy=True)
+            zoom_tform = Zoom(zoom_range, lazy=True)
             self.transforms.append(zoom_tform)
 
         self.fill_mode = fill_mode
@@ -298,8 +298,7 @@ class Rotation4(object):
         self.lazy = lazy
 
     def __call__(self, x, y=None):
-        degree = random.choice([0, math.pi/2, math.pi, 3 * math.pi/2])
-        theta = math.pi / 180 * degree
+        theta = random.choice([0, math.pi/2, math.pi, 3 * math.pi/2])
         rotation_matrix = np.array([[math.cos(theta), -math.sin(theta), 0],
                                     [math.sin(theta), math.cos(theta), 0],
                                     [0, 0, 1]])
@@ -483,7 +482,7 @@ class Zoom(object):
         zx = random.uniform(self.zoom_range[0], self.zoom_range[1])
         zy = random.uniform(self.zoom_range[0], self.zoom_range[1])
         zoom_matrix = np.array([[zx, 0, 0],
-                                [0, zy, 0],
+                                [0, zx, 0],
                                 [0, 0, 1]])
         if self.lazy:
             return zoom_matrix
@@ -510,6 +509,31 @@ class Normalize(object):
             x[idx, :, :] = (x[idx, :, :] - xmean) / xstd
             if xstd == 0:
                 x[idx, :, :] = 0.0
+        return x
+
+class Center(object):
+
+    def __init__(self):
+      """Center an image by its own mean and standard deviation."""
+      pass
+
+    def __call__(self, x):
+        for idx in range(x.shape[0]):
+            xmax = torch.max(x[idx])
+            x[idx] = (x[idx] / xmax)
+        return x
+
+class MinMax(object):
+
+    def __init__(self):
+      """MinMax an image by its own mean and standard deviation."""
+      pass
+
+    def __call__(self, x):
+        for idx in range(x.shape[0]):
+            xmin = torch.min(x[idx])
+            xmax = torch.max(x[idx])
+            x[idx] = ((x[idx] - xmin) / (xmax - xmin) * 255).long().float()
         return x
 
 class Crop(object):
@@ -585,10 +609,45 @@ class Perturb(object):
             self.mean, self.std
         ) if not isinstance(self.std, tuple) else \
         x.data.new(x.size()).normal_(
-            self.mean, np.random.uniform(*self.std)
+            np.random.uniform(*self.mean), np.random.uniform(*self.std)
         )
         x = x + noise
         return x
+
+class Shift(object):
+    def __init__(self, shift=(0.3, 0.6), scale=(0.05, 0.2)):
+        self.shift = shift
+        self.scale = scale
+
+    def __call__(self, x):
+        scale = np.random.uniform(*self.scale)
+        shift = np.random.uniform(*self.shift)
+        return (x - x.mean()) / x.std() * scale + shift
+
+class PerturbUniform(object):
+    def __init__(self, start=0.0, stop=0.5):
+        """Perturb an image by normally distributed additive noise."""
+        self.start = start
+        self.stop = stop
+
+    def __call__(self, x):
+        noise = x.data.new(x.size()).uniform_(
+            self.start, self.stop
+        )
+        x = x + noise
+        return x
+
+class Reslice(object):
+    def __init__(self, offset, slope):
+        self.offset = offset
+        self.slope = slope
+
+    def __call__(self, x):
+        result = torch.zeros(1, x.size(1), x.size(2))
+        for idx in range(result.size(-1)):
+            plane = max(min(offset + int(slope * idx), x.size(0)), 0)
+            result[:, :, idx] = x[plane, :, idx]
+        return result
 
 class Illuminate(object):
 

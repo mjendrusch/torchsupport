@@ -59,9 +59,9 @@ class SupervisedTraining(Training):
     self.network_name = network_name
     self.writer = SummaryWriter(network_name)
     self.device = device
-    self.optimizer = optimizer(net.parameters(), weight_decay=1e-4)
+    self.optimizer = optimizer(net.parameters())
     if schedule is None:
-      self.schedule = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, patience=2)
+      self.schedule = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, patience=10)
     else:
       self.schedule = schedule
     self.losses = losses
@@ -69,7 +69,7 @@ class SupervisedTraining(Training):
       train_data, batch_size=batch_size, num_workers=8, shuffle=True
     )
     self.validate_data = DataLoader(
-      validate_data, batch_size=batch_size, shuffle=True
+      validate_data, batch_size=batch_size * 2, shuffle=True
     )
     self.net = net.to(self.device)
     self.max_epochs = max_epochs
@@ -90,12 +90,16 @@ class SupervisedTraining(Training):
   def step(self, data, label):
     self.optimizer.zero_grad()
     predictions = self.net(data)
+
     loss_val = torch.tensor(0.0).to(self.device)
-    for idx, prediction in enumerate(predictions):
-      this_loss_val = self.losses[idx](prediction, label[idx])
-      self.training_losses[idx] = float(this_loss_val)
-      for lbl in label[idx].to("cpu").numpy():
-        print(lbl)
+    if isinstance(predictions, (list, tuple)):
+      for idx, prediction in enumerate(predictions):
+        this_loss_val = self.losses[idx](prediction, label[idx])
+        self.training_losses[idx] = float(this_loss_val)
+        loss_val += this_loss_val
+    else:
+      this_loss_val = self.losses[0](predictions, label[0])
+      self.training_losses[0] = float(this_loss_val)
       loss_val += this_loss_val
     loss_val.backward()
     self.optimizer.step()
@@ -107,9 +111,12 @@ class SupervisedTraining(Training):
       inputs, *label = next(vit)
       inputs, label = inputs.to(self.device), list(map(lambda x: x.to(self.device), label))
       predictions = self.net(inputs)
-      for idx, prediction in enumerate(predictions):
-        this_loss_val = self.losses[idx](prediction, label[idx])
-        self.validation_losses[idx] = float(this_loss_val)
+      if isinstance(predictions, (list, tuple)):
+        for idx, prediction in enumerate(predictions):
+          this_loss_val = self.losses[idx](prediction, label[idx])
+          self.validation_losses[idx] = float(this_loss_val)
+      else:
+        self.validation_losses[0] = self.losses[0](predictions, label[0])
       self.each_validate()
       self.valid_callback(self, inputs.to("cpu").numpy(), list(map(lambda x: x.to("cpu"), label)))
 
