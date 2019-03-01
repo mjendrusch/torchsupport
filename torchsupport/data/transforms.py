@@ -533,7 +533,7 @@ class MinMax(object):
         for idx in range(x.shape[0]):
             xmin = torch.min(x[idx])
             xmax = torch.max(x[idx])
-            x[idx] = ((x[idx] - xmin) / (xmax - xmin) * 255).long().float()
+            x[idx] = ((x[idx] - xmin) / (xmax - xmin)).float()
         return x
 
 class Crop(object):

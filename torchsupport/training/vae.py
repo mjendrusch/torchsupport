@@ -46,19 +46,23 @@ class VAETraining(Training):
     self.step_id = 0
 
     self.optimizer = optimizer(
-      list(encoder.parameters()) +
-      list(decoder.parameters())
+      list(self.encoder.parameters()) +
+      list(self.decoder.parameters()),
+      lr=5e-4
     )
 
   def vae_loss(self, mean, logvar, reconstruction, target, beta=20, c=0.5):
-    mse = func.mse_loss(reconstruction, target)
-    kld = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp())
-    
+    mse = func.binary_cross_entropy(reconstruction, target, reduction="sum")
+    mse /= target.size(0)
+    kld = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp(), dim=0)
+    kld = kld.sum()
+    kld_c = beta * torch.norm(kld - c, 1)
+
     self.writer.add_scalar("mse loss", float(mse), self.step_id)
     self.writer.add_scalar("kld loss", float(kld), self.step_id)
-    self.writer.add_scalar("kld-c loss", float(torch.norm(kld - c, 1)), self.step_id)
+    self.writer.add_scalar("kld-c loss", float(kld_c), self.step_id)
 
-    return mse + beta * torch.norm(kld - c, 2)
+    return mse + kld_c
 
   def step(self, data):
     self.optimizer.zero_grad()
@@ -92,7 +96,7 @@ class VAETraining(Training):
 
     loss_val = self.vae_loss(
       mean, logvar, reconstruction, data,
-      beta=1000, c=0.5 + self.step_id * (50 - 0.5) * 0.000001
+      beta=1000, c=0.5 + self.step_id * (50 - 0.5) * 0.00001
     )
     self.writer.add_scalar("reconstruction loss", float(loss_val), self.step_id)
 
@@ -117,7 +121,7 @@ class VAETraining(Training):
       self.epoch_id = epoch_id
       self.train_data = None
       self.train_data = DataLoader(
-        self.data, batch_size=self.batch_size, num_workers=0,
+        self.data, batch_size=self.batch_size, num_workers=8,
         shuffle=True
       )
       for data, *_ in self.train_data:
@@ -135,7 +139,10 @@ class JointVAETraining(VAETraining):
                max_epochs=50,
                batch_size=128,
                device="cpu",
-               network_name="network"):
+               network_name="network",
+               ctarget=50,
+               dtarget=5,
+               gamma=1000):
     super(JointVAETraining, self).__init__(
       encoder, decoder, data,
       optimizer=optimizer,
@@ -146,26 +153,29 @@ class JointVAETraining(VAETraining):
       network_name=network_name
     )
     self.n_classes = n_classes
-    self.temperature = 5
+    self.temperature = 0.67
+    self.ctarget = ctarget
+    self.dtarget = dtarget
+    self.gamma = gamma
 
   def sample_gumbel(self, shape, eps=1e-20):
     U = torch.rand(shape).to(self.device)
     return -torch.log(-torch.log(U + eps) + eps)
 
-  def gumbel_softmax_sample(self, logits, temperature):
-    y = logits + self.sample_gumbel(logits.size())
+  def gumbel_softmax_sample(self, probabilities, temperature):
+    y = torch.log(probabilities + 1e-20) + self.sample_gumbel(probabilities.size())
     return func.softmax(y / temperature, dim=1)
 
-  def gumbel_prior(self, logits):
-    return 1 / logits.size(1)
+  def gumbel_prior(self, probabilities):
+    return 1 / probabilities.size(1)
 
-  def gumbel_softmax(self, logits, temperature):
+  def gumbel_softmax(self, probabilities, temperature):
     """
     ST-gumbel-softmax
     input: [*, n_class]
     return: flatten --> [*, n_class] an one-hot vector
     """
-    y = self.gumbel_softmax_sample(logits, temperature)
+    y = self.gumbel_softmax_sample(probabilities, temperature)
     # shape = y.size()
     # _, ind = y.max(dim=-1)
     # y_hard = torch.zeros_like(y).view(-1, shape[-1])
@@ -175,8 +185,10 @@ class JointVAETraining(VAETraining):
     return y#y_hard.view(*shape)
 
   def gumbel_kl_loss(self, category, beta=1000, c=0.5):
-    kld = torch.mean(category * torch.log(category * category.size(1)))
-    kld_c = beta * torch.norm(kld - c, 2)
+    kld = torch.sum(category * torch.log(category + 1e-20), dim=1)
+    kld = kld.mean(dim=0) + np.log(category.size(-1))
+
+    kld_c = beta * torch.norm(kld - c, 1)
 
     self.writer.add_scalar("cat kld loss", float(kld), self.step_id)
     self.writer.add_scalar("cat kld-c loss", float(kld_c), self.step_id)
@@ -187,9 +199,13 @@ class JointVAETraining(VAETraining):
     self.optimizer.zero_grad()
     data = data.to(self.device)
     features, mean, logvar, logits = self.encoder(data)
+    probabilities = logits
     std = torch.exp(0.5 * logvar)
     sample = torch.randn_like(std).mul(std).add_(mean)
-    category = self.gumbel_softmax(logits, self.temperature)
+    category = self.gumbel_softmax(
+      probabilities,
+      self.temperature
+    )
 
     reconstruction = self.decoder(sample, category)
 
@@ -216,16 +232,16 @@ class JointVAETraining(VAETraining):
 
     vae_loss = self.vae_loss(
       mean, logvar, reconstruction, data,
-      beta=1000, c=0.5 + self.step_id * (50 - 0.5) * 0.000001
+      beta=self.gamma, c=self.step_id * (self.ctarget) * 0.00001
     )
     kl_loss = self.gumbel_kl_loss(
-      category,
-      beta=100, c=self.step_id * (10) * 0.000001
+      probabilities,
+      beta=self.gamma, c=min(self.step_id * (self.dtarget) * 0.00001, np.log(category.size(-1)))
     )
-    loss_val = vae_loss + kl_loss
+    loss_val = (vae_loss + kl_loss) / (data.size(2) * data.size(3))
     self.writer.add_scalar("reconstruction loss", float(loss_val), self.step_id)
 
     loss_val.backward()
     self.writer.add_scalar("total loss", float(loss_val), self.step_id)
     self.optimizer.step()
-    self.each_step() 
+    self.each_step()

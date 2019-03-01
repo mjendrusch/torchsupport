@@ -1,9 +1,12 @@
+import random
+from copy import copy
 import torch
 from torch.utils.data import DataLoader
 
 from tensorboardX import SummaryWriter
 
 from torchsupport.data.io import netwrite
+from torchsupport.data.episodic import SupportData
 
 class Training(object):
   """Abstract training process class.
@@ -69,7 +72,7 @@ class SupervisedTraining(Training):
       train_data, batch_size=batch_size, num_workers=8, shuffle=True
     )
     self.validate_data = DataLoader(
-      validate_data, batch_size=batch_size * 2, shuffle=True
+      validate_data, batch_size=8 * batch_size, shuffle=False
     )
     self.net = net.to(self.device)
     self.max_epochs = max_epochs
@@ -132,7 +135,7 @@ class SupervisedTraining(Training):
     for idx, loss in enumerate(self.validation_losses):
       self.writer.add_scalar(f"validation loss {idx}", loss, self.step_id)
     self.writer.add_scalar(f"validation loss total", sum(self.validation_losses), self.step_id)
-    if self.best is None or sum(self.validation_losses) < self.best:
+    if self.step_id % 50 == 0:#self.best is None or sum(self.validation_losses) < self.best:
       self.best = sum(self.validation_losses)
       self.checkpoint()
 
@@ -146,6 +149,91 @@ class SupervisedTraining(Training):
         if self.step_id % 10 == 0:
           self.validate()
         self.step_id += 1
-      self.schedule_step()
+      # self.schedule_step() # FIXME
       self.each_epoch()
     return self.net
+
+class FewShotTraining(SupervisedTraining):
+  def __init__(self, net, train_data, validate_data, losses,
+               optimizer=torch.optim.Adam,
+               schedule=None,
+               max_epochs=50,
+               batch_size=128,
+               device="cpu",
+               network_name="network",
+               path_prefix=".",
+               valid_callback=lambda x: None):
+    super(FewShotTraining, self).__init__(
+      net, train_data, validate_data, losses,
+      optimizer=optimizer,
+      schedule=schedule,
+      max_epochs=max_epochs,
+      batch_size=batch_size,
+      device=device,
+      network_name=network_name,
+      path_prefix=path_prefix,
+      valid_callback=valid_callback
+    )
+
+    support_data = copy(train_data)
+    train_data.data_mode = type(train_data.data_mode)(1)
+    support_data = SupportData(train_data, shots=5)
+    validate_support_data = SupportData(validate_data, shots=5)
+    self.support_loader = iter(DataLoader(support_data))
+    self.valid_support_loader = iter(DataLoader(validate_support_data))
+
+  def step(self, data, label):
+    self.optimizer.zero_grad()
+
+    permutation = [0, 1, 2]
+    random.shuffle(permutation)
+
+    support, support_label = next(self.support_loader)
+
+    lv = label[0].reshape(-1)
+    for idx, val in enumerate(lv):
+      lv[idx] = permutation[int(val[0])]
+    lv = support_label.reshape(-1)
+    print(lv.size())
+    for idx, val in enumerate(lv):
+      print(permutation[int(val[0])], permutation, val)
+      lv[idx] = permutation[int(val[0])]
+
+    support = support[0].to(self.device)
+    support_label = support_label[0].to(self.device)
+    predictions = self.net(data, support, support_label)
+
+    loss_val = torch.tensor(0.0).to(self.device)
+    if isinstance(predictions, (list, tuple)):
+      for idx, prediction in enumerate(predictions):
+        this_loss_val = self.losses[idx](prediction, label[idx])
+        self.training_losses[idx] = float(this_loss_val)
+        loss_val += this_loss_val
+    else:
+      print(predictions[:5])
+      this_loss_val = self.losses[0](predictions, label[0])
+      self.training_losses[0] = float(this_loss_val)
+      loss_val += this_loss_val
+    loss_val.backward()
+    self.optimizer.step()
+    self.each_step()  
+
+  def validate(self):
+    with torch.no_grad():
+      self.net.eval()
+      vit = iter(self.validate_data)
+      inputs, *label = next(vit)
+      inputs, label = inputs.to(self.device), list(map(lambda x: x.to(self.device), label))
+      support, support_label = next(self.valid_support_loader)
+      support = support[0].to(self.device)
+      support_label = support_label[0].to(self.device)
+      predictions = self.net(inputs, support, support_label)
+      if isinstance(predictions, (list, tuple)):
+        for idx, prediction in enumerate(predictions):
+          this_loss_val = self.losses[idx](prediction, label[idx])
+          self.validation_losses[idx] = float(this_loss_val)
+      else:
+        self.validation_losses[0] = self.losses[0](predictions, label[0])
+      self.each_validate()
+      self.valid_callback(self, inputs.to("cpu").numpy(), list(map(lambda x: x.to("cpu"), label)))
+      self.net.train()

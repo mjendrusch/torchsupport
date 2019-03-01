@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data.sampler import WeightedRandomSampler
 from torchsupport.training.training import Training
 from torchsupport.reporting.reporting import tensorplot
+from torchsupport.data.io import netwrite
 from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
@@ -20,6 +21,7 @@ from tensorboardX import SummaryWriter
 class ClusteringTraining(Training):
   def __init__(self, net, data,
                clustering=KMeans(3),
+               order_less=True,
                loss=nn.CrossEntropyLoss(),
                optimizer=torch.optim.Adam,
                max_epochs=50,
@@ -35,6 +37,16 @@ class ClusteringTraining(Training):
     self.max_epochs = max_epochs
     self.batch_size = batch_size
     self.device = device
+
+    self.order_less = order_less
+
+    if not order_less:
+      self.classifier = nn.Linear(256, 50)
+      self.classifier = self.classifier.to(self.device)
+    else:
+      self.embedding = nn.Linear(256, 256)
+      self.embedding = self.embedding.to(self.device)
+
     self.optimizer = optimizer(self.net.parameters())
 
     self.network_name = network_name
@@ -43,13 +55,29 @@ class ClusteringTraining(Training):
     self.epoch_id = 0
     self.step_id = 0
 
+  def checkpoint(self):
+    netwrite(
+      self.net,
+      f"{self.network_name}-encoder-epoch-{self.epoch_id}-step-{self.step_id}.torch"
+    )
+    # netwrite(
+    #   self.decoder,
+    #   f"{self.network_name}-decoder-epoch-{self.epoch_id}-step-{self.step_id}.torch"
+    # )
+    self.each_checkpoint()
+
   def step(self, data, label, centers):
     self.optimizer.zero_grad()
     attention = self.net(data.to(self.device)).squeeze()
     centers = centers.to(self.device).unsqueeze(0)
-    logits = -abs(centers - attention.unsqueeze(2))
-    # logits = centers.matmul(attention.unsqueeze(2))
-    label = label.long().unsqueeze(1).to(self.device)
+    print(data.size())
+    if self.order_less:
+      center_embedding = self.embedding(centers.squeeze())
+      print(centers.size(), center_embedding.size())
+      logits = center_embedding.matmul(attention.unsqueeze(2)).squeeze()
+    else:
+      logits = self.classifier(attention.reshape(attention.size(0), -1)) #-abs(centers - attention.unsqueeze(2))
+    label = label.long().to(self.device)
     loss_val = self.loss(logits, label)
     loss_val.backward()
     self.writer.add_scalar("cluster assignment loss", float(loss_val), self.step_id)
@@ -66,15 +94,18 @@ class ClusteringTraining(Training):
         shuffle=False
       )
       for point, *_ in batch_loader:
-        latent_point, *_ = self.net(point.to(self.device))
+        latent_point = self.net(point.to(self.device))
         latent_point = latent_point.to("cpu")
+        print("LPS",  latent_point.size())
         latent_point = latent_point.reshape(latent_point.size(0), -1)
+        print("LPS", latent_point.size())
         embedding.append(latent_point)
       embedding = torch.cat(embedding, dim=0)
     self.net.train()
     return embedding
 
   def cluster(self, embedding):
+    print(embedding.size())
     fit = self.clustering.fit(embedding.squeeze())
     labels = list(fit.labels_)
     try:
@@ -108,8 +139,9 @@ class ClusteringTraining(Training):
     return weights, labels, centers
 
   def _cluster_image(self, labels):
-    count = 5
-    n_clusters = len(set(labels))
+    count = 10
+    n_clusters = 3#max(list(set(labels)))
+    print(list(set(labels)))
     indices = list(range(len(labels)))
     random.shuffle(indices)
     cluster_done = [False for _ in range(n_clusters)]
@@ -128,6 +160,7 @@ class ClusteringTraining(Training):
     rows = [
       torch.cat(image_list, dim=2)
       for image_list in cluster_images
+      if image_list
     ]
     for idx, row in enumerate(rows):
       self.writer.add_image(f"cluster samples {idx}", row, self.step_id)
@@ -174,6 +207,252 @@ class ClusteringTraining(Training):
       for data, label in self.train_data:
         self.step(data, label, centers)
         self.step_id += 1
+        if self.step_id % 50 == 0:
+          self.checkpoint()
+
+    return self.net
+
+class ClusterAETraining(ClusteringTraining):
+  def __init__(self, encoder, decoder, data,
+               clustering=KMeans(3),
+               loss=nn.CrossEntropyLoss(),
+               optimizer=torch.optim.Adam,
+               max_epochs=50,
+               batch_size=128,
+               device="cpu",
+               network_name="network"):
+    super(ClusterAETraining, self).__init__(
+      encoder, data,
+      clustering=clustering,
+      loss=loss,
+      optimizer=optimizer,
+      max_epochs=max_epochs,
+      batch_size=batch_size,
+      device=device,
+      network_name=network_name
+    )
+    self.decoder = decoder.to(device)
+
+    self.centers = torch.randn(10, 4 * 256, requires_grad=True, device=device)
+
+    self.optimizer = optimizer(
+      list(self.net.parameters()) +
+      list(self.decoder.parameters()) +
+      [self.centers]
+    )
+
+  def hardening_loss(self, predictions):
+    diff = predictions.unsqueeze(1) - self.centers.unsqueeze(0)
+    assignment = 1 / (1 + ((diff) ** 2).sum(dim=2))
+    print("AS", assignment.size(), diff.size())
+    assignment = assignment / (assignment.sum(dim=1, keepdim=True) + 1e-20)
+    hardening = assignment ** 2 / (assignment.sum(dim=0, keepdim=True) + 1e-20)
+    hardening = hardening / (hardening.sum(dim=1, keepdim=True) + 1e-20)
+    loss = hardening * (torch.log(hardening / (assignment + 1e-20) + 1e-20))
+    loss = loss.sum(dim=1).mean(dim=0)
+
+    self.writer.add_scalar("hardening loss", float(loss), self.step_id)
+
+    return 1000 * loss
+
+  def ae_loss(self, predictions, target):
+    loss = func.mse_loss(predictions, target)
+
+    self.writer.add_scalar("reconstruction loss", float(loss), self.step_id)
+
+    return loss
+
+  def each_cluster(self):
+    pass
+
+  def step(self, data):
+    self.optimizer.zero_grad()
+    data = data.to(self.device)
+
+    features = self.net(data)
+
+    reconstruction = self.decoder(features)
+
+    with torch.no_grad():
+      im_vs_rec = torch.cat(
+        (
+          data[0].cpu(),
+          reconstruction[0].cpu()
+        ),
+        dim=2
+      ).numpy()
+      im_vs_rec = im_vs_rec - im_vs_rec.min()
+      im_vs_rec = im_vs_rec / im_vs_rec.max()
+      self.writer.add_image("im vs rec", im_vs_rec, self.step_id)
+
+    loss_val = self.ae_loss(reconstruction, data)
+    if self.step_id > 1000:
+      loss_val += self.hardening_loss(features.reshape(features.size(0), -1))
+    
+    loss_val.backward()
+
+    self.writer.add_scalar("cluster assignment loss", float(loss_val), self.step_id)
+    self.optimizer.step()
+    self.each_step()
+
+  def train(self):
+    for epoch_id in range(self.max_epochs):
+      self.epoch_id = epoch_id
+
+      self.train_data = None
+      self.train_data = DataLoader(
+        self.data, batch_size=self.batch_size, num_workers=8, shuffle=True
+      )
+      for internal_epoch in range(10):
+        for data, *_ in self.train_data:
+          self.step(data)
+          self.step_id += 1
+          if self.step_id % 50 == 0:
+            self.checkpoint()
+
+      # embedding = self.embed_all().numpy()
+      # tsne = TSNE(2).fit_transform(embedding.reshape(embedding.shape[0], -1))
+      # fig, ax = plt.subplots()
+      # ax.scatter(tsne[:, 0], tsne[:, 1])
+      # self.writer.add_figure("clustering", fig, self.step_id)
+      self.each_cluster()
+
+    return self.net
+
+class DEPICTTraining(ClusteringTraining):
+  def __init__(self, encoder, decoder, classifier, data,
+               clustering=KMeans(3),
+               loss=nn.CrossEntropyLoss(),
+               optimizer=torch.optim.Adam,
+               max_epochs=50,
+               batch_size=128,
+               device="cpu",
+               network_name="network"):
+    super(DEPICTTraining, self).__init__(
+      encoder, data,
+      clustering=clustering,
+      loss=loss,
+      optimizer=optimizer,
+      max_epochs=max_epochs,
+      batch_size=batch_size,
+      device=device,
+      network_name=network_name
+    )
+    self.decoder = decoder.to(device)
+    self.classifier = classifier.to(device)
+
+    self.optimizer = optimizer(
+      list(self.net.parameters()) +
+      list(self.decoder.parameters()) +
+      list(self.classifier.parameters())
+    )
+
+  def expectation(self):
+    self.net.eval()
+    with torch.no_grad():
+      embedding = []
+      batch_loader = DataLoader(
+        self.data,
+        batch_size=self.batch_size,
+        shuffle=False
+      )
+      for point, *_ in batch_loader:
+        features, mean, logvar = self.net(point.to(self.device))
+        std = torch.exp(0.5 * logvar)
+        sample = torch.randn_like(std).mul(std).add_(mean)
+        latent_point = func.adaptive_avg_pool2d(sample, 1)
+
+        latent_point = latent_point#.to("cpu")
+        latent_point = latent_point.reshape(latent_point.size(0), -1)
+        embedding.append(latent_point)
+      embedding = torch.cat(embedding, dim=0)
+      expectation = self.classifier(embedding)
+    self.net.train()
+    return expectation.to("cpu"), embedding.to("cpu")
+
+  def vae_loss(self, mean, logvar, reconstruction, target, beta=20, c=0.5):
+    mse = func.mse_loss(reconstruction, target)
+    kld = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp())
+    
+    self.writer.add_scalar("mse loss", float(mse), self.step_id)
+    self.writer.add_scalar("kld loss", float(kld), self.step_id)
+    self.writer.add_scalar("kld-c loss", float(torch.norm(kld - c, 2)), self.step_id)
+
+    return mse + beta * torch.norm(kld - c, 2)
+
+  def depict_loss(self, logits, expected_logits):
+    expected_p = func.softmax(expected_logits, dim=1)
+    p = func.softmax(logits, dim=1)
+    q = (expected_p + 1e-20) / (torch.sqrt(expected_p.sum(dim=0, keepdim=True)) + 1e-20)
+    q = (q + 1e-20) / (q.sum(dim=1, keepdim=True) + 1e-20)
+    return torch.mean(- q * torch.log(p + 1e-20))
+
+  def step(self, data, expected_logits, centers):
+    self.optimizer.zero_grad()
+    data = data.to(self.device)
+
+    features, mean, logvar = self.net(data)
+    std = torch.exp(0.5 * logvar)
+    sample = torch.randn_like(std).mul(std).add_(mean)
+
+    reconstruction = self.decoder(sample)
+
+    with torch.no_grad():
+      im_vs_rec = torch.cat(
+        (
+          data[0].cpu(),
+          reconstruction[0].cpu()
+        ),
+        dim=2
+      ).numpy()
+      im_vs_rec = im_vs_rec - im_vs_rec.min()
+      im_vs_rec = im_vs_rec / im_vs_rec.max()
+      self.writer.add_image("im vs rec", im_vs_rec, self.step_id)
+
+    loss_val = torch.tensor(0.0).to(self.device)
+
+    loss_val += self.vae_loss(
+      mean, logvar, reconstruction, data,
+      beta=20, c=0.5 + (50 - 0.5) * self.step_id * 0.00001
+    )
+
+    sample_global = func.adaptive_avg_pool2d(sample, 1)
+    logits = self.classifier(sample_global.squeeze())
+
+    depict_loss = self.depict_loss(logits, expected_logits.to(self.device))
+
+    loss_val += depict_loss
+    loss_val.backward()
+
+    self.writer.add_scalar("cluster assignment loss", float(loss_val), self.step_id)
+    self.optimizer.step()
+    self.each_step()
+
+  def train(self):
+    expectation, embedding = self.expectation()
+    weights, labels, centers = self.cluster(embedding)
+    self.data.labels = torch.zeros_like(expectation)
+    self.data.labels[expectation.argmax(dim=1)] = 1
+
+    for epoch_id in range(self.max_epochs):
+      self.epoch_id = epoch_id
+
+      self.train_data = None
+      self.train_data = DataLoader(
+        self.data, batch_size=self.batch_size, num_workers=8,
+        sampler=WeightedRandomSampler(weights, len(self.data) * 4, replacement=True)
+      )
+      for data, expected_logits in self.train_data:
+        self.step(data, expected_logits, centers)
+        self.step_id += 1
+
+      expectation, embedding = self.expectation()
+      labels = expectation.argmax(dim=1).to("cpu").squeeze()
+      self.each_cluster(
+        expectation.to("cpu"),
+        labels.numpy()
+      )
+      self.data.labels = expectation.to("cpu").squeeze()
 
     return self.net
 
@@ -251,16 +530,18 @@ class HierarchicalClusteringTraining(ClusteringTraining):
         center_hierarchy.append(centers)
       self.each_cluster(embedding, label_hierarchy)
       label_hierarchy = np.concatenate(label_hierarchy, axis=1)
-      
+
       self.data.labels = label_hierarchy
       self.train_data = None
       self.train_data = DataLoader(
         self.data, batch_size=self.batch_size, num_workers=0,
         sampler=WeightedRandomSampler(weights, min(20000, len(self.data)), replacement=True)
       )
-      for data, label in self.train_data:
-        self.step(data, label, center_hierarchy)
-        self.step_id += 1
+      for inner_epoch in range(20):
+        for data, label in self.train_data:
+          self.step(data, label, center_hierarchy)
+          self.step_id += 1
+        self.checkpoint()
 
     return self.net
 
@@ -292,10 +573,26 @@ class VAEClusteringTraining(HierarchicalClusteringTraining):
       list(self.cluster_embeddings.parameters())
     )
 
+  def checkpoint(self):
+    netwrite(
+      self.net,
+      f"{self.network_name}-encoder-epoch-{self.epoch_id}-step-{self.step_id}.torch"
+    )
+    netwrite(
+      self.decoder,
+      f"{self.network_name}-decoder-epoch-{self.epoch_id}-step-{self.step_id}.torch"
+    )
+    for idx, classifier in enumerate(self.cluster_embeddings):
+      netwrite(
+        classifier,
+        f"{self.network_name}-classifier-{idx}-epoch-{self.epoch_id}-step-{self.step_id}.torch"
+      )
+    self.each_checkpoint()
+
   def vae_loss(self, mean, logvar, reconstruction, target, beta=20, c=0.5):
     mse = func.mse_loss(reconstruction, target)
-    # kld = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp())
-    return mse# + beta * torch.norm(kld - c, 1)
+    kld = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp())
+    return mse + beta * torch.norm(kld - c, 1)
 
   def step(self, data, label, centers):
     self.optimizer.zero_grad()
