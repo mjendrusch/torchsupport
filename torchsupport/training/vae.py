@@ -245,3 +245,227 @@ class JointVAETraining(VAETraining):
     self.writer.add_scalar("total loss", float(loss_val), self.step_id)
     self.optimizer.step()
     self.each_step()
+
+class FactorVAETraining(JointVAETraining):
+  def __init__(self, encoder, decoder, discriminator, data,
+               optimizer=torch.optim.Adam,
+               loss=nn.CrossEntropyLoss(),
+               max_epochs=50,
+               batch_size=128,
+               device="cpu",
+               network_name="network",
+               ctarget=50,
+               dtarget=5,
+               gamma=1000):
+    super(FactorVAETraining, self).__init__(
+      encoder, decoder, data,
+      optimizer=optimizer,
+      loss=loss,
+      max_epochs=max_epochs,
+      batch_size=batch_size,
+      device=device,
+      network_name=network_name,
+      ctarget=ctarget,
+      dtarget=dtarget,
+      gamma=gamma
+    )
+    self.discriminator = discriminator.to(device)
+
+    self.discriminator_optimizer = optimizer(
+      self.discriminator.parameters(),
+      lr=1e-4
+    )
+
+  def vae_loss(self, mean, logvar, reconstruction, target):
+    mse = func.binary_cross_entropy(reconstruction, target, reduction="sum")
+    mse /= target.size(0)
+    kld = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp(), dim=0)
+    kld = kld.sum()
+
+    self.writer.add_scalar("mse loss", float(mse), self.step_id)
+    self.writer.add_scalar("kld loss", float(kld), self.step_id)
+
+    return mse + kld
+
+  def gumbel_kl_loss(self, category):
+    kld = torch.sum(category * torch.log(category + 1e-20), dim=1)
+    kld = kld.mean(dim=0) + np.log(category.size(-1))
+
+    self.writer.add_scalar("cat kld loss", float(kld), self.step_id)
+
+    return kld
+
+  def discriminator_factor_loss(self, sample_batch, shuffle_batch):
+    shuffle_indices = [
+      shuffle_batch[torch.randperm(shuffle_batch.size(0)), idx:idx+1]
+      for idx in range(shuffle_batch.size(-1))
+    ]
+    shuffle_batch = torch.cat(shuffle_indices, dim=1)
+
+    sample_prediction = self.discriminator(sample_batch)
+    shuffle_prediction = self.discriminator(shuffle_batch)
+
+    softmax_sample = torch.softmax(sample_prediction, dim=1)
+    softmax_shuffle = torch.softmax(shuffle_prediction, dim=1)
+
+    discriminator_loss = -0.5 * (torch.log(softmax_sample[:, 0]).mean() + torch.log(softmax_shuffle[:, 1]).mean())
+
+    self.writer.add_scalar("discriminator loss", discriminator_loss, self.step_id)
+    return discriminator_loss
+
+  def encoder_factor_loss(self, sample_batch):
+    sample_prediction = self.discriminator(sample_batch)
+    encoder_loss = (sample_prediction[:, 0] - sample_prediction[:, 1]).mean()
+    self.writer.add_scalar("factor loss", encoder_loss, self.step_id)
+
+    return encoder_loss
+
+  def step(self, data):
+    data = data.to(self.device)
+    sample_data, shuffle_data = data[:data.size(0) // 2], data[data.size(0) // 2:]
+    _, mean, logvar = self.encoder(sample_data)
+    _, shuffle_mean, shuffle_logvar = self.encoder(shuffle_data)
+    std = torch.exp(0.5 * logvar)
+    shuffle_std = torch.exp(0.5 * shuffle_logvar)
+    sample = torch.randn_like(std).mul(std).add_(mean)
+    shuffle_sample = torch.randn_like(shuffle_std).mul(shuffle_std).add_(shuffle_mean)
+
+    reconstruction = self.decoder(sample)
+
+    with torch.no_grad():
+      weirdness = (sample[0] + sample[1]).unsqueeze(0) / 2
+      self.decoder.eval()
+      weird_reconstruction = self.decoder(
+        weirdness
+      )
+      self.decoder.train()
+      im_vs_rec = torch.cat(
+        (
+          sample_data[0].cpu(),
+          reconstruction[0].cpu(),
+          weird_reconstruction[0].cpu()
+        ),
+        dim=2
+      ).numpy()
+      im_vs_rec = im_vs_rec - im_vs_rec.min()
+      im_vs_rec = im_vs_rec / im_vs_rec.max()
+      self.writer.add_image("im vs rec", im_vs_rec, self.step_id)
+
+    vae_loss = self.vae_loss(
+      mean, logvar, reconstruction, sample_data
+    )
+    encoder_loss = self.encoder_factor_loss(sample)
+    loss_val = vae_loss + self.gamma * encoder_loss
+    self.writer.add_scalar("reconstruction loss", float(loss_val), self.step_id)
+
+    self.optimizer.zero_grad()
+    loss_val.backward()
+    self.optimizer.step()
+
+    self.discriminator_optimizer.zero_grad()
+    discriminator_loss = self.discriminator_factor_loss(sample.detach(), shuffle_sample.detach())
+    discriminator_loss.backward()
+    self.discriminator_optimizer.step()
+
+    self.writer.add_scalar("total loss", float(loss_val), self.step_id)
+    self.each_step()
+
+# class TCVAETraining(JointVAETraining):
+#   def __init__(self, encoder, decoder, data,
+#                optimizer=torch.optim.Adam,
+#                loss=nn.CrossEntropyLoss(),
+#                max_epochs=50,
+#                batch_size=128,
+#                device="cpu",
+#                network_name="network",
+#                ctarget=50,
+#                dtarget=5,
+#                gamma=1000):
+#     super(FactorVAETraining, self).__init__(
+#       encoder, decoder, data,
+#       optimizer=optimizer,
+#       loss=loss,
+#       max_epochs=max_epochs,
+#       batch_size=batch_size,
+#       device=device,
+#       network_name=network_name,
+#       ctarget=ctarget,
+#       dtarget=dtarget,
+#       gamma=gamma
+#     )
+
+#   def vae_loss(self, mean, logvar, reconstruction, target, c):
+#     mse = func.binary_cross_entropy(reconstruction, target, reduction="sum")
+#     mse /= target.size(0)
+#     kld = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp(), dim=0)
+#     kld = kld.sum()
+
+#     self.writer.add_scalar("mse loss", float(mse), self.step_id)
+#     self.writer.add_scalar("kld loss", float(kld), self.step_id)
+
+#     return mse + self.gamma * torch.norm(kld - c, 1)
+
+#   def gumbel_kl_loss(self, category):
+#     kld = torch.sum(category * torch.log(category + 1e-20), dim=1)
+#     kld = kld.mean(dim=0) + np.log(category.size(-1))
+
+#     self.writer.add_scalar("cat kld loss", float(kld), self.step_id)
+
+#     return kld
+
+#   def encoder_factor_loss(self, sample_batch, shuffle_batch):
+#     sample_prediction = self.discriminator(sample_batch)
+#     encoder_loss = (sample_prediction[:, 0] - sample_prediction[:, 1]).mean()
+#     self.writer.add_scalar("factor loss", encoder_loss, self.step_id)
+
+#     return encoder_loss
+
+#   def step(self, data):
+#     data = data.to(self.device)
+#     sample_data, shuffle_data = data[:data.size(0) // 2], data[data.size(0) // 2:]
+#     _, mean, logvar = self.encoder(sample_data)
+#     _, shuffle_mean, shuffle_logvar = self.encoder(shuffle_data)
+#     std = torch.exp(0.5 * logvar)
+#     shuffle_std = torch.exp(0.5 * shuffle_logvar)
+#     sample = torch.randn_like(std).mul(std).add_(mean)
+#     shuffle_sample = torch.randn_like(shuffle_std).mul(shuffle_std).add_(shuffle_mean)
+
+#     reconstruction = self.decoder(sample)
+
+#     with torch.no_grad():
+#       weirdness = (sample[0] + sample[1]).unsqueeze(0) / 2
+#       self.decoder.eval()
+#       weird_reconstruction = self.decoder(
+#         weirdness
+#       )
+#       self.decoder.train()
+#       im_vs_rec = torch.cat(
+#         (
+#           sample_data[0].cpu(),
+#           reconstruction[0].cpu(),
+#           weird_reconstruction[0].cpu()
+#         ),
+#         dim=2
+#       ).numpy()
+#       im_vs_rec = im_vs_rec - im_vs_rec.min()
+#       im_vs_rec = im_vs_rec / im_vs_rec.max()
+#       self.writer.add_image("im vs rec", im_vs_rec, self.step_id)
+
+#     vae_loss = self.vae_loss(
+#       mean, logvar, reconstruction, sample_data, self.ctarget * 0.00001 * self.step_id
+#     )
+#     encoder_loss = self.encoder_factor_loss(sample)
+#     loss_val = vae_loss + self.gamma * encoder_loss
+#     self.writer.add_scalar("reconstruction loss", float(loss_val), self.step_id)
+
+#     self.optimizer.zero_grad()
+#     loss_val.backward()
+#     self.optimizer.step()
+
+#     self.discriminator_optimizer.zero_grad()
+#     discriminator_loss = self.discriminator_factor_loss(sample.detach(), shuffle_sample.detach())
+#     discriminator_loss.backward()
+#     self.discriminator_optimizer.step()
+
+#     self.writer.add_scalar("total loss", float(loss_val), self.step_id)
+#     self.each_step()
