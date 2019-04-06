@@ -1,5 +1,6 @@
 
 import random
+from itertools import islice
 import numpy as np
 import torch
 from torch import nn
@@ -93,7 +94,7 @@ class ClusteringTraining(Training):
         batch_size=self.batch_size,
         shuffle=False
       )
-      for point, *_ in batch_loader:
+      for point, *_ in islice(batch_loader, 5000 // self.batch_size):
         latent_point = self.net(point.to(self.device))
         latent_point = latent_point.to("cpu")
         print("LPS",  latent_point.size())
@@ -140,7 +141,7 @@ class ClusteringTraining(Training):
 
   def _cluster_image(self, labels):
     count = 10
-    n_clusters = 3#max(list(set(labels)))
+    n_clusters = 50#max(list(set(labels)))
     print(list(set(labels)))
     indices = list(range(len(labels)))
     random.shuffle(indices)
@@ -214,6 +215,10 @@ class ClusteringTraining(Training):
 
 class ClusterAETraining(ClusteringTraining):
   def __init__(self, encoder, decoder, data,
+               n_clusters=10,
+               center_size=1024,
+               gamma=0.1,
+               alpha=0.1,
                clustering=KMeans(3),
                loss=nn.CrossEntropyLoss(),
                optimizer=torch.optim.Adam,
@@ -233,12 +238,28 @@ class ClusterAETraining(ClusteringTraining):
     )
     self.decoder = decoder.to(device)
 
-    self.centers = torch.randn(10, 4 * 256, requires_grad=True, device=device)
+    self.alpha = 0.1
+    self.gamma = gamma
+    self.centers = torch.rand(
+      n_clusters,
+      center_size,
+      requires_grad=True,
+      device=device
+    )
+    with torch.no_grad():
+      self.centers.mul_(
+        torch.tensor(2).float().to(device)
+      ).add_(
+        torch.tensor(-1).float().to(device)
+      )
+
+    self.center_optimizer = optimizer(
+      [self.centers]
+    )
 
     self.optimizer = optimizer(
       list(self.net.parameters()) +
-      list(self.decoder.parameters()) +
-      [self.centers]
+      list(self.decoder.parameters())
     )
 
   def hardening_loss(self, predictions):
@@ -255,10 +276,33 @@ class ClusterAETraining(ClusteringTraining):
 
     return 1000 * loss
 
+  def cluster_loss(self, data, alpha=0.0):
+    distance = torch.norm(
+      data.unsqueeze(1) - self.centers.unsqueeze(0),
+      2, dim=2
+    )
+    gamma = distance * func.softmax(-alpha * (distance - distance.min(dim=1, keepdim=True)[0]), dim=1)
+    result = gamma.sum(dim=1).mean()
+
+    self.writer.add_scalar("cluster loss", float(result), self.step_id)
+
+    return result
+
   def ae_loss(self, predictions, target):
     loss = func.mse_loss(predictions, target)
 
     self.writer.add_scalar("reconstruction loss", float(loss), self.step_id)
+
+    return loss
+
+  def regularization(self, predictions):
+    pred_norm = torch.norm(predictions, 2, dim=1)
+    center_norm = torch.norm(self.centers, 2, dim=1)
+    pred_norm = ((pred_norm - 1) ** 2).mean()
+    center_norm = ((center_norm - 1) ** 2).mean()
+    loss = pred_norm + center_norm
+
+    self.writer.add_scalar("regularization loss", float(loss), self.step_id)
 
     return loss
 
@@ -286,13 +330,19 @@ class ClusterAETraining(ClusteringTraining):
       self.writer.add_image("im vs rec", im_vs_rec, self.step_id)
 
     loss_val = self.ae_loss(reconstruction, data)
-    if self.step_id > 1000:
-      loss_val += self.hardening_loss(features.reshape(features.size(0), -1))
+    loss_val += self.gamma * self.cluster_loss(
+      features.reshape(features.size(0), -1),
+      self.alpha
+    )
+    loss_val += self.regularization(features.reshape(features.size(0), -1))
+    # if self.step_id > 1000:
+    #   loss_val += self.hardening_loss(features.reshape(features.size(0), -1))
     
     loss_val.backward()
 
     self.writer.add_scalar("cluster assignment loss", float(loss_val), self.step_id)
     self.optimizer.step()
+    self.center_optimizer.step()
     self.each_step()
 
   def train(self):
@@ -303,8 +353,8 @@ class ClusterAETraining(ClusteringTraining):
       self.train_data = DataLoader(
         self.data, batch_size=self.batch_size, num_workers=8, shuffle=True
       )
-      for internal_epoch in range(10):
-        for data, *_ in self.train_data:
+      for internal_epoch in range(1):
+        for data, *_ in islice(self.train_data, 100):
           self.step(data)
           self.step_id += 1
           if self.step_id % 50 == 0:
@@ -316,6 +366,7 @@ class ClusterAETraining(ClusteringTraining):
       # ax.scatter(tsne[:, 0], tsne[:, 1])
       # self.writer.add_figure("clustering", fig, self.step_id)
       self.each_cluster()
+      self.alpha *= float(np.power(2.0, (-(np.log(epoch_id + 1) ** 2))))
 
     return self.net
 
@@ -483,7 +534,7 @@ class HierarchicalClusteringTraining(ClusteringTraining):
     ]
 
     self.cluster_embeddings = nn.ModuleList([
-      nn.Linear(256, value).to(self.device)
+      nn.Linear(128, value).to(self.device)
       for value in depth
     ])
 
@@ -537,7 +588,7 @@ class HierarchicalClusteringTraining(ClusteringTraining):
         self.data, batch_size=self.batch_size, num_workers=0,
         sampler=WeightedRandomSampler(weights, min(20000, len(self.data)), replacement=True)
       )
-      for inner_epoch in range(20):
+      for inner_epoch in range(1):
         for data, label in self.train_data:
           self.step(data, label, center_hierarchy)
           self.step_id += 1
@@ -630,6 +681,99 @@ class VAEClusteringTraining(HierarchicalClusteringTraining):
     self.writer.add_scalar("reconstruction loss", float(loss_val), self.step_id)
 
     attention = features.reshape(features.size(0), -1).squeeze()
+    for level, _ in enumerate(self.clusterings):
+      level_center = centers[level].to(self.device).unsqueeze(0)
+      level_logits = self.cluster_embeddings[level](attention)
+      level_label = label[:, level].long().to(self.device)
+      level_loss = self.loss(level_logits, level_label)
+      loss_val += 0.1 * level_loss / np.log(self.depth[level])
+    loss_val.backward()
+    self.writer.add_scalar("total loss", float(loss_val), self.step_id)
+    self.optimizer.step()
+    self.each_step()
+
+class RegularizedClusteringTraining(HierarchicalClusteringTraining):
+  def __init__(self, encoder, decoder, data,
+               optimizer=torch.optim.Adam,
+               loss=nn.CrossEntropyLoss(),
+               max_epochs=50,
+               batch_size=128,
+               device="cpu",
+               network_name="network",
+               depth=[5, 10, 50]):
+    super(RegularizedClusteringTraining, self).__init__(
+      encoder, data,
+      depth=depth,
+      loss=loss,
+      optimizer=optimizer,
+      max_epochs=max_epochs,
+      batch_size=batch_size,
+      device=device,
+      network_name=network_name
+    )
+
+    self.decoder = decoder.to(device)
+
+    self.optimizer = optimizer(
+      list(encoder.parameters()) +
+      list(decoder.parameters()) +
+      list(self.cluster_embeddings.parameters())
+    )
+
+  def checkpoint(self):
+    netwrite(
+      self.net,
+      f"{self.network_name}-encoder-epoch-{self.epoch_id}-step-{self.step_id}.torch"
+    )
+    netwrite(
+      self.decoder,
+      f"{self.network_name}-decoder-epoch-{self.epoch_id}-step-{self.step_id}.torch"
+    )
+    for idx, classifier in enumerate(self.cluster_embeddings):
+      netwrite(
+        classifier,
+        f"{self.network_name}-classifier-{idx}-epoch-{self.epoch_id}-step-{self.step_id}.torch"
+      )
+    self.each_checkpoint()
+
+  def ae_loss(self, reconstruction, target):
+    mse = func.mse_loss(reconstruction, target)
+    return mse
+
+  def step(self, data, label, centers):
+    self.optimizer.zero_grad()
+    data = data.to(self.device)
+    sample = self.net(data)
+    sample += 0.05 * torch.randn_like(sample)
+    
+    reconstruction = self.decoder(sample)
+
+    with torch.no_grad():
+      print(data.size(), reconstruction.size())
+      weirdness = (sample[0] + sample[1]).unsqueeze(0) / 2
+      self.decoder.eval()
+      weird_reconstruction = self.decoder(weirdness)
+      self.decoder.train()
+      im_vs_rec = torch.cat(
+        (
+          data[0].cpu(),
+          data[1].cpu(),
+          reconstruction[0].cpu(),
+          reconstruction[1].cpu(),
+          weird_reconstruction[0].cpu()
+        ),
+        dim=2
+      ).numpy()
+      im_vs_rec = im_vs_rec - im_vs_rec.min()
+      im_vs_rec = im_vs_rec / im_vs_rec.max()
+      self.writer.add_image("im vs rec", im_vs_rec, self.step_id)
+
+    loss_val = self.ae_loss(
+      reconstruction, data
+    )
+    self.writer.add_scalar("reconstruction loss", float(loss_val), self.step_id)
+
+    attention = sample.reshape(sample.size(0), -1).squeeze()
     for level, _ in enumerate(self.clusterings):
       level_center = centers[level].to(self.device).unsqueeze(0)
       level_logits = self.cluster_embeddings[level](attention)

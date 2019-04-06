@@ -72,7 +72,7 @@ class SupervisedTraining(Training):
       train_data, batch_size=batch_size, num_workers=8, shuffle=True
     )
     self.validate_data = DataLoader(
-      validate_data, batch_size=8 * batch_size, shuffle=False
+      validate_data, batch_size=8 * batch_size, shuffle=True
     )
     self.net = net.to(self.device)
     self.max_epochs = max_epochs
@@ -121,7 +121,7 @@ class SupervisedTraining(Training):
       else:
         self.validation_losses[0] = self.losses[0](predictions, label[0])
       self.each_validate()
-      self.valid_callback(self, inputs.to("cpu").numpy(), list(map(lambda x: x.to("cpu"), label)))
+      self.valid_callback(self, predictions.to("cpu").numpy(), list(map(lambda x: x.to("cpu"), label)))
 
   def schedule_step(self):
     self.schedule.step(sum(self.validation_losses))

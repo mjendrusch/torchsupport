@@ -24,6 +24,8 @@ class VAETraining(Training):
                max_epochs=50,
                batch_size=128,
                device="cpu",
+               ctarget=50,
+               gamma=1000,
                network_name="network"):
     super(VAETraining, self).__init__()
 
@@ -31,6 +33,9 @@ class VAETraining(Training):
 
     self.encoder = encoder.to(device)
     self.decoder = decoder.to(device)
+
+    self.ctarget = ctarget
+    self.gamma = gamma
 
     self.data = data
     self.train_data = None
@@ -96,7 +101,7 @@ class VAETraining(Training):
 
     loss_val = self.vae_loss(
       mean, logvar, reconstruction, data,
-      beta=1000, c=0.5 + self.step_id * (50 - 0.5) * 0.00001
+      beta=self.gamma, c=self.step_id * (self.ctarget) * 0.00001
     )
     self.writer.add_scalar("reconstruction loss", float(loss_val), self.step_id)
 
