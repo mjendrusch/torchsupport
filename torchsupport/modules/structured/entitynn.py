@@ -52,6 +52,14 @@ class ConnectedModule(nn.Module):
     out.current_view = torch.cat(results, dim=0)
     return out
 
+class NeighbourLinear(ConnectedModule):
+  def __init__(self, source_channels, target_channels):
+    super(NeighbourLinear).__init__()
+    self.linear = nn.Linear(source_channels, target_channels)
+
+  def reduce(self, own_data, source_messages):
+    return own_data + func.relu(self.linear(source_messages)).mean(dim=0, keepdim=True)
+
 class NeighbourAssignment(ConnectedModule):
   def __init__(self, source_channels, target_channels, out_channels, size):
     """Aggregates a node neighbourhood using soft weight assignment. (FeaStNet)
@@ -109,7 +117,7 @@ class NeighbourDotAttention(ConnectedModule):
   def reduce(self, own_data, source_message):
     target = self.attention_local(self.embedding(own_data))
     source = self.attention_neighbour(self.embedding(source_message))
-    result = ((target + source) * own_data).sum(dim=0)
+    result = ((target + source) * source_message).sum(dim=0)
     return result
 
 class NeighbourReducer(ConnectedModule):

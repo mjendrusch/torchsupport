@@ -21,6 +21,24 @@ class ConnectionStructure(object):
     self.connections = list(connections)
 
   @classmethod
+  def reachable_nodes(cls, start_nodes, structures, depth=1):
+    if depth == 0:
+      return start_nodes
+
+    nodes = start_nodes
+
+    for typ in start_nodes:
+      for structure in structures:
+        if structure.source in start_nodes:
+          if structure.target not in nodes:
+            nodes[structure.target] = set([])
+          for node in start_nodes[typ]:
+            for connection in structure.connections[node]:
+              nodes[structure.target].update(set(connection))
+
+    return cls.reachable_nodes(start_nodes, structures, depth=depth - 1)
+
+  @classmethod
   def cat(cls, structures):
     assert structures
     assert all(map(lambda x: x.source == structures[0].source, structures))
@@ -46,15 +64,45 @@ class ConnectionStructure(object):
       connections[t].append(s)
       if not directed:
         connections[s].append(t)
-    return cls(
-      source, target, connections
-    )
+    return cls(source, target, connections)
 
   @classmethod
   def from_nx(cls, graph, source, target):
     edge_list = [edge for edge in graph.edges]
     directed = isinstance(graph, nx.DiGraph)
     return cls.from_edges(edge_list, source, target, len(graph.nodes), directed=directed)
+
+  @classmethod
+  def from_csv(cls, path, source="nodes", target="nodes"):
+    connections = []
+    with open(path) as csv:
+      for line in csv:
+        connections.append(list(map(int, line.strip().split(","))))
+    return cls(source, target, connections)
+
+
+  def select(self, sources, targets=None):
+    """Selects a sub-adjacency structure from an adjacency structure
+       given a set of source and target nodes to keep.
+    
+    Args:
+      sources (list): list of source nodes to keep.
+      targets (list or None): list of target nodes to keep. Defaults to sources.
+    
+    Returns:
+      Subsampled adjacency structure containing only the desired nodes.
+    """
+    result = ConnectionStructure(self.source, self.target, [])
+    if targets is None:
+      targets = sources
+    for idx, connection in self.connections:
+      if idx in sources:
+        result.connections.append([
+          target
+          for target in connection
+          if target in targets
+        ])
+    return result
 
   def message(self, entity_tensor):
     source_tensor = getattr(entity_tensor, self.source)

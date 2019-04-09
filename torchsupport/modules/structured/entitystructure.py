@@ -125,3 +125,65 @@ class DistanceStructure(AdjacencyStructure):
       if distance < radius:
         accept_nodes.append(node)
     return accept_nodes
+
+class ImplicitDistanceStructure(AdjacencyStructure):
+  def __init__(self, entity_tensor, structure):
+    """Structure implicitly providing a relative distance."""
+    super(ImplicitDistanceStructure, self).__init__()
+    self.position = entity_tensor.position
+    self.source = structure.source
+    self.target = structure.target
+    self.connections = structure.connections
+
+  def message(self, entity_tensor):
+    source_tensor = getattr(entity_tensor, self.source)
+    target_tensor = getattr(entity_tensor, self.source)
+    for idx, _ in enumerate(target_tensor):
+      if self.connections[idx]:
+        offset = self.position[self.connections[idx]] - self.position[idx:idx + 1]
+        yield torch.cat((
+          offset.norm(dim=1, keepdim=True),
+          source_tensor[self.connections[idx]]
+        ), dim=1)
+      else:
+        yield source_tensor[0:0]
+
+class OffsetOrientationStructure(AdjacencyStructure):
+  def __init__(self, entity_tensor, structure):
+    """Structure implicitly providing a relative offset."""
+    super(OffsetOrientationStructure, self).__init__()
+    self.position = entity_tensor.position
+    self.orientation = entity_tensor.orientation
+    self.source = structure.source
+    self.target = structure.target
+    self.connections = structure.connections
+
+  def message(self, entity_tensor):
+    source_tensor = getattr(entity_tensor, self.source)
+    target_tensor = getattr(entity_tensor, self.source)
+    for idx, _ in enumerate(target_tensor):
+      if self.connections[idx]:
+        offset = self.position[self.connections[idx]] - self.position[idx:idx + 1]
+        rotation = _make_rotation(-self.orientation[idx])
+        offset = torch.matmul(rotation, offset)
+        yield torch.cat((
+          offset, source_tensor[self.connections[idx]]
+        ), dim=1)
+      else:
+        yield source_tensor[0:0]
+
+def _make_rotation(angles):
+  rot_0 = _make_rotation_idx(angles[0], 0)
+  rot_1 = _make_rotation_idx(angles[1], 1)
+  rot_2 = _make_rotation_idx(angles[2], 2)
+  return torch.matmul(rot_0, torch.matmul(rot_1, rot_2))
+
+def _make_rotation_idx(angles, idx):
+  result = torch.zeros(3, 3)
+  for i in range(3):
+    result[i, i] = 1
+  result[(idx + 1) % 3, (idx + 1) % 3] = angles.cos()
+  result[(idx + 2) % 3, (idx + 2) % 3] = angles.cos()
+  result[(idx + 1) % 3, (idx + 2) % 3] = angles.sin()
+  result[(idx + 2) % 3, (idx + 1) % 3] = -angles.sin()
+  return result
