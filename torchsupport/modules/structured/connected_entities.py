@@ -25,7 +25,7 @@ class ConnectionStructure(object):
     if depth == 0:
       return start_nodes
 
-    nodes = start_nodes
+    nodes = deepcopy(start_nodes)
 
     for typ in start_nodes:
       for structure in structures:
@@ -33,10 +33,9 @@ class ConnectionStructure(object):
           if structure.target not in nodes:
             nodes[structure.target] = set([])
           for node in start_nodes[typ]:
-            for connection in structure.connections[node]:
-              nodes[structure.target].update(set(connection))
+            nodes[structure.target].update(set(structure.connections[node]))
 
-    return cls.reachable_nodes(start_nodes, structures, depth=depth - 1)
+    return cls.reachable_nodes(nodes, structures, depth=depth - 1)
 
   @classmethod
   def cat(cls, structures):
@@ -77,49 +76,49 @@ class ConnectionStructure(object):
     connections = []
     with open(path) as csv:
       for line in csv:
-        connections.append(list(map(int, line.strip().split(","))))
+        cleaned = line.strip()
+        if not cleaned:
+          connections.append([])
+        else:
+          connections.append(list(map(int, cleaned.split(","))))
     return cls(source, target, connections)
-
 
   def select(self, sources, targets=None):
     """Selects a sub-adjacency structure from an adjacency structure
        given a set of source and target nodes to keep.
-    
+
     Args:
       sources (list): list of source nodes to keep.
       targets (list or None): list of target nodes to keep. Defaults to sources.
-    
+
     Returns:
       Subsampled adjacency structure containing only the desired nodes.
     """
     result = ConnectionStructure(self.source, self.target, [])
     if targets is None:
       targets = sources
-    for idx, connection in self.connections:
-      if idx in sources:
-        result.connections.append([
-          target
-          for target in connection
-          if target in targets
-        ])
+    for target in targets:
+      result.connections.append([
+        sources.index(source)
+        for source in self.connections[target]
+        if source in sources
+      ])
     return result
 
-  def message(self, entity_tensor):
-    source_tensor = getattr(entity_tensor, self.source)
-    target_tensor = getattr(entity_tensor, self.target)
-    for idx, _ in enumerate(target_tensor):
+  def message(self, source, target):
+    for idx, _ in enumerate(target):
       if self.connections[idx]:
-        yield source_tensor[self.connections[idx]]
+        yield source[self.connections[idx]]
       else:
-        yield torch.zeros_like(source_tensor[0:1])
+        yield torch.zeros_like(source[0:1])
 
 class CompoundStructure(object):
   def __init__(self, structures):
     assert all(map(lambda x: x.target == structures[0].target, structures))
     self.structures = structures
 
-  def message(self, entity_tensor):
-    for combination in zip(*map(lambda x: x.message(entity_tensor), self.structures)):
+  def message(self, source, target):
+    for combination in zip(*map(lambda x: x.message(source, target), self.structures)):
       yield torch.cat(combination, dim=1)
 
 class SubgraphStructure(ConnectionStructure):
@@ -127,9 +126,9 @@ class SubgraphStructure(ConnectionStructure):
     super(SubgraphStructure, self).__init__(None, None, None)
     self.membership = membership
 
-  def message(self, entity_tensor):
+  def message(self, source, target):
     for subgraph in self.membership:
-      yield entity_tensor.subset(**subgraph)
+      yield source[subgraph]
 
 class AdjacencyStructure(ConnectionStructure):
   def __init__(self, source, target, connections):
@@ -282,6 +281,7 @@ class EntityTensor(object):
 
   def new_like(self):
     result = copy(self)
+    result._entity_types = list(result._entity_types)
     return result
 
   @property
@@ -301,6 +301,18 @@ class EntityTensor(object):
     result = copy(self)
     for key in kwargs:
       setattr(result, key, getattr(result, key)[kwargs[key]])
+    return result
+
+  def add_entity(self, typ, tensor):
+    self._entity_types.append(typ)
+    setattr(self, typ, tensor)
+    return self
+
+  def splice(self, target, **kwargs):
+    result = self.new_like()
+    for key in kwargs:
+      result.add_entity(target, getattr(result, key)[kwargs[key]])
+      break
     return result
 
 def _gen_placeholder_arithmetic(operation):

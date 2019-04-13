@@ -41,16 +41,20 @@ class DropoutStructure(ConnectionStructure):
       p (float): probability of dropping an edge.
     """
     super(DropoutStructure, self).__init__(
-      structure.connections,
       structure.source,
-      structure.target
+      structure.target,
+      structure.connections
     )
     self.p = p
 
-  def message(self, entity_tensor):
-    for msg in super(DropoutStructure, self).message(entity_tensor):
+  def message(self, source, target):
+    print(source, target)
+    for msg in super(DropoutStructure, self).message(source, target):
       randoms = torch.rand(len(msg)) > self.p
-      yield msg[randoms]
+      if randoms.sum() > 0:
+        yield msg[randoms]
+      else:
+        yield torch.zeros_like(msg[0].unsqueeze(0))
 
 class NHopStructure(AdjacencyStructure):
   def __init__(self, structure, depth, with_self=True):
@@ -127,50 +131,48 @@ class DistanceStructure(AdjacencyStructure):
     return accept_nodes
 
 class ImplicitDistanceStructure(AdjacencyStructure):
-  def __init__(self, entity_tensor, structure):
+  def __init__(self, position, structure):
     """Structure implicitly providing a relative distance."""
-    super(ImplicitDistanceStructure, self).__init__()
-    self.position = entity_tensor.position
-    self.source = structure.source
-    self.target = structure.target
-    self.connections = structure.connections
+    super(ImplicitDistanceStructure, self).__init__(
+      structure.source,
+      structure.target,
+      structure.connections
+    )
+    self.position = position
 
-  def message(self, entity_tensor):
-    source_tensor = getattr(entity_tensor, self.source)
-    target_tensor = getattr(entity_tensor, self.source)
-    for idx, _ in enumerate(target_tensor):
+  def message(self, source, target):
+    for idx, _ in enumerate(target):
       if self.connections[idx]:
         offset = self.position[self.connections[idx]] - self.position[idx:idx + 1]
         yield torch.cat((
           offset.norm(dim=1, keepdim=True),
-          source_tensor[self.connections[idx]]
+          source[self.connections[idx]]
         ), dim=1)
       else:
-        yield source_tensor[0:0]
+        yield torch.zeros(1, source.size(1) + 1)
 
 class OffsetOrientationStructure(AdjacencyStructure):
-  def __init__(self, entity_tensor, structure):
+  def __init__(self, position, orientation, structure):
     """Structure implicitly providing a relative offset."""
-    super(OffsetOrientationStructure, self).__init__()
-    self.position = entity_tensor.position
-    self.orientation = entity_tensor.orientation
-    self.source = structure.source
-    self.target = structure.target
-    self.connections = structure.connections
+    super(OffsetOrientationStructure, self).__init__(
+      structure.source,
+      structure.target,
+      structure.connections
+    )
+    self.position = position
+    self.orientation = orientation
 
-  def message(self, entity_tensor):
-    source_tensor = getattr(entity_tensor, self.source)
-    target_tensor = getattr(entity_tensor, self.source)
-    for idx, _ in enumerate(target_tensor):
+  def message(self, source, target):
+    for idx, _ in enumerate(target):
       if self.connections[idx]:
         offset = self.position[self.connections[idx]] - self.position[idx:idx + 1]
         rotation = _make_rotation(-self.orientation[idx])
         offset = torch.matmul(rotation, offset)
         yield torch.cat((
-          offset, source_tensor[self.connections[idx]]
+          offset, source[self.connections[idx]]
         ), dim=1)
       else:
-        yield source_tensor[0:0]
+        yield source[0:0]
 
 def _make_rotation(angles):
   rot_0 = _make_rotation_idx(angles[0], 0)

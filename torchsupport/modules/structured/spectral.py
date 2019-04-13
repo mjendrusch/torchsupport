@@ -2,132 +2,175 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as func
 
-from torchsupport.modules.structured.nodegraph import cat
+from torchsupport.modules.structured.connected_entities import EntityTensor, AdjacencyStructure
+from torchsupport.modules.structured import entitynn as enn
+
+class AdjacencyAction(enn.ConnectedModule):
+  def reduce(self, data, message):
+    return (data + message.sum(dim=0)) / (message.size(0) + 1)
+
+class LaplacianAction(enn.ConnectedModule):
+  def __init__(self, normalized=False):
+    super(LaplacianAction, self).__init__()
+    self.normalized = False
+
+  def reduce(self, data, message):
+    factor = 1
+    if self.normalized:
+      factor = 1 / message.size(0)
+    return factor * (message.size(0) * data - message.sum(dim=0))
 
 class GCN(nn.Module):
-  def __init__(self, in_channels, out_channels,
-               augment=1, activation=nn.ReLU(), matrix_free=False):
-    """Basic GCN.
-
-    Args:
-      in_channels, out_channels (int): number of in- and output features.
-      augment (int): number of adjacency matrix augmentations.
-      activation (callable): activation function.
-      matrix_free (bool): use matrix-free matrix-vector multiplication?
-    """
+  def __init__(self, in_size, out_size, depth=1, activation=func.relu):
     super(GCN, self).__init__()
-    self.linear = nn.Linear(in_channels, out_channels, bias=False)
+    self.linear = nn.Linear(in_size, out_size)
+    self.connected = AdjacencyAction()
     self.activation = activation
-    self.matrix_free = matrix_free
-    self.augment = augment
+    self.depth = depth
 
-  def forward(self, graph):
-    out = graph.new_like()
-    new_nodes = self.linear(graph.node_tensor)
-    normalization = torch.Tensor([len(edges) + 1 for edges in self.adjacency], dtype="float")
-    for _ in range(self.augment):
-      new_nodes = (self.adjacency_action(new_nodes, matrix_free=self.matrix_free) + new_nodes)
-      new_nodes /= normalization
-    out.node_tensor = self.activation(new_nodes)
-    return out
+  def forward(self, data, structure):
+    out = self.linear(data)
+    for _ in range(self.depth):
+      out = self.connected(out, out, structure)
+    return self.activation(out)
 
-class MultiscaleGCN(nn.Module):
-  def __init__(self, in_channels, out_channels, scales,
-               activation=nn.ReLU, matrix_free=False):
-    """Multiscale GCN.
+class Chebyshev(nn.Module):
+  def __init__(self, in_size, out_size, depth=1, activation=func.relu):
+    super(Chebyshev, self).__init__()
+    self.linear = nn.Linear(in_size, out_size)
+    self.connected = LaplacianAction(normalized=True)
+    self.activation = activation
+    self.depth = depth
 
-    Args:
-      in_channels, out_channels (int): number of in- and output features.
-      scales (list int): number of adjacency matrix augmentations.
-      activation (callable): activation function.
-      matrix_free (bool): use matrix-free matrix-vector multiplication?
-    """
-    super(MultiscaleGCN, self).__init__()
-    self.modules = nn.ModuleList([
-      GCN(in_channels, out_channels, augment=scale,
-          activation=activation, matrix_free=matrix_free)
-      for scale in scales
+  def forward(self, data, structure):
+    out_2 = self.linear(data)
+    out_1 = self.connected(out_2, out_2, structure)
+    out = out_1 + out_2
+    for _ in range(self.depth):
+      tmp = out_1
+      out_1 = 2 * self.connected(out_1, out_1, structure) - out_2
+      out_2 = tmp
+      out += out_1
+    return self.activation(out)
+
+class ConvSkip(nn.Module):
+  def __init__(self, in_size, out_size,
+               merge_size, activation=func.relu,
+               connected=LaplacianAction(normalized=True)):
+    super(ConvSkip, self).__init__()
+    self.transform = nn.Linear(merge_size, out_size)
+    self.linear = nn.Linear(in_size, out_size)
+    self.activation = activation
+    self.connected = connected
+
+  def forward(self, data, merge, structure):
+    out = self.linear(data)
+    out = self.connected(out, out, structure)
+    return self.activation(out + self.transform(merge))
+
+class WideConvSkip(nn.Module):
+  def __init__(self, in_size, out_size, merge_size,
+               width=3, activation=func.relu,
+               connected=LaplacianAction(normalized=True)):
+    super(WideConvSkip, self).__init__()
+    self.transform = nn.Linear(merge_size, out_size * width)
+    self.linear = nn.Conv1d(in_size * width, out_size * width, 1, groups=width)
+
+  def forward(self, data, merge, structure):
+    out = self.linear(data.unsqueeze(1)).squeeze()
+    out = self.connected(out, out, structure)
+    return self.activation(out + self.transform(merge))
+
+class ARMA(nn.Module):
+  def __init__(self, in_size, out_size, hidden_size,
+               width=3, depth=3, share=False, activation=func.relu,
+               connected=LaplacianAction(normalized=True)):
+    super(ARMA, self).__init__()
+    self.width = width
+    self.preprocess = ConvSkip(
+      in_size, hidden_size * width, in_size,
+      connected=connected, activation=activation
+    )
+
+    if share:
+      shared_block = WideConvSkip(
+        hidden_size, hidden_size, in_size,
+        width=width, connected=connected,
+        activation=activation
+      )
+      self.blocks = nn.ModuleList([shared_block for _ in range(depth - 2)])
+    else:
+      self.blocks = nn.ModuleList([
+        WideConvSkip(
+          hidden_size, hidden_size, in_size,
+          width=width, connected=connected,
+          activation=activation
+        )
+        for _ in range(depth - 2)
+      ])
+    self.postprocess = WideConvSkip(
+      hidden_size, out_size, in_size,
+      width=width, connected=connected,
+      activation=activation
+    )
+
+  def forward(self, data, structure):
+    out = self.preprocess(data, data, structure)
+    for block in self.blocks:
+      out = block(out, data, structure)
+    out = self.postprocess(out, data, structure)
+    out = out.reshape(data.size(0), -1, self.width)
+    return func.adaptive_avg_pool1d(out, 1)
+
+class APP(nn.Module):
+  def __init__(self, in_size, out_size,
+               depth=10, teleport=0.5, activation=func.relu,
+               connected=LaplacianAction(normalized=True)):
+    super(APP, self).__init__()
+    self.linear = nn.Linear(in_size, out_size)
+    self.teleport = teleport
+    self.depth = depth
+    self.activation = activation
+    self.connected = connected
+
+  def forward(self, data, structure):
+    embedding = self.linear(data)
+    out = embedding
+    for _ in range(self.depth):
+      out = (1 - self.teleport) * self.connected(out, out, structure)
+      out += self.teleport * embedding
+    return self.activation(out)
+
+class MultiScaleAPP(nn.Module):
+  def __init__(self, in_size, out_size,
+               depth=10, teleports=[0.1, 0.2, 0.3],
+               activation=func.relu,
+               connected=LaplacianAction(normalized=True)):
+    super(MultiScaleAPP, self).__init__()
+    self.source_attention = nn.Linear(in_size, out_size)
+    self.target_attention = nn.Linear(out_size, out_size)
+    self.scales = nn.ModuleList([
+      APP(
+        in_size, out_size,
+        depth=depth, teleport=teleport,
+        activation=activation,
+        connected=connected
+      )
+      for teleport in teleports
     ])
 
-  def forward(self, graph):
-    outputs = []
-    for module in self.modules:
-      outputs.append(module(graph))
-    return cat(outputs, dim=1)
-
-class ChebyshevConv(nn.Module):
-  def __init__(self, in_channels, out_channels, depth=2,
-               activation=nn.ReLU(), matrix_free=False):
-    """Chebyshev polynomial-based approximate spectral graph convolution.
-
-    Args:
-      in_channels, out_channels (int): number of input and output features.
-      depth (int): depth of the Chebyshev approximation.
-      activation (callable): activation function.
-      matrix_free (bool): do not materialize Laplacian explicitly?
-    """
-    super(ChebyshevConv, self).__init__()
-    self.linear = nn.Linear(in_channels, out_channels, bias=False)
-    self.depth = depth
-    self.activation = activation
-    self.matrix_free = matrix_free
-
-  def forward(self, graph):
-    m2_nodes = self.linear(graph.node_tensor)
-    m1_nodes = graph.laplacian_action(m2_nodes)
-    out_nodes = m1_nodes + m2_nodes
-    for _ in range(2, self.depth):
-      m2_nodes = m1_nodes
-      m1_nodes += 2 * graph.laplacian_action(
-        m1_nodes, matrix_free=self.matrix_free, normalized=True
-      ) - m2_nodes
-      out_nodes += m1_nodes
-    out = graph.new_like()
-    out.node_tensor = self.activation(out_nodes)
-    return out
-
-class ARMAConv(nn.Module):
-  def __init__(self, in_channels, out_channels, share=True,
-               width=2, depth=2, activation=nn.ReLU(),
-               matrix_free=False):
-    """Auto-regressive moving average-based approximate spectral graph convolution.
-
-    Args:
-      in_channels, out_channels (int): number of input and output features.
-      width (int): width of the ARMA filter stack.
-      depth (int): depth of the ARMA approximation.
-      activation (callable): activation function.
-      matrix_free (bool): do not materialize Laplacian explicitly?
-    """
-    super(ARMAConv, self).__init__()
-    self.width = width
-    self.depth = depth
-    self.activation = activation
-    self.matrix_free = matrix_free
-    self.share = share
-
-    # width × different linear ops
-    self.preprocess = nn.Linear(in_channels, out_channels * width)
-    self.propagate = nn.Conv1d(out_channels * width, out_channels * width, 1, groups=width)
-    self.merge = nn.Linear(in_channels, out_channels * width)
-
-  def forward(self, graph):
-    nodes = graph.node_tensor
-
-    out = self.preprocess(nodes)
-    out = out.reshape(out.size(0), out.size(1) * out.size(2), 1)
-    out += self.merge(nodes).reshape(out.size(0), out.size(1) * out.size(2), 1)
-    out = self.activation(out)
-    for _ in range(self.depth - 1):
-      out -= graph.laplacian_action(out)
-      out = self.propagate(out)
-      out += self.merge(nodes).reshape(out.size(0), out.size(1) * out.size(2), 1)
-      out = self.activation(out)
-
-    out = out.reshape(nodes.size(0), nodes.size(1), self.width)
-    out = func.adaptive_avg_pool1d(out, 1).reshape(
-      nodes.size(0), -1
-    ).unsqueeze(2)
-    result = graph.new_like()
-    result.node_tensor = out
-    return result
+  def forward(self, data, structure):
+    scales = [
+      scale(data, structure)
+      for scale in self.scales
+    ]
+    source_attention = self.source_attention(data)
+    scale_attention = torch.softmax(torch.cat([
+      self.target_attention(scale).dot(source_attention)
+      for scale in self.scales
+    ], dim=1), dim=1)
+    scales = torch.cat([
+      scale.unsqueeze(1)
+      for scale in scales
+    ], dim=1)
+    return (scale_attention * scales).sum(dim=1)

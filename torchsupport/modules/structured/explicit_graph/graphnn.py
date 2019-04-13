@@ -119,7 +119,7 @@ class CloseDisconnectedNodeTraversal(NodeTraversal):
     for node, distance in enumerate(radius, graph_slice.start):
       if distance < radius and node not in reject_nodes:
         accept_nodes.append(node)
-    return accept_nodes
+    return entity, accept_nodes
 
 class DynamicAttentionNodeTraversal(NodeTraversal):
   def __init__(self, top_p=0.8):
@@ -223,7 +223,7 @@ class NeighbourAttention(NeighbourModule):
 
   def reduce(self, graph, neighbourhood):
     newnode_tensor = torch.zeros_like(graph.node_tensor)
-    for idx, node in enumerate(neighbourhood):
+    for idx, node in neighbourhood:
       local_tensor = graph.node_tensor[node]
       attention = self.attention(torch.cat((local_tensor, graph.node_tensor[idx])))
       reduced = torch.Tensor.sum(attention * local_tensor, dim=1)
@@ -235,7 +235,7 @@ class NeighbourAttention(NeighbourModule):
 def neighbourhood_to_adjacency(neighbourhood):
   size = torch.Size([len(neighbourhood), len(neighbourhood)])
   indices = []
-  for idx, nodes in enumerate(neighbourhood):
+  for idx, nodes in neighbourhood:
     for node in nodes:
       indices.append([idx, node])
       indices.append([node, idx])
@@ -283,7 +283,7 @@ class NeighbourDotAttention(NeighbourModule):
     local_attention = self.attention_local(embedding)
     neighbour_attention = self.attention_neighbour(embedding)
     newnode_tensor = torch.zeros_like(graph.node_tensor)
-    for idx, node in enumerate(neighbourhood):
+    for idx, node in neighbourhood:
       reduced = torch.Tensor.sum(
         (local_attention[idx] + neighbour_attention[node]) * graph.node_tensor[node],
         dim=1
@@ -300,7 +300,7 @@ class NeighbourReducer(NeighbourModule):
 
   def reduce(self, graph, neighbourhood):
     newnode_tensor = torch.zeros_like(graph.node_tensor)
-    for idx, node in enumerate(neighbourhood):
+    for idx, node in neighbourhood:
       reduced = self.reduction(graph.node_tensor[node], dim=1)
       newnode_tensor[idx] = reduced if isinstance(reduced, torch.Tensor) else reduced[0]
     out = graph.new_like()

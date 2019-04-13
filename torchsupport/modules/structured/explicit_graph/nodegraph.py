@@ -3,6 +3,14 @@ from copy import copy, deepcopy
 import torch
 import networkx as nx
 
+class Incoming(object):
+  def __init__(self, data):
+    self.data = data
+
+class Outgoing(object):
+  def __init__(self, data):
+    self.data = data
+
 class NodeGraphTensor(object):
   """Node-only graph tensor."""
 
@@ -17,6 +25,7 @@ class NodeGraphTensor(object):
     self._recompute_laplacian = True
     self._laplacian = None
     self.offset = 0
+    self.directed = False
 
     if graphdesc is None:
       self.num_graphs = 1
@@ -268,8 +277,12 @@ class NodeGraphTensor(object):
     self._decompute_adjacency_matrix()
     self._decompute_laplacian()
 
-    self.adjacency[source].append(target)
-    self.adjacency[target].append(source)
+    if self.directed:
+      self.adjacency[source].append(Outgoing(target))
+      self.adjacency[target].append(Incoming(source))
+    else:
+      self.adjacency[source].append(target)
+      self.adjacency[target].append(source)
     return len(self.adjacency[source]) - 1
 
   def add_edges(self, edges):
@@ -391,8 +404,10 @@ class NodeGraphTensor(object):
       ]
     out.node_tensor = self.node_tensor[out_range.start:out_range.stop]
     if further_indices is not None:
-      out.node_tensor = out.node_tensor[(slice(None), *further_indices)]
+      out.node_tensor = out.node_tensor[further_indices]
     out.adjacency = self.adjacency[out_range.start:out_range.stop]
+    if further_indices is not None:
+      out.adjacency = out.adjacency[further_indices[0]]
     return out
 
   def __setitem__(self, idx, value):
@@ -400,7 +415,23 @@ class NodeGraphTensor(object):
 
     further_indices = None
     if isinstance(idx, tuple) and len(idx) > 1:
-      pass
+      further_indices = idx[1:]
+      idx = idx[0]
+    if isinstance(idx, int):
+      out_range = self.graph_range(idx)
+    elif isinstance(idx, slice):
+      out_range = slice(
+        self.graph_range(idx.start).start,
+        self.graph_range(idx.stop-1).stop
+      )
+    if further_indices is not None:
+      self.node_tensor[out_range.start:out_range.stop, further_indices] = value.node_tensor
+    else:
+      self.node_tensor[out_range.start:out_range.stop] = value.node_tensor
+    if further_indices is not None:
+      self.adjacency[out_range.start:out_range.stop][further_indices[0]] = value.adjacency
+    else:
+      self.adjacency[out_range.start:out_range.stop] = value.adjacency
 
   def append(self, graph_tensor):
     """Appends a `NodeGraphTensor` to the end of an existing `NodeGraphTensor`.

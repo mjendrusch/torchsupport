@@ -4,36 +4,6 @@ import torch.nn.functional as func
 
 from torchsupport.modules.structured.connected_entities import EntityTensor, AdjacencyStructure
 
-class LocalModule(nn.Module):
-  def local_update(self, *inputs):
-    raise NotImplementedError("Abstract")
-
-  def forward(self, *inputs):
-    inp = map(lambda x: x.current_view, inputs)
-    outputs = self.local_update(*inp)
-    out = inputs[0].new_like()
-    out.current_view = outputs
-    return out
-
-class Linear(LocalModule):
-  def __init__(self, insize, outsize):
-    """Applies a linear module at each node in a graph.
-
-    Args:
-      insize (int): number of input features.
-      outsize (int): number of output features.
-
-    Returns:
-      `NodeModule` wrapping a `nn.Linear` module.
-    """
-    super(Linear, self).__init__()
-    self.linear = nn.Linear(insize, outsize)
-
-  def local_update(self, node_tensor):
-    node_tensor = node_tensor.view(node_tensor.size(0), -1)
-    node_tensor = self.linear(node_tensor)
-    return node_tensor
-
 class ConnectedModule(nn.Module):
   def __init__(self):
     """Applies a reduction function to the neighbourhood of each entity."""
@@ -42,15 +12,12 @@ class ConnectedModule(nn.Module):
   def reduce(self, own_data, source_messages):
     raise NotImplementedError("Abstract")
 
-  def forward(self, entity_tensor, structure):
-    out = entity_tensor.new_like()
-    out = out.view(structure.target)
+  def forward(self, source, target, structure):
     results = []
-    for idx, message in enumerate(structure.message(entity_tensor)):
-      reduced = self.reduce(entity_tensor.current_view[idx], message)
+    for idx, message in enumerate(structure.message(source, target)):
+      reduced = self.reduce(target[idx], message)
       results.append(reduced.unsqueeze(0))
-    out.current_view = torch.cat(results, dim=0)
-    return out
+    return torch.cat(results, dim=0)
 
 class NeighbourLinear(ConnectedModule):
   def __init__(self, source_channels, target_channels):
@@ -117,7 +84,7 @@ class NeighbourDotAttention(ConnectedModule):
   def reduce(self, own_data, source_message):
     target = self.attention_local(self.embedding(own_data))
     source = self.attention_neighbour(self.embedding(source_message))
-    result = ((target + source) * source_message).sum(dim=0)
+    result = (func.softmax(target + source, dim=1) * source_message).sum(dim=0)
     return result
 
 class NeighbourReducer(ConnectedModule):
@@ -161,10 +128,10 @@ class GraphResBlock(nn.Module):
     super(GraphResBlock, self).__init__()
     self.activation = activation
     self.aggregate = aggregate
-    self.linear = Linear(2 * channels, channels)
+    self.linear = nn.Linear(2 * channels, channels)
 
-  def forward(self, graph):
-    out = self.aggregate(graph)
+  def forward(self, graph, structure):
+    out = self.aggregate(graph, graph, structure)
     out = self.linear(out)
     out = self.activation(out + graph)
     return out
