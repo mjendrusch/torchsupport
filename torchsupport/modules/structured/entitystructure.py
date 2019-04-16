@@ -48,7 +48,6 @@ class DropoutStructure(ConnectionStructure):
     self.p = p
 
   def message(self, source, target):
-    print(source, target)
     for msg in super(DropoutStructure, self).message(source, target):
       randoms = torch.rand(len(msg)) > self.p
       if randoms.sum() > 0:
@@ -57,7 +56,7 @@ class DropoutStructure(ConnectionStructure):
         yield torch.zeros_like(msg[0].unsqueeze(0))
 
 class NHopStructure(AdjacencyStructure):
-  def __init__(self, structure, depth, with_self=True):
+  def __init__(self, structure, depth, with_self=False):
     """Computes a standard node traversal for a given node.
 
     Args:
@@ -91,6 +90,93 @@ class NHopStructure(AdjacencyStructure):
         nodes += new_nodes
     nodes = list(set(nodes))
     return nodes
+
+class InverseStructure(ConnectionStructure):
+  def __init__(self, structure, source_size=None):
+    if source_size is None:
+      source_size = max([
+        item
+        for item in connection
+        for connection in structure.connections
+      ]) + 1
+    super(InverseStructure, self).__init__(
+      structure.target,
+      structure.source,
+      [
+        [
+          idy
+          for idy, connection in enumerate(structure.connections)
+          if idx in connection
+        ]
+        for idx in range(source_size)
+      ]
+    )
+
+class EdgeStructure(ConnectionStructure):
+  def __init__(self, structure, source_size=None):
+    self.structure = structure
+    self.inverse_structure = InverseStructure(
+      structure,
+      source_size=source_size
+    )
+    super(EdgeStructure, self).__init__(
+      structure.source,
+      structure.source,
+      [
+        list({
+          second_connection
+          for second_connection in self.inverse_structure.connections[item]
+          for item in connection
+        })
+        for idx, connection in enumerate(self.structure.connections)
+      ]
+    )
+
+  def message(self, source, target):
+    node, edge = source
+    for idx, _ in enumerate(target):
+      if self.inverse_structure.connections[idx]:
+        yield (
+          node[self.connections[idx]],
+          edge[self.inverse_structure.connections[idx]]
+        )
+      else:
+        yield (
+          torch.zeros_like(node[0:1]),
+          torch.zeros_like(edge[0:1])
+        )
+
+def _connect_missing_aux(connection, structure, keep_nodes, depth):
+  if depth == 0:
+    return
+  next_depth = depth - 1 if depth is not None else None
+  for node in connection:
+    if node in keep_nodes:
+      yield node
+    else:
+      connected_nodes = structure.connection[node]
+      for connected in _connect_missing_aux(
+          connected_nodes, structure, keep_nodes, next_depth
+      ):
+        yield connected
+
+class ConnectMissing(ConnectionStructure):
+  def __init__(self, structure, keep_nodes, depth=None):
+    assert structure.source == structure.target
+    super(ConnectMissing, self).__init__(
+      structure.source,
+      structure.target,
+      [
+        [
+          node
+          for node in _connect_missing_aux(
+            connection, structure, keep_nodes, depth
+          )
+        ]
+        for idx, connection in enumerate(structure.connections)
+        if idx in keep_nodes
+      ]
+    )
 
 class DistanceStructure(AdjacencyStructure):
   def __init__(self, entity_tensor, subgraph_structure, typ,
