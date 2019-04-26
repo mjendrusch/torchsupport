@@ -17,7 +17,7 @@ class Router(nn.Module):
     self.experts = nn.ModuleList(experts)
 
   def forward(self, predicate, input):
-    index = func.argmax(self.predictor(predicate))
+    index = self.predictor(predicate).argmax()
     return self.experts[input](index)
 
 class SoftRouter(nn.Module):
@@ -26,7 +26,7 @@ class SoftRouter(nn.Module):
     Distributes an input onto a set of "expert" modules,
     given a prediction, which expert is most relevant to
     a given input, averaging over the `top_n` most relevant experts.
-    
+
     Args:
       predictor (nn.Module): soft attention module.
       experts (iterable): iterable of expert modules.
@@ -36,7 +36,7 @@ class SoftRouter(nn.Module):
     self.predictor = predictor
     self.experts = experts
     self.top_n = top_n
-  
+
   def forward(self, predicate, input):
     indices = list(range(len(self.experts)))
     prediction = self.predictor(predicate)

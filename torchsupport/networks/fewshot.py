@@ -2,11 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as func
 
-import torchsupport.modules.dynamic as dyn
-import torchsupport.modules.compact as com
 import torchsupport.modules.reduction as red
-import torchsupport.modules.combination as comb
-
 from torchsupport.ops.shape import flatten
 
 class MetricLoss(nn.Module):

@@ -1,18 +1,22 @@
 import torch
-import torch.nn as nn
-import torch.nn.functional as func
-from torch.utils.data import Dataset, Sampler, DataLoader
-from torchsupport.modules.nodegraph import PartitionedNodeGraphTensor as PNGT
+from torch.utils.data import Dataset, DataLoader
+from torchsupport.modules.structured.nodegraph import PartitionedNodeGraphTensor as PNGT
+import torchsupport.modules.structured.nodegraph as ng
+
+class LazyGraph(object):
+  def __init__(self, adjacency_source, feature_source):
+    self.adjacency_source = adjacency_source
+    self.feature_source = feature_source
 
 class AttributeListGraphIndicatorData(Dataset):
   def __init__(self, indicator, edge_list,
                node_attributes=None, edge_attributes=None,
                node_labels=None, edge_labels=None, graph_labels=None):
     super(AttributeListGraphIndicatorData, self).__init__()
-    if node_attributes == None:
+    if node_attributes is None:
       node_attributes = (1.0 for _ in indicator)
-    self.graphs = _graphs_from_attributes(indicator, edge_list, node_attributes, edge_attributes)
-    self.labels = _graphs_from_attributes(indicator, edge_list, node_labels, edge_labels)
+    self.graphs = self._graphs_from_attributes(indicator, edge_list, node_attributes, edge_attributes)
+    self.labels = self._graphs_from_attributes(indicator, edge_list, node_labels, edge_labels)
     self.graph_labels = graph_labels
 
   def data(self, idx):
@@ -79,9 +83,17 @@ class AttributeListGraphIndicatorData(Dataset):
     
     return graphs
 
+class SubgraphData(Dataset):
+  def __init__(self, graph_data, patches=10, depth=5, keep_depth=1):
+    self.data = graph_data
+    self.patches = patches
+    self.depth = depth
+    self.keep_depth = keep_depth
+    # TODO
+
 def GraphDataLoader(
   dataset, batch_size=1, shuffle=False, sampler=None, batch_sampler=None,
-  num_workers=0, collate_fn=batch_graphs, pin_memory=False, drop_last=False,
+  num_workers=0, collate_fn=ng.cat, pin_memory=False, drop_last=False,
   timeout=0, worker_init_fn=None
 ):
   return DataLoader(
