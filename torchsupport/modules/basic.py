@@ -22,23 +22,38 @@ class MLP(nn.Module):
     """
     super(MLP, self).__init__()
     self.activation = activation
-    self.blocks = nn.ModuleList([
-      nn.Linear(in_size, hidden_size)
-    ] + [
-      nn.Linear(hidden_size, hidden_size)
-      for _ in range(depth - 2)
-    ])
-    self.postprocess = nn.Linear(hidden_size, out_size)
-    self.activation = activation
     self.bn = None
 
-    if batch_norm:
-      self.bn = nn.ModuleList([
-        nn.BatchNorm1d(hidden_size)
+    if isinstance(hidden_size, list):
+      self.blocks = nn.ModuleList([
+        nn.Linear(in_size, hidden_size[0])
       ] + [
-        nn.BatchNorm1d(hidden_size)
+        nn.Linear(hidden_size[idx], hidden_size[idx + 1])
+        for idx in range(len(hidden_size) - 1)
+      ])
+      self.postprocess = nn.Linear(hidden_size[-1], out_size)
+
+      if batch_norm:
+        self.bn = nn.ModuleList([
+          nn.BatchNorm1d(hidden_size[idx])
+          for idx in range(len(hidden_size))
+        ])
+    else:
+      self.blocks = nn.ModuleList([
+        nn.Linear(in_size, hidden_size)
+      ] + [
+        nn.Linear(hidden_size, hidden_size)
         for _ in range(depth - 2)
       ])
+      self.postprocess = nn.Linear(hidden_size, out_size)
+
+      if batch_norm:
+        self.bn = nn.ModuleList([
+          nn.BatchNorm1d(hidden_size)
+        ] + [
+          nn.BatchNorm1d(hidden_size)
+          for _ in range(depth - 2)
+        ])
 
   def forward(self, inputs):
     out = inputs
