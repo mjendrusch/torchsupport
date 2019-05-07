@@ -11,8 +11,7 @@ from matplotlib import pyplot as plt
 from tensorboardX import SummaryWriter
 
 from torchsupport.training.training import Training
-from torchsupport.modules.losses.vae import \
-  vae_loss, beta_vae_loss, joint_vae_loss, factor_vae_loss, tc_discriminator_loss
+import torchsupport.modules.losses.vae as vl
 from torchsupport.data.io import netwrite
 
 class AbstractVAETraining(Training):
@@ -137,7 +136,7 @@ class VAETraining(AbstractVAETraining):
     }, data, **kwargs)
 
   def loss(self, mean, logvar, reconstruction, target):
-    loss_val, (ce, kld) = vae_loss(
+    loss_val, (ce, kld) = vl.vae_loss(
       (mean, logvar), reconstruction, target,
       keep_components=True
     )
@@ -175,7 +174,7 @@ class JointVAETraining(AbstractVAETraining):
 
   def loss(self, normal_parameters, categorical_parameters,
            reconstruction, target):
-    loss_val, (ce, n_n, n_c) = joint_vae_loss(
+    loss_val, (ce, n_n, n_c) = vl.joint_vae_loss(
       normal_parameters,
       categorical_parameters,
       reconstruction, target,
@@ -253,7 +252,7 @@ class FactorVAETraining(JointVAETraining):
     shuffle_sample = self.sample(shuffle_mean, shuffle_logvar)
     reconstruction = self.decoder(sample)
 
-    loss_val = factor_vae_loss(
+    loss_val = vl.factor_vae_loss(
       (mean, logvar), (self.decoder, sample),
       reconstruction, data, gamma=self.gamma
     )
@@ -264,7 +263,7 @@ class FactorVAETraining(JointVAETraining):
     self.optimizer.step()
 
     self.discriminator_optimizer.zero_grad()
-    discriminator_loss = tc_discriminator_loss(
+    discriminator_loss = vl.tc_discriminator_loss(
       self.discriminator,
       sample.detach(),
       shuffle_sample.detach()
@@ -274,3 +273,182 @@ class FactorVAETraining(JointVAETraining):
 
     self.writer.add_scalar("total loss", float(loss_val), self.step_id)
     self.each_step()
+
+class ConditionalVAETraining(AbstractVAETraining):
+  def __init__(self, encoder, decoder, prior, data, **kwargs):
+    self.prior = ...
+    self.encoder = ...
+    self.decoder = ...
+    super(ConditionalVAETraining, self).__init__({
+      "encoder": encoder,
+      "decoder": decoder,
+      "prior": prior
+    }, data, **kwargs)
+
+  def loss(self, parameters, prior_parameters, sample, reconstruction, target):
+    loss_val, (ce, kld) = vl.conditional_vae_loss(
+      parameters, prior_parameters, reconstruction, target,
+      keep_components=True
+    )
+
+    self.current_losses["cross-entropy"] = float(ce)
+    self.current_losses["kullback-leibler"] = float(kld)
+
+    return loss_val
+
+  def sample(self, mean, logvar):
+    distribution = Normal(mean, torch.exp(0.5 * logvar))
+    sample = distribution.rsample()
+    return sample
+
+  def run_networks(self, data):
+    target, condition = data
+    _, mean, logvar = self.encoder(target, condition)
+    _, r_mean, r_logvar = self.prior(condition)
+    sample = self.sample(mean, logvar)
+    reconstruction = self.decoder(sample, condition)
+    return (mean, logvar), (r_mean, r_logvar), sample, reconstruction, target
+
+class ConditionalVAESkipTraining(ConditionalVAETraining):
+  def run_networks(self, data):
+    target, condition = data
+    _, mean, logvar = self.encoder(target, condition)
+    _, r_mean, r_logvar, skip = self.prior(condition)
+    sample = self.sample(mean, logvar)
+    reconstruction = self.decoder(sample, condition, skip)
+    return (mean, logvar), (r_mean, r_logvar), sample, reconstruction, target
+
+class MDNPriorConditionalVAETraining(ConditionalVAETraining):
+  def loss(self, parameters, prior_parameters, sample, reconstruction, target):
+    vae_loss = vl.vae_loss(parameters, reconstruction, target)
+    mdn_loss = vl.mdn_loss(prior_parameters, sample)
+
+    self.current_losses['vae'] = float(vae_loss)
+    self.current_losses['mdn'] = float(mdn_loss)
+
+    return vae_loss + mdn_loss
+
+class IndependentConditionalVAETraining(VAETraining):
+  def __init__(self, encoder, decoder, data, **kwargs):
+    super(IndependentConditionalVAETraining, self).__init__({
+      "encoder": encoder,
+      "decoder": decoder
+    }, data, **kwargs)
+
+  def run_networks(self, data):
+    target, condition = data
+    _, mean, logvar = self.encoder(target, condition)
+    sample = self.sample(mean, logvar)
+    reconstruction = self.decoder(sample, condition)
+    return (mean, logvar), reconstruction, target
+
+class ConditionalRecurrentCanvasVAETraining(ConditionalVAETraining):
+  def __init__(self, encoder, decoder, prior, data,
+               iterations=10, has_state=None, **kwargs):
+    super(ConditionalRecurrentCanvasVAETraining, self).__init__(
+      encoder, decoder, prior, data, **kwargs
+    )
+    if has_state is None:
+      has_state = {
+        "encoder": True,
+        "decoder": True,
+        "prior": False
+      }
+    self.has_state = has_state
+    self.iterations = iterations
+
+  def loss(self, parameters, prior_parameters, approximation, target):
+    loss_val = func.binary_cross_entropy_with_logits(
+      approximation, target, reduction="sum"
+    ) / target.size(0)
+    for p, p_r in zip(parameters, prior_parameters):
+      loss_val += vl.normal_kl_loss(*p, *p_r)
+    return loss_val
+
+  def run_networks(self, data):
+    target, condition = data
+    approximation = target
+    if self.has_state["encoder"]:
+      encoder_state = self.encoder.initial_state()
+    if self.has_state["decoder"]:
+      decoder_state = self.decoder.initial_state()
+    if self.has_state["prior"]:
+      prior_state = self.prior.initial_state()
+
+    parameters = []
+    prior_parameters = []
+
+    for _ in range(self.iterations):
+      if self.has_state["encoder"]:
+        _, mean, logvar, encoder_state = self.encoder(approximation, condition, encoder_state)
+      else:
+        _, mean, logvar = self.encoder(approximation, condition)
+
+      if self.has_state["prior"]:
+        _, r_mean, r_logvar, prior_state = self.prior(approximation, condition, prior_state)
+      else:
+        _, r_mean, r_logvar = self.prior(approximation, condition)
+
+      parameters.append((mean, logvar))
+      prior_parameters.append((r_mean, r_logvar))
+
+      sample = self.sample(mean, logvar)
+
+      if self.has_state["decoder"]:
+        reconstruction, decoder_state = self.decoder(sample, condition, decoder_state)
+      else:
+        reconstruction = self.decoder(approximation, condition)
+
+      approximation = reconstruction + approximation
+
+    return parameters, prior_parameters, approximation, target
+
+class IndependentConditionalRecurrentCanvasVAETraining(IndependentConditionalVAETraining):
+  def __init__(self, encoder, decoder, data,
+               iterations=10, has_state=None, **kwargs):
+    super(IndependentConditionalRecurrentCanvasVAETraining, self).__init__(
+      encoder, decoder, data, **kwargs
+    )
+    if has_state is None:
+      has_state = {
+        "encoder": True,
+        "decoder": True
+      }
+    self.has_state = has_state
+    self.iterations = iterations
+
+  def loss(self, parameters, approximation, target):
+    loss_val = func.binary_cross_entropy_with_logits(
+      approximation, target, reduction="sum"
+    ) / target.size(0)
+    for mean, logvar in parameters:
+      loss_val += vl.normal_kl_loss(mean, logvar)
+    return loss_val
+
+  def run_networks(self, data):
+    target, condition = data
+    approximation = target
+    if self.has_state["encoder"]:
+      encoder_state = self.encoder.initial_state()
+    if self.has_state["decoder"]:
+      decoder_state = self.decoder.initial_state()
+
+    parameters = []
+    
+    for _ in range(self.iterations):
+      if self.has_state["encoder"]:
+        _, mean, logvar, encoder_state = self.encoder(approximation, condition, encoder_state)
+      else:
+        _, mean, logvar = self.encoder(approximation, condition)
+      parameters.append((mean, logvar))
+
+      sample = self.sample(mean, logvar)
+
+      if self.has_state["decoder"]:
+        reconstruction, decoder_state = self.decoder(sample, condition, decoder_state)
+      else:
+        reconstruction = self.decoder(approximation, condition)
+
+      approximation = reconstruction + approximation
+
+    return parameters, approximation, target
