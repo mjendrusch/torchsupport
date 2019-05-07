@@ -239,44 +239,6 @@ class FactorVAETraining(JointVAETraining):
       lr=1e-4
     )
 
-  def vae_loss(self, mean, logvar, reconstruction, target):
-    mse = func.binary_cross_entropy(reconstruction, target, reduction="sum")
-    mse /= target.size(0)
-    kld = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp(), dim=0)
-    kld = kld.sum()
-
-    self.writer.add_scalar("mse loss", float(mse), self.step_id)
-    self.writer.add_scalar("kld loss", float(kld), self.step_id)
-
-    return mse + kld
-
-  def discriminator_factor_loss(self, sample_batch, shuffle_batch):
-    shuffle_indices = [
-      shuffle_batch[torch.randperm(shuffle_batch.size(0)), idx:idx+1]
-      for idx in range(shuffle_batch.size(-1))
-    ]
-    shuffle_batch = torch.cat(shuffle_indices, dim=1)
-
-    sample_prediction = self.discriminator(sample_batch)
-    shuffle_prediction = self.discriminator(shuffle_batch)
-
-    softmax_sample = torch.softmax(sample_prediction, dim=1)
-    softmax_shuffle = torch.softmax(shuffle_prediction, dim=1)
-
-    discriminator_loss = \
-      -0.5 * (torch.log(softmax_sample[:, 0]).mean() \
-      + torch.log(softmax_shuffle[:, 1]).mean())
-
-    self.writer.add_scalar("discriminator loss", discriminator_loss, self.step_id)
-    return discriminator_loss
-
-  def encoder_factor_loss(self, sample_batch):
-    sample_prediction = self.discriminator(sample_batch)
-    encoder_loss = (sample_prediction[:, 0] - sample_prediction[:, 1]).mean()
-    self.writer.add_scalar("factor loss", encoder_loss, self.step_id)
-
-    return encoder_loss
-
   def sample(self, mean, logvar):
     distribution = Normal(mean, torch.exp(0.5 * logvar))
     sample = distribution.rsample()
