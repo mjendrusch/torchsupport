@@ -1,5 +1,4 @@
 
-import random
 import numpy as np
 import torch
 from torch import nn
@@ -7,7 +6,6 @@ from torch.nn import functional as func
 from torch.utils.data import DataLoader
 from torch.distributions import Normal, RelaxedOneHotCategorical
 
-from matplotlib import pyplot as plt
 from tensorboardX import SummaryWriter
 
 from torchsupport.training.training import Training
@@ -309,6 +307,42 @@ class ConditionalVAETraining(AbstractVAETraining):
     reconstruction = self.decoder(sample, condition)
     return (mean, logvar), (r_mean, r_logvar), sample, reconstruction, target
 
+class GSSNConditionalVAETraining(ConditionalVAETraining):
+  def __init__(self, encoder, decoder, prior, data,
+               gssn=0.5, **kwargs):
+    self.gssn = gssn
+    super(GSSNConditionalVAETraining, self).__init__(
+      encoder, decoder, prior, data, **kwargs
+    )
+
+  def loss(self, parameters, prior_parameters, sample, 
+           reconstruction, r_reconstruction, target):
+    loss_val = super().loss(
+      parameters, prior_parameters, sample, reconstruction, target
+    )
+    gssn_val = func.binary_cross_entropy_with_logits(
+      r_reconstruction, target, reduction='sum'
+    ) / target.size(0)
+
+    self.current_losses["gssn-cross-entropy"] = float(gssn_val)
+
+    loss_val = (1 - self.gssn) * loss_val + self.gssn * gssn_val
+
+    return loss_val
+
+  def run_networks(self, data):
+    target, condition = data
+    _, mean, logvar = self.encoder(target, condition)
+    _, r_mean, r_logvar = self.prior(condition)
+    sample = self.sample(mean, logvar)
+    r_sample = self.sample(r_mean, r_logvar)
+    reconstruction = self.decoder(sample, condition)
+    r_reconstruction = self.decoder(r_sample, condition)
+    return (
+      (mean, logvar), (r_mean, r_logvar),
+      sample, reconstruction, r_reconstruction, target
+    )
+
 class ConditionalVAESkipTraining(ConditionalVAETraining):
   def run_networks(self, data):
     target, condition = data
@@ -317,6 +351,20 @@ class ConditionalVAESkipTraining(ConditionalVAETraining):
     sample = self.sample(mean, logvar)
     reconstruction = self.decoder(sample, condition, skip)
     return (mean, logvar), (r_mean, r_logvar), sample, reconstruction, target
+
+class GSSNConditionalVAESkipTraining(GSSNConditionalVAETraining):
+  def run_networks(self, data):
+    target, condition = data
+    _, mean, logvar = self.encoder(target, condition)
+    _, r_mean, r_logvar, skip = self.prior(condition)
+    sample = self.sample(mean, logvar)
+    r_sample = self.sample(r_mean, r_logvar)
+    reconstruction = self.decoder(sample, condition, skip)
+    r_reconstruction = self.decoder(r_sample, condition, skip)
+    return (
+      (mean, logvar), (r_mean, r_logvar),
+      sample, reconstruction, r_reconstruction, target
+    )
 
 class MDNPriorConditionalVAETraining(ConditionalVAETraining):
   def loss(self, parameters, prior_parameters, sample, reconstruction, target):
