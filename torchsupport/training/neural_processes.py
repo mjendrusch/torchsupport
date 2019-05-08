@@ -1,17 +1,6 @@
-import random
-import numpy as np
-import torch
-from torch import nn
 from torch.nn import functional as func
-from torch.utils.data import DataLoader
-from torch.distributions import Normal, RelaxedOneHotCategorical
-
-from matplotlib import pyplot as plt
-from tensorboardX import SummaryWriter
-
 from torchsupport.training.vae import VAETraining
 import torchsupport.modules.losses.vae as vl
-from torchsupport.data.io import netwrite
 
 class NPTraining(VAETraining):
   def __init__(self, encoder, decoder, aggregator, data,

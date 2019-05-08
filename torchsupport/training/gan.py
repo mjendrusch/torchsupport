@@ -25,6 +25,25 @@ class AbstractGANTraining(Training):
                device="cpu",
                network_name="network",
                verbose=False):
+    """Generic training setup for generative adversarial networks.
+    
+    Args:
+      generators (list): networks used in the generation step.
+      discriminators (list): networks used in the discriminator step.
+      data (Dataset): provider of training data.
+      optimizer (Optimizer): optimizer class for gradient descent.
+      generator_optimizer_kwargs (dict): keyword arguments for the
+        optimizer used in generator training.
+      discriminator_optimizer_kwargs (dict): keyword arguments for the
+        optimizer used in discriminator training.
+      n_critic (int): number of critic training iterations per step.
+      n_actor (int): number of actor training iterations per step.
+      max_epochs (int): maximum number of training epochs.
+      batch_size (int): number of training samples per batch.
+      device (string): device to use for training.
+      network_name (string): identifier of the network architecture.
+      verbose (bool): log all events and losses?
+    """
     super(AbstractGANTraining, self).__init__()
 
     self.verbose = verbose
@@ -97,6 +116,11 @@ class AbstractGANTraining(Training):
     raise NotImplementedError("Abstract")
 
   def discriminator_step(self, data):
+    """Performs a single step of discriminator training.
+
+    Args:
+      data: data points used for training.
+    """
     self.discriminator_optimizer.zero_grad()
     if isinstance(data, (list, tuple)):
       data = [
@@ -123,6 +147,11 @@ class AbstractGANTraining(Training):
     self.discriminator_optimizer.step()
 
   def generator_step(self, data):
+    """Performs a single step of generator training.
+
+    Args:
+      data: data points used for training.
+    """
     self.generator_optimizer.zero_grad()
     if isinstance(data, (list, tuple)):
       data = [
@@ -149,6 +178,11 @@ class AbstractGANTraining(Training):
     self.generator_optimizer.step()
 
   def step(self, data):
+    """Performs a single step of GAN training, comprised of
+    one or more steps of discriminator and generator training.
+
+    Args:
+      data: data points used for training."""
     for _ in range(self.n_critic):
       self.discriminator_step(data)
     for _ in range(self.n_actor):
@@ -156,6 +190,7 @@ class AbstractGANTraining(Training):
     self.each_step()
 
   def checkpoint(self):
+    """Performs a checkpoint of all generators and discriminators."""
     for name in self.generator_names:
       netwrite(
         getattr(self, name),
@@ -169,6 +204,7 @@ class AbstractGANTraining(Training):
     self.each_checkpoint()
 
   def train(self):
+    """Trains a GAN until the maximum number of epochs is reached."""
     for epoch_id in range(self.max_epochs):
       self.epoch_id = epoch_id
       self.train_data = None
@@ -194,7 +230,18 @@ class AbstractGANTraining(Training):
     return generators, discriminators
 
 class GANTraining(AbstractGANTraining):
+  """Standard GAN training setup."""
   def __init__(self, generator, discriminator, data, **kwargs):
+    """Standard setup of a generator and discriminator
+    neural network playing a minimax game towards minimization
+    of the Jensen-Shannon entropy.
+
+    Args:
+      generator (nn.Module): generator neural network.
+      discriminator (nn.Module): discriminator neural network.
+      data (Dataset): dataset providing real data.
+      kwargs (dict): keyword arguments for generic GAN training procedures.
+    """
     self.generator = ...
     self.discriminator = ...
     super(GANTraining, self).__init__(
@@ -243,7 +290,20 @@ def _mix_on_path(real, fake):
   return real * sample + fake * (1 - sample)
 
 class WGANTraining(GANTraining):
+  """Wasserstein-GAN (Arjovsky et al. 2017) training setup
+  with gradient penalty (Gulrajani et al. 2017) for more
+  stable training."""
   def __init__(self, generator, discriminator, data, penalty=10, **kwargs):
+    """Wasserstein-GAN training setup with gradient penalty,
+    allowing for more stable training compared to standard GAN.
+    
+    Args:
+      generator (nn.Module): generator neural network.
+      discriminator (nn.Module): discriminator neural network.
+      data (Dataset): dataset providing real data.
+      penalty (float): coefficient of the gradient penalty.
+      kwargs (dict): keyword arguments for generic GAN training procedures.
+    """
     super(WGANTraining, self).__init__(generator, discriminator, data, **kwargs)
     self.penalty = penalty
 
@@ -266,7 +326,20 @@ class WGANTraining(GANTraining):
     return -self.discriminator(generated)
 
 class GPGANTraining(GANTraining):
+  """GAN training setup with zero-centered gradient penalty
+  (Thanh-Tung et al. 2019) for more stable training of standard GAN."""
   def __init__(self, generator, discriminator, data, penalty=10, **kwargs):
+    """GAN training setup with zero-centered gradient penalty,
+    allowing for more stable training compared to standard GAN,
+    without having to resort to using Wasserstein-1 distance.
+    
+    Args:
+      generator (nn.Module): generator neural network.
+      discriminator (nn.Module): discriminator neural network.
+      data (Dataset): dataset providing real data.
+      penalty (float): coefficient of the gradient penalty.
+      kwargs (dict): keyword arguments for generic GAN training procedures.
+    """
     super(GPGANTraining, self).__init__(generator, discriminator, data, **kwargs)
     self.penalty = penalty
 

@@ -22,6 +22,20 @@ class AbstractVAETraining(Training):
                device="cpu",
                network_name="network",
                verbose=False):
+    """Generic training setup for variational autoencoders.
+    
+    Args:
+      networks (list): networks used in the training step.
+      data (Dataset): provider of training data.
+      optimizer (Optimizer): optimizer class for gradient descent.
+      optimizer_kwargs (dict): keyword arguments for the
+        optimizer used in network training.
+      max_epochs (int): maximum number of training epochs.
+      batch_size (int): number of training samples per batch.
+      device (string): device to use for training.
+      network_name (string): identifier of the network architecture.
+      verbose (bool): log all events and losses?
+    """
     super(AbstractVAETraining, self).__init__()
 
     self.verbose = verbose
@@ -69,6 +83,10 @@ class AbstractVAETraining(Training):
     raise NotImplementedError("Abstract")
 
   def step(self, data):
+    """Performs a single step of VAE training.
+
+    Args:
+      data: data points used for training."""
     self.optimizer.zero_grad()
     if isinstance(data, (list, tuple)):
       data = [
@@ -97,6 +115,7 @@ class AbstractVAETraining(Training):
     self.each_step()
 
   def checkpoint(self):
+    """Performs a checkpoint for all encoders and decoders."""
     for name in self.network_names:
       netwrite(
         getattr(self, name),
@@ -105,6 +124,7 @@ class AbstractVAETraining(Training):
     self.each_checkpoint()
 
   def train(self):
+    """Trains a VAE until the maximum number of epochs is reached."""
     for epoch_id in range(self.max_epochs):
       self.epoch_id = epoch_id
       self.train_data = None
@@ -125,7 +145,19 @@ class AbstractVAETraining(Training):
     return netlist
 
 class VAETraining(AbstractVAETraining):
+  """Standard VAE training setup."""
   def __init__(self, encoder, decoder, data, **kwargs):
+    """Standard VAE training setup, training a pair of
+    encoder and decoder to maximize the evidence lower
+    bound.
+
+    Args:
+      encoder (nn.Module): encoder giving the variational posterior.
+      decoder (nn.Module): decoder generating data from latent
+        representations.
+      data (Dataset): dataset providing training data.
+      kwargs (dict): keyword arguments for generic VAE training.
+    """
     self.encoder = ...
     self.decoder = ...
     super(VAETraining, self).__init__({
@@ -154,10 +186,25 @@ class VAETraining(AbstractVAETraining):
     return mean, logvar, reconstruction, data
 
 class JointVAETraining(AbstractVAETraining):
+  """Joint training of continuous and categorical latent variables."""
   def __init__(self, encoder, decoder, data,
                n_classes=3, ctarget=50, dtarget=5,
                gamma=1000, temperature=0.67,
                **kwargs):
+    """Joint training of continuous and categorical latent variables.
+
+    Args:
+      encoder (nn.Module): encoder neural network.
+      decoder (nn.Module): decoder neural network.
+      data (Dataset): dataset providing training data.
+      c_target (float): target KL-divergence for continuous latent
+        variables in nats.
+      d_target (float): target KL-divergence for discrete latent
+        variables in nats.
+      gamma (float): scaling factor for KL-divergence constraints.
+      temperature (float): temperature parameter of the concrete distribution.
+      kwargs (dict): keyword arguments for generic VAE training.
+    """
     self.encoder = ...
     self.decoder = ...
     super(JointVAETraining, self).__init__({
@@ -207,6 +254,7 @@ class JointVAETraining(AbstractVAETraining):
     return (mean, logvar), probabilities, reconstruction, data
 
 class FactorVAETraining(JointVAETraining):
+  """Training setup for FactorVAE - VAE with disentangled latent space."""
   def __init__(self, encoder, decoder, discriminator, data,
                optimizer=torch.optim.Adam,
                loss=nn.CrossEntropyLoss(),
@@ -217,6 +265,22 @@ class FactorVAETraining(JointVAETraining):
                ctarget=50,
                dtarget=5,
                gamma=1000):
+    """Training setup for FactorVAE - VAE with disentangled latent space.
+
+    Args:
+        encoder (nn.Module): encoder neural network.
+        decoder (nn.Module): decoder neural network.
+        discriminator (nn.Module): auxiliary discriminator
+          for approximation of latent space total correlation.
+        data (Dataset): dataset providing training data.
+        c_target (float): target KL-divergence for continuous latent
+          variables in nats.
+        d_target (float): target KL-divergence for discrete latent
+          variables in nats.
+        gamma (float): scaling factor for KL-divergence constraints.
+        temperature (float): temperature parameter of the concrete distribution.
+        kwargs (dict): keyword arguments for generic VAE training.
+    """
     super(FactorVAETraining, self).__init__(
       encoder, decoder, data,
       optimizer=optimizer,
