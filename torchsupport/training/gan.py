@@ -26,7 +26,7 @@ class AbstractGANTraining(Training):
                network_name="network",
                verbose=False):
     """Generic training setup for generative adversarial networks.
-    
+
     Args:
       generators (list): networks used in the generation step.
       discriminators (list): networks used in the discriminator step.
@@ -296,7 +296,7 @@ class WGANTraining(GANTraining):
   def __init__(self, generator, discriminator, data, penalty=10, **kwargs):
     """Wasserstein-GAN training setup with gradient penalty,
     allowing for more stable training compared to standard GAN.
-    
+
     Args:
       generator (nn.Module): generator neural network.
       discriminator (nn.Module): discriminator neural network.
@@ -332,7 +332,7 @@ class GPGANTraining(GANTraining):
     """GAN training setup with zero-centered gradient penalty,
     allowing for more stable training compared to standard GAN,
     without having to resort to using Wasserstein-1 distance.
-    
+
     Args:
       generator (nn.Module): generator neural network.
       discriminator (nn.Module): discriminator neural network.

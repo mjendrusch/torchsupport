@@ -23,7 +23,7 @@ class AbstractVAETraining(Training):
                network_name="network",
                verbose=False):
     """Generic training setup for variational autoencoders.
-    
+
     Args:
       networks (list): networks used in the training step.
       data (Dataset): provider of training data.
@@ -41,19 +41,19 @@ class AbstractVAETraining(Training):
     self.verbose = verbose
     self.checkpoint_path = network_name
 
-    netlist = []
-    self.network_names = []
-    for network in networks:
-      self.network_names.append(network)
-      network_object = networks[network]
-      setattr(self, network, network_object)
-      netlist.extend(list(network_object.parameters()))
-
     self.data = data
     self.train_data = None
     self.max_epochs = max_epochs
     self.batch_size = batch_size
     self.device = device
+
+    netlist = []
+    self.network_names = []
+    for network in networks:
+      self.network_names.append(network)
+      network_object = networks[network].to(self.device)
+      setattr(self, network, network_object)
+      netlist.extend(list(network_object.parameters()))
 
     self.current_losses = {}
     self.network_name = network_name
@@ -106,7 +106,7 @@ class AbstractVAETraining(Training):
 
     if self.verbose:
       for loss_name in self.current_losses:
-        loss_float = self.current_losses[loss_float]
+        loss_float = self.current_losses[loss_name]
         self.writer.add_scalar(f"{loss_name} loss", loss_float, self.step_id)
     self.writer.add_scalar("total loss", float(loss_val), self.step_id)
 
@@ -132,7 +132,7 @@ class AbstractVAETraining(Training):
         self.data, batch_size=self.batch_size, num_workers=8,
         shuffle=True
       )
-      for data, *_ in self.train_data:
+      for data in self.train_data:
         self.step(data)
         self.step_id += 1
       self.checkpoint()
@@ -442,17 +442,16 @@ class MDNPriorConditionalVAETraining(ConditionalVAETraining):
 
 class IndependentConditionalVAETraining(VAETraining):
   def __init__(self, encoder, decoder, data, **kwargs):
-    super(IndependentConditionalVAETraining, self).__init__({
-      "encoder": encoder,
-      "decoder": decoder
-    }, data, **kwargs)
+    super(IndependentConditionalVAETraining, self).__init__(
+      encoder, decoder, data, **kwargs
+    )
 
   def run_networks(self, data):
     target, condition = data
     _, mean, logvar = self.encoder(target, condition)
     sample = self.sample(mean, logvar)
     reconstruction = self.decoder(sample, condition)
-    return (mean, logvar), reconstruction, target
+    return mean, logvar, reconstruction, target
 
 class ConditionalRecurrentCanvasVAETraining(ConditionalVAETraining):
   def __init__(self, encoder, decoder, prior, data,
@@ -546,7 +545,7 @@ class IndependentConditionalRecurrentCanvasVAETraining(IndependentConditionalVAE
       decoder_state = self.decoder.initial_state()
 
     parameters = []
-    
+
     for _ in range(self.iterations):
       if self.has_state["encoder"]:
         _, mean, logvar, encoder_state = self.encoder(approximation, condition, encoder_state)

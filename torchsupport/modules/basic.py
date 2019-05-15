@@ -64,3 +64,45 @@ class MLP(nn.Module):
       for block in self.blocks:
         out = self.activation(block(out))
     return self.postprocess(out)
+
+def one_hot_encode(data, code, numeric=False):
+  """Encodes a sequence in one-hot format, given a code.
+
+  Args:
+    data (Sequence): sequence of non-encoded data points.
+    code (Sequence): sequence of codes for one-hot encoding.
+
+  Returns:
+    FloatTensor containing a one-hot encoding of the input data.
+  """
+  try:
+    coded = torch.tensor(list(map(
+      code.index, data
+    )), dtype=torch.int64)
+  except:
+    print(data)
+    exit()
+  if numeric:
+    result = coded
+  else:
+    result = torch.zeros(len(code), len(data), dtype=torch.float)
+    for idx, point in enumerate(coded):
+      result[point, idx] = 1
+  return result
+
+class OneHotEncoder(nn.Module):
+  """Basic sequence encoder into the one-hot format."""
+  def __init__(self, code, numeric=False):
+    """Basic sequence encoder into the one-hot format.
+
+    Args:
+      code (Sequence): sequence giving the one-hot encoding.
+      numeric (bool): return LongTensor instead?
+    """
+    super(OneHotEncoder, self).__init__()
+    self.code = code
+    self.numeric = numeric
+
+  def forward(self, sequence):
+    return one_hot_encode(sequence, self.code,
+                          numeric=self.numeric)
