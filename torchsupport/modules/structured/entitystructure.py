@@ -5,7 +5,24 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as func
 
-from torchsupport.modules.structured.connected_entities import ConnectionStructure, AdjacencyStructure
+from torchsupport.modules.structured.connected_entities import (
+  ConnectionStructure, AdjacencyStructure, SubgraphStructure
+)
+
+def to_graph(batched_tensor):
+  squashed_tensor = batched_tensor.view(
+    batched_tensor.size(0), batched_tensor.size(1), -1
+  )
+  batch_size = squashed_tensor.size(0)
+  length = squashed_tensor.size(2)
+
+  graph_tensor = batched_tensor.view(-1, batched_tensor.size(1))
+  subgraph_structure = SubgraphStructure([
+    range(idx * length, (idx + 1) * length)
+    for idx in range(batch_size)
+  ])
+
+  return graph_tensor, subgraph_structure
 
 def random_substructure(structure, num_nodes, depth):
   initial_nodes = random.sample(
@@ -200,7 +217,7 @@ class DistanceStructure(AdjacencyStructure):
           entity_tensor, subgraph_structure,
           node, radius, metric
         )
-        for node in range(len(entity_tensor.current_view))
+        for node in range(len(entity_tensor))
       ]
     )
 
@@ -209,7 +226,7 @@ class DistanceStructure(AdjacencyStructure):
     accept_nodes = []
     graph_slice = subgraph_structure.membership[entity]
     distances = metric(
-      entity_tensor.current_view[graph_slice] - entity_tensor.current_view[entity]
+      entity_tensor[graph_slice] - entity_tensor[entity]
     )
     for node, distance in enumerate(distances, graph_slice.start):
       if distance < radius:
