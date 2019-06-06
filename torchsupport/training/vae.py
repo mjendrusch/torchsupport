@@ -1,4 +1,4 @@
-
+from abc import ABC, abstractmethod
 import numpy as np
 import torch
 from torch import nn
@@ -14,7 +14,7 @@ from torchsupport.data.io import netwrite
 
 class AbstractVAETraining(Training):
   """Abstract base class for VAE training."""
-  def __init__(self, networks, data,
+  def __init__(self, networks, data, valid=None,
                optimizer=torch.optim.Adam,
                optimizer_kwargs=None,
                max_epochs=50,
@@ -42,7 +42,9 @@ class AbstractVAETraining(Training):
     self.checkpoint_path = network_name
 
     self.data = data
+    self.valid = valid
     self.train_data = None
+    self.valid_data = None
     self.max_epochs = max_epochs
     self.batch_size = batch_size
     self.device = device
@@ -114,6 +116,32 @@ class AbstractVAETraining(Training):
     self.optimizer.step()
     self.each_step()
 
+    return float(loss_val)
+
+  def valid_step(self, data):
+    """Performs a single step of VAE validation.
+
+    Args:
+      data: data points used for validation."""
+    with torch.no_grad():
+      if isinstance(data, (list, tuple)):
+        data = [
+          point.to(self.device)
+          for point in data
+        ]
+      elif isinstance(data, dict):
+        data = {
+          key : data[key].to(self.device)
+          for key in data
+        }
+      else:
+        data = data.to(self.device)
+      args = self.run_networks(data)
+
+      loss_val = self.loss(*args)
+
+    return float(loss_val)
+
   def checkpoint(self):
     """Performs a checkpoint for all encoders and decoders."""
     for name in self.network_names:
@@ -135,6 +163,139 @@ class AbstractVAETraining(Training):
       for data in self.train_data:
         self.step(data)
         self.step_id += 1
+      self.checkpoint()
+      if self.valid is not None:
+        self.valid_data = DataLoader(
+          self.valid, batch_size=self.batch_size, num_workers=8,
+          shuffle=True
+        )
+        loss = 0.0
+        for data in self.valid_data:
+          loss += self.valid_step(data)
+        loss /= len(self.valid)
+        self.writer.add_scalar("valid loss", loss, self.step_id)
+
+    netlist = [
+      getattr(self, name)
+      for name in self.network_names
+    ]
+
+    return netlist
+
+class LaggingInference(ABC):
+  """Mixin replacing the training method of a VAE training
+  approach with the one detailed in "Lagging Inference Networks
+  and Posterior Collapse in Variational Autoencoders"."""
+  data = ...
+  batch_size = ...
+  encoder = ...
+  decoder = ...
+  device = ...
+  max_epochs = ...
+  valid = ...
+  network_names = ...
+
+  @abstractmethod
+  def step(self, data):
+    pass
+
+  @abstractmethod
+  def sample(self, *inputs):
+    pass
+
+  @abstractmethod
+  def checkpoint(self):
+    pass
+
+  def aggressive_update(self, data):
+    inner_data = DataLoader(
+      self.data, batch_size=self.batch_size, num_workers=8,
+      shuffle=True
+    )
+    for parameter in self.decoder:
+      parameter.requires_grad = False
+    last_ten = [None] * 10
+    for idx, data_p in enumerate(inner_data):
+      loss = self.step(data_p)
+      last_ten[idx % 10] = loss
+      if last_ten[-1] is not None and last_ten[-1] >= last_ten[0]:
+        break
+    for parameter in self.decoder:
+      parameter.requires_grad = True
+    for parameter in self.encoder:
+      parameter.requires_grad = False
+    self.step(data)
+    for parameter in self.encoder:
+      parameter.requires_grad = True
+
+  def log_sum_exp(self, value, dim=None, keepdim=False):
+    if dim is not None:
+      m, _ = torch.max(value, dim=dim, keepdim=True)
+      value0 = value - m
+      if keepdim is False:
+        m = m.squeeze(dim)
+      return m + torch.log(torch.sum(torch.exp(value0), dim=dim, keepdim=keepdim))
+    else:
+      m = torch.max(value)
+      sum_exp = torch.sum(torch.exp(value - m))
+    return m + torch.log(sum_exp)
+
+  def compute_mi(self, x):
+    """Approximate the mutual information between x and z
+    I(x, z) = E_xE_{q(z|x)}log(q(z|x)) - E_xE_{q(z|x)}log(q(z))
+    Returns: Float
+    """
+    if isinstance(data, (list, tuple)):
+      data = [
+        point.to(self.device)
+        for point in data
+      ]
+    elif isinstance(data, dict):
+      data = {
+        key : data[key].to(self.device)
+        for key in data
+      }
+    else:
+      data = data.to(self.device)
+
+    with torch.no_grad():
+      mu, logvar = self.encoder.forward(x)
+      x_batch, nz = mu.size()
+      neg_entropy = (-0.5 * nz * np.log(2 * np.pi) - 0.5 * (1 + logvar).sum(-1)).mean()
+
+      z_samples = self.sample(mu, logvar)
+      z_samples = z_samples[:, None, :]
+      mu, logvar = mu[None], logvar[None]
+      var = logvar.exp()
+
+      dev = z_samples - mu
+      log_density = -0.5 * ((dev ** 2) / var).sum(dim=-1) - \
+          0.5 * (nz * np.log(2 * np.pi) + logvar.sum(-1))
+      log_qz = self.log_sum_exp(log_density, dim=1) - torch.log(x_batch)
+
+      return (neg_entropy - log_qz.mean(-1)).item()
+
+  def train(self):
+    aggressive = True
+    old_mi = 0
+    new_mi = 0
+    self.step_id = 0
+    for epoch_id in range(self.max_epochs):
+      self.epoch_id = epoch_id
+      self.train_data = None
+      self.train_data = DataLoader(
+        self.data, batch_size=self.batch_size, num_workers=8,
+        shuffle=True
+      )
+      for data in self.train_data:
+        if aggressive:
+          self.aggressive_update(data)
+        else:
+          self.step(data)
+        self.step_id += 1
+      valid_data = DataLoader(self.valid, batch_size=self.batch_size, shuffle=True)
+      new_mi = self.compute_mi(next(iter(valid_data)))
+      aggressive = new_mi > old_mi
       self.checkpoint()
 
     netlist = [
