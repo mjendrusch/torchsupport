@@ -4,3 +4,5 @@ build
 dist
 scratch
 .vscode
+XDG_CACHE_HOME
+*.pyi
