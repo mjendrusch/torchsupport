@@ -40,11 +40,38 @@ def gumbel_kl_norm_loss(category, c=0.5,
     return result, (kld,)
   return result
 
+def reconstruction_bce(reconstruction, target):
+  result = func.binary_cross_entropy_with_logits(
+    reconstruction, target,
+    reduction='sum'
+  ) / target.size(0)
+  return result
+
+def reconstruction_ce(reconstruction, target):
+  result = func.cross_entropy(
+    reconstruction, target.argmax(dim=1),
+    reduction='sum'
+  ) / target.size(0)
+  return result
+
 def vae_loss(parameters, reconstruction, target,
              keep_components=False):
   mean, logvar = parameters
   ce = func.binary_cross_entropy_with_logits(
     reconstruction, target,
+    reduction='sum'
+  ) / target.size(0)
+  kld = normal_kl_loss(mean, logvar)
+  result = ce + kld
+  if keep_components:
+    return result, (ce, kld)
+  return result
+
+def vae_loss_category(parameters, reconstruction, target,
+                      keep_components=False):
+  mean, logvar = parameters
+  ce = func.cross_entropy(
+    reconstruction, target.argmax(dim=1),
     reduction='sum'
   ) / target.size(0)
   kld = normal_kl_loss(mean, logvar)
@@ -139,7 +166,7 @@ def factor_vae_loss(normal_parameters, tc_parameters,
   vae, (ce, kld) = vae_loss(
     normal_parameters, reconstruction, target
   )
-  tc_loss = tc_discriminator_loss(*tc_parameters)
+  tc_loss = tc_encoder_loss(*tc_parameters)
   result = vae + gamma * tc_loss
   if keep_components:
     return result, (ce, kld, tc_loss)

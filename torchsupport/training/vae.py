@@ -72,6 +72,14 @@ class AbstractVAETraining(Training):
       **optimizer_kwargs
     )
 
+  def divergence_loss(self, *args):
+    """Abstract method. Computes the divergence loss."""
+    raise NotImplementedError("Abstract")
+
+  def reconstruction_loss(self, *args):
+    """Abstract method. Computes the reconstruction loss."""
+    raise NotImplementedError("Abstract")
+
   def loss(self, *args):
     """Abstract method. Computes the training loss."""
     raise NotImplementedError("Abstract")
@@ -326,11 +334,16 @@ class VAETraining(AbstractVAETraining):
       "decoder": decoder
     }, data, **kwargs)
 
+  def reconstruction_loss(self, reconstruction, target):
+    return vl.reconstruction_bce(reconstruction, target)
+
+  def divergence_loss(self, mean, logvar):
+    return vl.normal_kl_loss(mean, logvar)
+
   def loss(self, mean, logvar, reconstruction, target):
-    loss_val, (ce, kld) = vl.vae_loss(
-      (mean, logvar), reconstruction, target,
-      keep_components=True
-    )
+    ce = self.reconstruction_loss(reconstruction, target)
+    kld = self.divergence_loss(mean, logvar)
+    loss_val = ce + kld
     self.current_losses["cross-entropy"] = float(ce)
     self.current_losses["kullback-leibler"] = float(kld)
     return loss_val
@@ -378,21 +391,27 @@ class JointVAETraining(AbstractVAETraining):
     self.dtarget = dtarget
     self.gamma = gamma
 
-  def loss(self, normal_parameters, categorical_parameters,
-           reconstruction, target):
-    loss_val, (ce, n_n, n_c) = vl.joint_vae_loss(
-      normal_parameters,
-      categorical_parameters,
-      reconstruction, target,
-      beta_normal=self.gamma,
-      beta_categorical=self.gamma,
-      c_normal=self.step_id * (self.ctarget) * 0.00001,
-      c_categorical=min(
+  def reconstruction_loss(self, reconstruction, target):
+    return vl.reconstruction_bce(reconstruction, target)
+
+  def divergence_loss(self, normal_parameters, categorical_parameters):
+    normal = self.gamma * vl.normal_kl_norm_loss(
+      *normal_parameters,
+      c=self.step_id * (self.ctarget) * 0.00001
+    )
+    categorical = self.gamma * vl.gumbel_kl_norm_loss(
+      categorical_parameters, c=min(
         self.step_id * (self.dtarget) * 0.00001,
         np.log(categorical_parameters.size(-1))
-      ),
-      keep_components=True
+      )
     )
+    return normal, categorical
+
+  def loss(self, normal_parameters, categorical_parameters,
+           reconstruction, target):
+    ce = self.reconstruction_loss(reconstruction, target)
+    n_n, n_c = self.divergence_loss(normal_parameters, categorical_parameters)
+    loss_val = ce + n_n + n_c
 
     self.current_losses["cross-entropy"] = float(ce)
     self.current_losses["norm-normal"] = float(n_n)
@@ -466,6 +485,12 @@ class FactorVAETraining(JointVAETraining):
     sample = distribution.rsample()
     return sample
 
+  def divergence_loss(self, normal_parameters, decoder_parameters):
+    tc_loss = vl.tc_encoder_loss(*decoder_parameters)
+    div_loss = vl.normal_kl_loss(*normal_parameters)
+    result = div_loss + self.gamma * tc_loss
+    return result
+
   def step(self, data):
     data = data.to(self.device)
     sample_data, shuffle_data = data[:data.size(0) // 2], data[data.size(0) // 2:]
@@ -475,10 +500,9 @@ class FactorVAETraining(JointVAETraining):
     shuffle_sample = self.sample(shuffle_mean, shuffle_logvar)
     reconstruction = self.decoder(sample)
 
-    loss_val = vl.factor_vae_loss(
-      (mean, logvar), (self.decoder, sample),
-      reconstruction, data, gamma=self.gamma
-    )
+    ce = self.reconstruction_loss(reconstruction, data)
+    tc = self.divergence_loss((mean, logvar), (self.decoder, sample))
+    loss_val = ce + tc
     self.writer.add_scalar("total loss", float(loss_val), self.step_id)
 
     self.optimizer.zero_grad()
@@ -494,7 +518,7 @@ class FactorVAETraining(JointVAETraining):
     discriminator_loss.backward()
     self.discriminator_optimizer.step()
 
-    self.writer.add_scalar("total loss", float(loss_val), self.step_id)
+    self.writer.add_scalar("discriminator loss", float(discriminator_loss), self.step_id)
     self.each_step()
 
 class ConditionalVAETraining(AbstractVAETraining):
@@ -508,11 +532,19 @@ class ConditionalVAETraining(AbstractVAETraining):
       "prior": prior
     }, data, **kwargs)
 
+  def reconstruction_loss(self, reconstruction, target):
+    return vl.reconstruction_bce(reconstruction, target)
+
+  def divergence_loss(self, parameters, prior_parameters):
+    mu, lv = parameters
+    mu_r, lv_r = prior_parameters
+    result = vl.normal_kl_loss(mu, lv, mu_r, lv_r)
+    return result
+
   def loss(self, parameters, prior_parameters, sample, reconstruction, target):
-    loss_val, (ce, kld) = vl.conditional_vae_loss(
-      parameters, prior_parameters, reconstruction, target,
-      keep_components=True
-    )
+    ce = self.reconstruction_loss(reconstruction, target)
+    kld = self.divergence_loss(parameters, prior_parameters)
+    loss_val = ce + kld
 
     self.current_losses["cross-entropy"] = float(ce)
     self.current_losses["kullback-leibler"] = float(kld)
