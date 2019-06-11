@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader
 
 from tensorboardX import SummaryWriter
 
-from torchsupport.data.io import netwrite
+from torchsupport.data.io import netwrite, to_device
 from torchsupport.data.episodic import SupportData
 
 class Training(object):
@@ -90,20 +90,30 @@ class SupervisedTraining(Training):
     )
     self.each_checkpoint()
 
-  def step(self, data, label):
-    self.optimizer.zero_grad()
-    predictions = self.net(data)
+  def run_networks(self, data):
+    inputs, *labels = data
+    predictions = self.net(inputs)
+    return [combined for combined in zip(predictions, labels)]
 
+  def loss(self, inputs):
     loss_val = torch.tensor(0.0).to(self.device)
-    if isinstance(predictions, (list, tuple)):
-      for idx, prediction in enumerate(predictions):
-        this_loss_val = self.losses[idx](prediction, label[idx])
-        self.training_losses[idx] = float(this_loss_val)
-        loss_val += this_loss_val
-    else:
-      this_loss_val = self.losses[0](predictions, label[0])
-      self.training_losses[0] = float(this_loss_val)
+    for idx, the_input in enumerate(inputs):
+      this_loss_val = self.losses[idx](*the_input)
+      self.training_losses[idx] = float(this_loss_val)
       loss_val += this_loss_val
+    return loss_val
+
+  def valid_loss(self, inputs):
+    training_cache = list(self.training_losses)
+    loss_val = self.loss(inputs)
+    self.validation_losses = self.training_losses
+    self.training_losses = training_cache
+    return loss_val
+
+  def step(self, data):
+    self.optimizer.zero_grad()
+    outputs = self.run_networks(data)
+    loss_val = self.loss(outputs)
     loss_val.backward()
     self.optimizer.step()
     self.each_step()
@@ -111,17 +121,13 @@ class SupervisedTraining(Training):
   def validate(self):
     with torch.no_grad():
       vit = iter(self.validate_data)
-      inputs, *label = next(vit)
-      inputs, label = inputs.to(self.device), list(map(lambda x: x.to(self.device), label))
-      predictions = self.net(inputs)
-      if isinstance(predictions, (list, tuple)):
-        for idx, prediction in enumerate(predictions):
-          this_loss_val = self.losses[idx](prediction, label[idx])
-          self.validation_losses[idx] = float(this_loss_val)
-      else:
-        self.validation_losses[0] = self.losses[0](predictions, label[0])
+      data = to_device(next(vit), self.device)
+      outputs = self.run_networks(data)
+      self.loss(outputs)
       self.each_validate()
-      self.valid_callback(self, predictions.to("cpu").numpy(), list(map(lambda x: x.to("cpu"), label)))
+      self.valid_callback(
+        self, to_device(data, "cpu"), to_device(outputs, "cpu")
+      )
 
   def schedule_step(self):
     self.schedule.step(sum(self.validation_losses))
@@ -143,15 +149,22 @@ class SupervisedTraining(Training):
     for epoch_id in range(self.max_epochs):
       self.epoch_id = epoch_id
       for data in self.train_data:
-        inputs, *label = data
-        inputs, label = inputs.to(self.device), list(map(lambda x: x.to(self.device), label))
-        self.step(inputs, label)
+        data = to_device(data, self.device)
+        self.step(data)
         if self.step_id % 10 == 0:
           self.validate()
         self.step_id += 1
-      # self.schedule_step() # FIXME
+      self.schedule_step()
       self.each_epoch()
     return self.net
+
+class MaskedSupervisedTraining(SupervisedTraining):
+  def run_networks(self, data):
+    inputs, labels_masks = data
+    labels = [label for (label, mask) in labels_masks]
+    masks = [mask for (label, mask) in labels_masks]
+    predictions = self.net(inputs)
+    return list(zip(predictions, labels, masks))
 
 class FewShotTraining(SupervisedTraining):
   def __init__(self, net, train_data, validate_data, losses,
@@ -182,7 +195,12 @@ class FewShotTraining(SupervisedTraining):
     self.support_loader = iter(DataLoader(support_data))
     self.valid_support_loader = iter(DataLoader(validate_support_data))
 
-  def step(self, data, label):
+  def run_networks(self, data, support, support_label):
+    predictions = self.net(data, support)
+    return list(zip(predictions, support_label))
+
+  def step(self, inputs):
+    data, label = inputs
     self.optimizer.zero_grad()
 
     permutation = [0, 1, 2]
@@ -194,26 +212,14 @@ class FewShotTraining(SupervisedTraining):
     for idx, val in enumerate(lv):
       lv[idx] = permutation[int(val[0])]
     lv = support_label.reshape(-1)
-    print(lv.size())
     for idx, val in enumerate(lv):
-      print(permutation[int(val[0])], permutation, val)
       lv[idx] = permutation[int(val[0])]
 
     support = support[0].to(self.device)
     support_label = support_label[0].to(self.device)
-    predictions = self.net(data, support, support_label)
+    outputs = self.run_networks(data, support, support_label)
 
-    loss_val = torch.tensor(0.0).to(self.device)
-    if isinstance(predictions, (list, tuple)):
-      for idx, prediction in enumerate(predictions):
-        this_loss_val = self.losses[idx](prediction, label[idx])
-        self.training_losses[idx] = float(this_loss_val)
-        loss_val += this_loss_val
-    else:
-      print(predictions[:5])
-      this_loss_val = self.losses[0](predictions, label[0])
-      self.training_losses[0] = float(this_loss_val)
-      loss_val += this_loss_val
+    loss_val = self.loss(outputs)
     loss_val.backward()
     self.optimizer.step()
     self.each_step()  
@@ -227,13 +233,8 @@ class FewShotTraining(SupervisedTraining):
       support, support_label = next(self.valid_support_loader)
       support = support[0].to(self.device)
       support_label = support_label[0].to(self.device)
-      predictions = self.net(inputs, support, support_label)
-      if isinstance(predictions, (list, tuple)):
-        for idx, prediction in enumerate(predictions):
-          this_loss_val = self.losses[idx](prediction, label[idx])
-          self.validation_losses[idx] = float(this_loss_val)
-      else:
-        self.validation_losses[0] = self.losses[0](predictions, label[0])
+      outputs = self.run_networks(inputs, support, support_label)
+      self.valid_loss(outputs)
       self.each_validate()
-      self.valid_callback(self, inputs.to("cpu").numpy(), list(map(lambda x: x.to("cpu"), label)))
+      self.valid_callback(self, to_device(inputs, "cpu"), to_device(outputs, "cpu"))
       self.net.train()

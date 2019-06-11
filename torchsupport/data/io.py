@@ -98,3 +98,17 @@ def netread(network, path):
       else:
         print("Unexpected OSError. Aborting ...")
         raise e
+
+def to_device(data, device):
+  if isinstance(data, torch.Tensor):
+    return data.to(device)
+  if isinstance(data, (list, tuple)):
+    return [
+      to_device(point, device)
+      for point in data
+    ]
+  if isinstance(data, dict):
+    return {
+      key : to_device(data[key], device)
+      for key in data
+    }
