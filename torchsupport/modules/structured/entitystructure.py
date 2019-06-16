@@ -195,6 +195,59 @@ class ConnectMissing(ConnectionStructure):
       ]
     )
 
+class PairwiseStructure(ConnectionStructure):
+  """Auxiliary structure for attaching pairwise "edge" data
+  given data local to sources and targets.
+  """
+  def __init__(self, structure, source_data, target_data):
+    """Auxiliary structure for attaching pairwise "edge" data
+    given data local to sources and targets.
+
+    Args:
+      structure (ConnectionStructure): underlying connection structure.
+      source_data (torch.Tensor): data present at source nodes.
+      target_data (torch.Tensor): data present at target nodes.
+    """
+    super(PairwiseStructure, self).__init__(
+      structure.source, structure.target, structure.connections
+    )
+    self.source_data = source_data
+    self.target_data = target_data
+
+  def compare(self, source, target):
+    """Compare source and target data to produce edge features.
+
+    Args:
+      source (torch.Tensor): (connections, source_features, size) tensor of source data.
+      target (torch.Tensor): (target_features, size) tensor of target data.
+
+    Returns:
+      Edge data tensor of size (connections, edge_features, size) tensor of derived edge data.
+    """
+    raise NotImplementedError("Abstract.")
+
+  def compare_empty(self):
+    """Return empty comparison.
+
+    Returns:
+      Default tensor for absent edge data.
+    """
+    raise NotImplementedError("Abstract.")
+
+  def message(self, source, target):
+    for idx, _ in enumerate(target):
+      if self.connections[idx]:
+        data = source[self.connections[idx]]
+        pairwise = self.compare(
+          self.source_data[self.connections[idx]],
+          self.target_data[idx]
+        )
+        yield torch.cat((data, pairwise), dim=1)
+      else:
+        data = torch.zeros_like(source[0:1])
+        pairwise = self.compare_empty()
+        yield torch.cat((data, pairwise), dim=1)
+
 class DistanceStructure(AdjacencyStructure):
   def __init__(self, entity_tensor, subgraph_structure, typ,
                radius=1.0, metric=lambda x, y: torch.norm(x - y, 2)):
