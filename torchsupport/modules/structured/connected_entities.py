@@ -130,6 +130,33 @@ class SubgraphStructure(ConnectionStructure):
     for subgraph in self.membership:
       yield source[subgraph]
 
+class ConstantStructure(ConnectionStructure):
+  def __init__(self, source, target, connections):
+    self.source = source
+    self.target = target
+    self.connections = torch.tensor(connections, dtype=torch.long, requires_grad=False)
+
+  def message(self, source, target):
+    return source[self.connections]
+
+class ScatterStructure(ConnectionStructure):
+  def __init__(self, source, target, connections):
+    self.source = source
+    self.target = target
+    self.indices = torch.Tensor([
+      item
+      for idx, connection in enumerate(connections)
+      for item in len(connection) * [idx]
+    ])
+    self.connections = torch.Tensor([
+      connection
+      for connection in connections
+      for item in connection
+    ])
+
+  def message(self, source, target):
+    return source[self.connections], target[self.indices], self.indices
+
 class AdjacencyStructure(ConnectionStructure):
   def __init__(self, source, target, connections):
     super(AdjacencyStructure, self).__init__(source, target, connections)
