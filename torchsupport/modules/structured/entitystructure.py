@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as func
 
 from torchsupport.modules.structured.connected_entities import (
-  ConnectionStructure, AdjacencyStructure, SubgraphStructure
+  ConnectionStructure, SubgraphStructure
 )
 
 def to_graph(batched_tensor):
@@ -42,7 +42,7 @@ def random_substructure(structure, num_nodes, depth):
       lambda y: full_nodes.index(y)
     ))
   ))
-  substructure = AdjacencyStructure(
+  substructure = ConnectionStructure(
     structure.source,
     structure.target,
     connections
@@ -68,11 +68,11 @@ class DropoutStructure(ConnectionStructure):
     for msg in super(DropoutStructure, self).message(source, target):
       randoms = torch.rand(len(msg)) > self.p
       if randoms.sum() > 0:
-        yield msg[randoms]
+        yield msg[:, randoms]
       else:
         yield torch.zeros_like(msg[0].unsqueeze(0))
 
-class NHopStructure(AdjacencyStructure):
+class NHopStructure(ConnectionStructure):
   def __init__(self, structure, depth, with_self=False):
     """Computes a standard node traversal for a given node.
 
@@ -154,13 +154,13 @@ class EdgeStructure(ConnectionStructure):
     for idx, _ in enumerate(target):
       if self.inverse_structure.connections[idx]:
         yield (
-          node[self.connections[idx]],
-          edge[self.inverse_structure.connections[idx]]
+          node[self.connections[idx]].unsqueeze(0),
+          edge[self.inverse_structure.connections[idx]].unsqueeze(0)
         )
       else:
         yield (
-          torch.zeros_like(node[0:1]),
-          torch.zeros_like(edge[0:1])
+          torch.zeros_like(node[0:1]).unsqueeze(0),
+          torch.zeros_like(edge[0:1]).unsqueeze(0)
         )
 
 def _connect_missing_aux(connection, structure, keep_nodes, depth):
@@ -242,13 +242,13 @@ class PairwiseStructure(ConnectionStructure):
           self.source_data[self.connections[idx]],
           self.target_data[idx]
         )
-        yield torch.cat((data, pairwise), dim=1)
+        yield torch.cat((data, pairwise), dim=1).unsqueeze(0)
       else:
         data = torch.zeros_like(source[0:1])
         pairwise = self.compare_empty()
-        yield torch.cat((data, pairwise), dim=1)
+        yield torch.cat((data, pairwise), dim=1).unsqueeze(0)
 
-class DistanceStructure(AdjacencyStructure):
+class DistanceStructure(ConnectionStructure):
   def __init__(self, entity_tensor, subgraph_structure, typ,
                radius=1.0, metric=lambda x, y: torch.norm(x - y, 2)):
     """Computes a traversal of nodes within a given distance of a starting node.
@@ -286,7 +286,7 @@ class DistanceStructure(AdjacencyStructure):
         accept_nodes.append(node)
     return accept_nodes
 
-class ImplicitDistanceStructure(AdjacencyStructure):
+class ImplicitDistanceStructure(ConnectionStructure):
   def __init__(self, position, structure):
     """Structure implicitly providing a relative distance."""
     super(ImplicitDistanceStructure, self).__init__(
@@ -303,11 +303,11 @@ class ImplicitDistanceStructure(AdjacencyStructure):
         yield torch.cat((
           offset.norm(dim=1, keepdim=True),
           source[self.connections[idx]]
-        ), dim=1)
+        ), dim=1).unsqueeze(0)
       else:
-        yield torch.zeros(1, source.size(1) + 1)
+        yield torch.zeros(1, source.size(1) + 1).unsqueeze(0)
 
-class OffsetOrientationStructure(AdjacencyStructure):
+class OffsetOrientationStructure(ConnectionStructure):
   def __init__(self, position, orientation, structure):
     """Structure implicitly providing a relative offset."""
     super(OffsetOrientationStructure, self).__init__(
@@ -326,9 +326,9 @@ class OffsetOrientationStructure(AdjacencyStructure):
         offset = torch.matmul(rotation, offset)
         yield torch.cat((
           offset, source[self.connections[idx]]
-        ), dim=1)
+        ), dim=1).unsqueeze(0)
       else:
-        yield source[0:0]
+        yield source[0:0].unsqueeze(0)
 
 def _make_rotation(angles):
   rot_0 = _make_rotation_idx(angles[0], 0)

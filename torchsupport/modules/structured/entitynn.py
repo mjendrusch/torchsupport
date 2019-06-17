@@ -2,7 +2,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as func
 
-from torchsupport.modules.structured.connected_entities import EntityTensor, AdjacencyStructure
+from torchsupport.modules.structured.connected_entities import EntityTensor, AdjacencyStructure, ConstantStructure
+
+def flatten_message(message):
+  return message.view(-1, *message.shape[2:])
+
+def unflatten_message(output, message):
+  return output.view(*message.shape[:2], *output.shape[1:])
 
 class ConnectedModule(nn.Module):
   def __init__(self):
@@ -13,19 +19,25 @@ class ConnectedModule(nn.Module):
     raise NotImplementedError("Abstract")
 
   def forward(self, source, target, structure):
+    # constant-width neighbourhoods:
+    if isinstance(structure, ConstantStructure):
+      return self.reduce(target, structure.message(source, target))
+
     results = []
     for idx, message in enumerate(structure.message(source, target)):
-      reduced = self.reduce(target[idx], message)
-      results.append(reduced.unsqueeze(0))
+      reduced = self.reduce(target[idx].unsqueeze(dim=0), message)
+      results.append(reduced)
     return torch.cat(results, dim=0)
 
 class NeighbourLinear(ConnectedModule):
   def __init__(self, source_channels, target_channels):
-    super(NeighbourLinear).__init__()
+    super(NeighbourLinear, self).__init__()
     self.linear = nn.Linear(source_channels, target_channels)
 
-  def reduce(self, own_data, source_messages):
-    return own_data + func.relu(self.linear(source_messages)).mean(dim=0, keepdim=True)
+  def reduce(self, own_data, source_message):
+    inputs = flatten_message(source_message)
+    out = unflatten_message(self.linear(inputs), source_message)
+    return own_data + func.relu(out).mean(dim=1)
 
 class NeighbourAssignment(ConnectedModule):
   def __init__(self, source_channels, target_channels, out_channels, size):
@@ -45,47 +57,88 @@ class NeighbourAssignment(ConnectedModule):
     self.target = nn.Linear(target_channels, size)
 
   def reduce(self, own_data, source_message, idx=None):
-    target = self.target(own_data)
-    source = self.source(source_message)
+    inputs = flatten_message(source_message)
+    target = self.target(own_data).unsqueeze(0)
+    source = self.source(inputs)
     weight_tensors = []
     for module in self.linears:
-      weight_tensors.append(module(source_message).unsqueeze(0))
+      result = unflatten_message(module(inputs), source_message)
+      weight_tensors.append(result.unsqueeze(0))
     weighted = torch.cat(weight_tensors, dim=0)
-    assignment = func.softmax(source + target).unsqueeze(0)
-    return (assignment * weighted).mean(dim=0)
+    source = unflatten_message(source, source_message)
+    assignment = func.softmax(source + target, dim=-1).unsqueeze(0)
+    return (assignment.transpose(0, 3) * weighted).mean(dim=0)
 
 class NeighbourAttention(ConnectedModule):
-  def __init__(self, attention):
-    """Aggregates a node neighbourhood using an attention mechanism.
-
-    Args:
-      attention (callable): attention mechanism to be used.
-      traversal (callable): node traversal for generating node neighbourhoods.
-    """
-    super(NeighbourAttention, self).__init__()
-    self.attention = attention
-
-  def reduce(self, own_data, source_message):
-    attention = self.attention(own_data, source_message)
-    result = torch.Tensor.sum(attention * source_message, dim=0)
-    return result
-
-class NeighbourDotAttention(ConnectedModule):
-  def __init__(self, size):
+  def __init__(self, in_size, attention_size=None):
     """Aggregates a node neighbourhood using a pairwise dot-product attention mechanism.
     Args:
       size (int): size of the attention embedding.
     """
-    super(NeighbourDotAttention, self).__init__()
-    self.embedding = nn.Linear(size, size)
-    self.attention_local = nn.Linear(size, 1)
-    self.attention_neighbour = nn.Linear(size, 1)
+    super(NeighbourAttention, self).__init__()
+    attention_size = attention_size if attention_size is not None else in_size
+    self.embedding = nn.Linear(in_size, attention_size)
+    self.attention_local = nn.Linear(attention_size, 1)
+    self.attention_neighbour = nn.Linear(attention_size, 1)
+
+  def attend(self, query, data):
+    raise NotImplementedError("Abstract.")
 
   def reduce(self, own_data, source_message):
     target = self.attention_local(self.embedding(own_data))
-    source = self.attention_neighbour(self.embedding(source_message))
-    result = (func.softmax(target + source, dim=1) * source_message).sum(dim=0)
+    source = flatten_message(source_message)
+    source = self.attention_neighbour(self.embedding(source))
+    source = unflatten_message(source, source_message)
+
+    attention = func.softmax(self.attend(target.unsqueeze(1), source), dim=1)
+    result = (attention * source_message).sum(dim=1)
     return result
+
+class NeighbourDotAttention(NeighbourAttention):
+  def attend(self, query, data):
+    return query * data
+
+class NeighbourAddAttention(NeighbourAttention):
+  def attend(self, query, data):
+    return query + data
+
+class NeighbourMultiHeadAttention(ConnectedModule):
+  def __init__(self, in_size, out_size, attention_size, heads=64):
+    """Aggregates a node neighbourhood using a pairwise dot-product attention mechanism.
+    Args:
+      size (int): size of the attention embedding.
+    """
+    super(NeighbourMultiHeadAttention, self).__init__()
+    attention_size = attention_size if attention_size is not None else in_size
+    self.heads = heads
+    self.embedding = nn.Linear(in_size, attention_size)
+    self.attention_local = nn.Linear(attention_size, heads)
+    self.attention_neighbour = nn.Linear(attention_size, heads)
+    self.value = nn.Linear(in_size, heads * attention_size)
+    self.output = nn.Linear(heads * attention_size, out_size)
+
+  def attend(self, query, data):
+    raise NotImplementedError("Abstract.")
+
+  def reduce(self, own_data, source_message):
+    target = self.attention_local(self.embedding(own_data))
+    source = flatten_message(source_message)
+    inputs = self.value(source).view(*source_message.shape[:-1], -1, self.heads)
+    source = self.attention_neighbour(self.embedding(source))
+    source = unflatten_message(source, source_message)
+    attention = func.softmax(self.attend(target.unsqueeze(1), source), dim=1).unsqueeze(-2)
+    out = (attention * inputs).sum(dim=1)
+    out = out.view(*out.shape[:-2], -1)
+    result = self.output(out)
+    return result
+
+class NeighbourDotMultiHeadAttention(NeighbourMultiHeadAttention):
+  def attend(self, query, data):
+    return query.dot(data)
+
+class NeighbourAddMultiHeadAttention(NeighbourMultiHeadAttention):
+  def attend(self, query, data):
+    return query + data
 
 class NeighbourReducer(ConnectedModule):
   def __init__(self, reduction):
@@ -93,7 +146,7 @@ class NeighbourReducer(ConnectedModule):
     self.reduction = reduction
 
   def reduce(self, own_data, source_message):
-    return self.reduction(source_message, dim=0)
+    return self.reduction(source_message, dim=1)
 
 class NeighbourMean(NeighbourReducer):
   def __init__(self):

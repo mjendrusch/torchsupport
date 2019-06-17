@@ -108,9 +108,9 @@ class ConnectionStructure(object):
   def message(self, source, target):
     for idx, _ in enumerate(target):
       if self.connections[idx]:
-        yield source[self.connections[idx]]
+        yield source[self.connections[idx]].unsqueeze(0)
       else:
-        yield torch.zeros_like(source[0:1])
+        yield torch.zeros_like(source[0:1]).unsqueeze(0)
 
 class CompoundStructure(object):
   def __init__(self, structures):
@@ -119,7 +119,7 @@ class CompoundStructure(object):
 
   def message(self, source, target):
     for combination in zip(*map(lambda x: x.message(source, target), self.structures)):
-      yield torch.cat(combination, dim=1)
+      yield torch.cat(combination, dim=2)
 
 class SubgraphStructure(ConnectionStructure):
   def __init__(self, membership):
