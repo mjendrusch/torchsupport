@@ -139,6 +139,24 @@ class ConstantStructure(ConnectionStructure):
   def message(self, source, target):
     return source[self.connections]
 
+class ConstantifiedStructure(ConstantStructure):
+  def __init__(self, structure):
+    self.source = structure.source
+    self.target = structure.target
+    self.connections = structure.connections
+    self.structure = structure
+
+  def message(self, source, target):
+    results = []
+    for message in self.structure.message(source, target):
+      results.append(message)
+    return torch.cat(results, dim=0)
+
+class ConstantStructureMixin():
+  @property
+  def constant(self):
+    return ConstantifiedStructure(self)
+
 class ScatterStructure(ConnectionStructure):
   def __init__(self, source, target, connections):
     self.source = source
