@@ -70,37 +70,39 @@ class NeighbourAssignment(ConnectedModule):
     return (assignment.transpose(0, 3) * weighted).mean(dim=0)
 
 class NeighbourAttention(ConnectedModule):
-  def __init__(self, in_size, attention_size=None):
+  def __init__(self, in_size, out_size, attention_size=None):
     """Aggregates a node neighbourhood using a pairwise dot-product attention mechanism.
     Args:
       size (int): size of the attention embedding.
     """
     super(NeighbourAttention, self).__init__()
     attention_size = attention_size if attention_size is not None else in_size
-    self.embedding = nn.Linear(in_size, attention_size)
-    self.attention_local = nn.Linear(attention_size, 1)
-    self.attention_neighbour = nn.Linear(attention_size, 1)
+    self.query = nn.Linear(in_size, attention_size)
+    self.key = nn.Linear(in_size, attention_size)
+    self.value = nn.Linear(in_size, out_size)
 
   def attend(self, query, data):
     raise NotImplementedError("Abstract.")
 
   def reduce(self, own_data, source_message):
-    target = self.attention_local(self.embedding(own_data))
-    source = flatten_message(source_message)
-    source = self.attention_neighbour(self.embedding(source))
+    target = self.query(own_data)
+    inputs = flatten_message(source_message)
+    source = self.key(inputs)
+    value = self.value(inputs)
     source = unflatten_message(source, source_message)
+    value = unflatten_message(value, source_message)
 
     attention = func.softmax(self.attend(target.unsqueeze(1), source), dim=1)
-    result = (attention * source_message).sum(dim=1)
+    result = (attention.unsqueeze(-1) * value).sum(dim=1)
     return result
 
 class NeighbourDotAttention(NeighbourAttention):
   def attend(self, query, data):
-    return query * data
+    return (query * data).sum(dim=-1)
 
 class NeighbourAddAttention(NeighbourAttention):
   def attend(self, query, data):
-    return query + data
+    return (query + data).sum(dim=-1)
 
 class NeighbourMultiHeadAttention(ConnectedModule):
   def __init__(self, in_size, out_size, attention_size, heads=64):
@@ -109,11 +111,9 @@ class NeighbourMultiHeadAttention(ConnectedModule):
       size (int): size of the attention embedding.
     """
     super(NeighbourMultiHeadAttention, self).__init__()
-    attention_size = attention_size if attention_size is not None else in_size
     self.heads = heads
-    self.embedding = nn.Linear(in_size, attention_size)
-    self.attention_local = nn.Linear(attention_size, heads)
-    self.attention_neighbour = nn.Linear(attention_size, heads)
+    self.query = nn.Linear(in_size, heads * attention_size)
+    self.key = nn.Linear(in_size, heads * attention_size)
     self.value = nn.Linear(in_size, heads * attention_size)
     self.output = nn.Linear(heads * attention_size, out_size)
 
@@ -121,11 +121,10 @@ class NeighbourMultiHeadAttention(ConnectedModule):
     raise NotImplementedError("Abstract.")
 
   def reduce(self, own_data, source_message):
-    target = self.attention_local(self.embedding(own_data))
+    target = self.query(own_data).view(*own_data.shape[:-1], -1, self.heads)
     source = flatten_message(source_message)
     inputs = self.value(source).view(*source_message.shape[:-1], -1, self.heads)
-    source = self.attention_neighbour(self.embedding(source))
-    source = unflatten_message(source, source_message)
+    source = self.key(source).view(*source_message.shape[:-1], -1, self.heads)
     attention = func.softmax(self.attend(target.unsqueeze(1), source), dim=1).unsqueeze(-2)
     out = (attention * inputs).sum(dim=1)
     out = out.view(*out.shape[:-2], -1)
@@ -134,11 +133,11 @@ class NeighbourMultiHeadAttention(ConnectedModule):
 
 class NeighbourDotMultiHeadAttention(NeighbourMultiHeadAttention):
   def attend(self, query, data):
-    return query.dot(data)
+    return (query * data).sum(dim=-2)
 
 class NeighbourAddMultiHeadAttention(NeighbourMultiHeadAttention):
   def attend(self, query, data):
-    return query + data
+    return (query + data).sum(dim=-2)
 
 class NeighbourReducer(ConnectedModule):
   def __init__(self, reduction):
