@@ -71,7 +71,7 @@ class ResNextBlockNd(nn.Module):
         inputs.size(0),
         self.out_size - self.in_size,
         *inputs.shape[2:]
-      )
+      ).to(inputs.device)
       inputs = torch.cat((inputs, filler), dim=1)
     return out + inputs
 
