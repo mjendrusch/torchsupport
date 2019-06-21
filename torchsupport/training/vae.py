@@ -313,6 +313,21 @@ class LaggingInference(ABC):
 
     return netlist
 
+class AETraining(AbstractVAETraining):
+  """Plain autoencoder training setup."""
+  def __init__(self, autoencoder, data, **kwargs):
+    self.autoencoder = ...
+    super(AETraining, self).__init__({
+      "autoencoder": autoencoder
+    }, data, **kwargs)
+
+  def loss(self, reconstruction, target):
+    return vl.reconstruction_bce(reconstruction, target)
+
+  def run_networks(self, data):
+    reconstruction, *_ = self.autoencoder(data)
+    return reconstruction, data
+
 class VAETraining(AbstractVAETraining):
   """Standard VAE training setup."""
   def __init__(self, encoder, decoder, data, **kwargs):

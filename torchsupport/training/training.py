@@ -93,6 +93,8 @@ class SupervisedTraining(Training):
   def run_networks(self, data):
     inputs, *labels = data
     predictions = self.net(inputs)
+    if not isinstance(predictions, (list, tuple)):
+      predictions = [predictions]
     return [combined for combined in zip(predictions, labels)]
 
   def loss(self, inputs):
@@ -123,7 +125,7 @@ class SupervisedTraining(Training):
       vit = iter(self.validate_data)
       data = to_device(next(vit), self.device)
       outputs = self.run_networks(data)
-      self.loss(outputs)
+      self.valid_loss(outputs)
       self.each_validate()
       self.valid_callback(
         self, to_device(data, "cpu"), to_device(outputs, "cpu")
