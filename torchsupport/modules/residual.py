@@ -43,7 +43,7 @@ class ResNextBlockNd(nn.Module):
 
     conv = getattr(nn, f"Conv{N}d")
     bn = getattr(nn, f"BatchNorm{N}d")
-    self.convs = nn.ModuleList([
+    self.blocks = nn.ModuleList([
       conv(in_size, hidden_size * cardinality, 1),
       conv(
         hidden_size * cardinality,
