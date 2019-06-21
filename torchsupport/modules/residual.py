@@ -37,7 +37,7 @@ class IntermediateExtractor(nn.Module):
 class ResNextBlockNd(nn.Module):
   def __init__(self, in_size, out_size, hidden_size, N=1,
                cardinality=32, activation=func.elu, **kwargs):
-    super(ResNextBlockNd, self).__init__(self)
+    super(ResNextBlockNd, self).__init__()
 
     assert out_size >= in_size
 
