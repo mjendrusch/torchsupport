@@ -72,7 +72,7 @@ class SupervisedTraining(Training):
       train_data, batch_size=batch_size, num_workers=8, shuffle=True
     )
     self.validate_data = DataLoader(
-      validate_data, batch_size=8 * batch_size, shuffle=True
+      validate_data, batch_size=batch_size, shuffle=True
     )
     self.net = net.to(self.device)
     self.max_epochs = max_epochs
