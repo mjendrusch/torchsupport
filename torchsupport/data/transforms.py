@@ -498,17 +498,33 @@ class Zoom(object):
 
 class Normalize(object):
 
-    def __init__(self):
+    def __init__(self, auto=False):
       """Normalize an image by its own mean and standard deviation."""
-      pass
+      self.auto = auto
+      self.mean = 0
+      self.var = 0
+      self.count = 0
 
     def __call__(self, x):
-        for idx in range(x.shape[0]):
-            xmean = torch.mean(x[idx, :, :])
-            xstd = torch.std(x[idx, :, :])
-            x[idx, :, :] = (x[idx, :, :] - xmean) / xstd
-            if xstd == 0:
-                x[idx, :, :] = 0.0
+        if not self.auto:
+            for idx in range(x.shape[0]):
+                xmean = torch.mean(x[idx, :, :])
+                xstd = torch.std(x[idx, :, :])
+                x[idx, :, :] = (x[idx, :, :] - xmean) / xstd
+                if xstd == 0:
+                    x[idx, :, :] = 0.0
+        else:
+            view = x.view(x.shape[0], -1)
+            length = view.shape[1]
+            mean = view.mean(dim=1)
+            var = view.var(dim=1)
+            self.var = var / (self.count + 1) + self.count / (self.count + 1) * self.var
+            self.var += self.count / ((self.count + 1) ** 2) * (self.mean - mean) ** 2
+            self.mean = (self.count * self.mean + view.mean(dim=1)) / (self.count + 1)
+            for idx in range(x.shape[0]):
+                x[idx, :, :] = (x[idx, :, :] - self.mean) / torch.sqrt(self.var)
+                if xstd == 0:
+                    x[idx, :, :] = 0.0
         return x
 
 class Center(object):
@@ -525,15 +541,27 @@ class Center(object):
 
 class MinMax(object):
 
-    def __init__(self):
+    def __init__(self, auto=False):
       """MinMax an image by its own mean and standard deviation."""
-      pass
+      self.auto = auto
+      self.min = None
+      self.max = None
 
     def __call__(self, x):
-        for idx in range(x.shape[0]):
-            xmin = torch.min(x[idx])
-            xmax = torch.max(x[idx])
-            x[idx] = ((x[idx] - xmin) / (xmax - xmin)).float()
+        if not self.auto:
+            for idx in range(x.shape[0]):
+                xmin = torch.min(x[idx])
+                xmax = torch.max(x[idx])
+                x[idx] = ((x[idx] - xmin) / (xmax - xmin)).float()
+        else:
+            view = x.view(x.shape[0], -1)
+            if self.min is None:
+                self.min, _ = view.min(dim=1, keepdim=True)
+                self.max, _ = view.max(dim=1, keepdim=True)
+            else:
+                self.min, _ = torch.cat((view, self.min), dim=1).min(dim=1, keepdim=True)
+                self.max, _ = torch.cat((view, self.max), dim=1).max(dim=1, keepdim=True)
+            x = (x - self.min) / (self.max - self.min)
         return x
 
 class Crop(object):
