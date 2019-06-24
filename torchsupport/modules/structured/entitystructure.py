@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as func
 
 from torchsupport.modules.structured.connected_entities import (
-  ConnectionStructure, SubgraphStructure
+  ConnectionStructure, SubgraphStructure, ConstantStructureMixin
 )
 
 def to_graph(batched_tensor):
@@ -195,11 +195,11 @@ class ConnectMissing(ConnectionStructure):
       ]
     )
 
-class PairwiseStructure(ConnectionStructure):
+class PairwiseData(ConstantStructureMixin, ConnectionStructure):
   """Auxiliary structure for attaching pairwise "edge" data
   given data local to sources and targets.
   """
-  def __init__(self, structure, source_data, target_data):
+  def __init__(self, structure):
     """Auxiliary structure for attaching pairwise "edge" data
     given data local to sources and targets.
 
@@ -208,11 +208,9 @@ class PairwiseStructure(ConnectionStructure):
       source_data (torch.Tensor): data present at source nodes.
       target_data (torch.Tensor): data present at target nodes.
     """
-    super(PairwiseStructure, self).__init__(
+    super(PairwiseData, self).__init__(
       structure.source, structure.target, structure.connections
     )
-    self.source_data = source_data
-    self.target_data = target_data
 
   def compare(self, source, target):
     """Compare source and target data to produce edge features.
@@ -233,6 +231,37 @@ class PairwiseStructure(ConnectionStructure):
       Default tensor for absent edge data.
     """
     raise NotImplementedError("Abstract.")
+
+  def message(self, source, target):
+    for idx, _ in enumerate(target):
+      if self.connections[idx]:
+        pairwise = self.compare(
+          source[self.connections[idx]],
+          target[idx]
+        )
+        yield pairwise.unsqueeze(0)
+      else:
+        pairwise = self.compare_empty()
+        yield pairwise.unsqueeze(0)
+
+class PairwiseStructure(PairwiseData):
+  """Auxiliary structure for attaching pairwise "edge" data
+  given data local to sources and targets.
+  """
+  def __init__(self, structure, source_data, target_data):
+    """Auxiliary structure for attaching pairwise "edge" data
+    given data local to sources and targets.
+
+    Args:
+      structure (ConnectionStructure): underlying connection structure.
+      source_data (torch.Tensor): data present at source nodes.
+      target_data (torch.Tensor): data present at target nodes.
+    """
+    super(PairwiseStructure, self).__init__(
+      structure.source, structure.target, structure.connections
+    )
+    self.source_data = source_data
+    self.target_data = target_data
 
   def message(self, source, target):
     for idx, _ in enumerate(target):
