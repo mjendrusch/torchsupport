@@ -153,8 +153,11 @@ class AbstractVAETraining(Training):
   def checkpoint(self):
     """Performs a checkpoint for all encoders and decoders."""
     for name in self.network_names:
+      the_net = getattr(self, name)
+      if isinstance(the_net, torch.nn.DataParallel):
+        the_net = the_net.module
       netwrite(
-        getattr(self, name),
+        the_net,
         f"{self.checkpoint_path}-{name}-epoch-{self.epoch_id}-step-{self.step_id}.torch"
       )
     self.each_checkpoint()

@@ -84,6 +84,9 @@ class SupervisedTraining(Training):
     self.best = None
 
   def checkpoint(self):
+    the_net = self.net
+    if isinstance(the_net, torch.nn.DataParallel):
+      the_net = the_net.module
     netwrite(
       self.net,
       f"{self.checkpoint_path}-epoch-{self.epoch_id}-step-{self.step_id}.torch"

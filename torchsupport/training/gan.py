@@ -192,13 +192,19 @@ class AbstractGANTraining(Training):
   def checkpoint(self):
     """Performs a checkpoint of all generators and discriminators."""
     for name in self.generator_names:
+      the_net = getattr(self, name)
+      if isinstance(the_net, torch.nn.DataParallel):
+        the_net = the_net.module
       netwrite(
-        getattr(self, name),
+        the_net,
         f"{self.checkpoint_path}-{name}-epoch-{self.epoch_id}-step-{self.step_id}.torch"
       )
     for name in self.discriminator_names:
+      the_net = getattr(self, name)
+      if isinstance(the_net, torch.nn.DataParallel):
+        the_net = the_net.module
       netwrite(
-        getattr(self, name),
+        the_net,
         f"{self.checkpoint_path}-{name}-epoch-{self.epoch_id}-step-{self.step_id}.torch"
       )
     self.each_checkpoint()

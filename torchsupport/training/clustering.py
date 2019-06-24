@@ -57,27 +57,24 @@ class ClusteringTraining(Training):
     self.step_id = 0
 
   def checkpoint(self):
+    the_net = self.net
+    if isinstance(the_net, torch.nn.DataParallel):
+      the_net = the_net.module
     netwrite(
-      self.net,
+      the_net,
       f"{self.network_name}-encoder-epoch-{self.epoch_id}-step-{self.step_id}.torch"
     )
-    # netwrite(
-    #   self.decoder,
-    #   f"{self.network_name}-decoder-epoch-{self.epoch_id}-step-{self.step_id}.torch"
-    # )
     self.each_checkpoint()
 
   def step(self, data, label, centers):
     self.optimizer.zero_grad()
     attention = self.net(data.to(self.device)).squeeze()
     centers = centers.to(self.device).unsqueeze(0)
-    print(data.size())
     if self.order_less:
       center_embedding = self.embedding(centers.squeeze())
-      print(centers.size(), center_embedding.size())
       logits = center_embedding.matmul(attention.unsqueeze(2)).squeeze()
     else:
-      logits = self.classifier(attention.reshape(attention.size(0), -1)) #-abs(centers - attention.unsqueeze(2))
+      logits = self.classifier(attention.reshape(attention.size(0), -1))
     label = label.long().to(self.device)
     loss_val = self.loss(logits, label)
     loss_val.backward()
@@ -97,9 +94,7 @@ class ClusteringTraining(Training):
       for point, *_ in islice(batch_loader, 5000 // self.batch_size):
         latent_point = self.net(point.to(self.device))
         latent_point = latent_point.to("cpu")
-        print("LPS",  latent_point.size())
         latent_point = latent_point.reshape(latent_point.size(0), -1)
-        print("LPS", latent_point.size())
         embedding.append(latent_point)
       embedding = torch.cat(embedding, dim=0)
     self.net.train()
@@ -117,7 +112,6 @@ class ClusteringTraining(Training):
         for label in set(labels)
       ]
       cluster_centers = np.concatenate(cluster_centers, axis=0)
-      print(cluster_centers.shape)
     if len(set(labels)) == 1:
       N = random.randint(2, 10)
       labels = [random.choice(list(range(N))) for label in labels]
@@ -129,12 +123,10 @@ class ClusteringTraining(Training):
         cluster_centers + offsets[idx]
         for idx in range(N)
       ], axis=0).squeeze()
-      print(cluster_centers.shape)
     counts = [
       labels.count(label)
       for label in range(len(set(labels)))
     ]
-    print(counts)
     weights = [1 / counts[label] for label in labels]
     centers = torch.Tensor(cluster_centers)
     return weights, labels, centers
@@ -142,7 +134,6 @@ class ClusteringTraining(Training):
   def _cluster_image(self, labels):
     count = 10
     n_clusters = 50#max(list(set(labels)))
-    print(list(set(labels)))
     indices = list(range(len(labels)))
     random.shuffle(indices)
     cluster_done = [False for _ in range(n_clusters)]
@@ -265,7 +256,6 @@ class ClusterAETraining(ClusteringTraining):
   def hardening_loss(self, predictions):
     diff = predictions.unsqueeze(1) - self.centers.unsqueeze(0)
     assignment = 1 / (1 + ((diff) ** 2).sum(dim=2))
-    print("AS", assignment.size(), diff.size())
     assignment = assignment / (assignment.sum(dim=1, keepdim=True) + 1e-20)
     hardening = assignment ** 2 / (assignment.sum(dim=0, keepdim=True) + 1e-20)
     hardening = hardening / (hardening.sum(dim=1, keepdim=True) + 1e-20)
@@ -335,9 +325,6 @@ class ClusterAETraining(ClusteringTraining):
       self.alpha
     )
     loss_val += self.regularization(features.reshape(features.size(0), -1))
-    # if self.step_id > 1000:
-    #   loss_val += self.hardening_loss(features.reshape(features.size(0), -1))
-    
     loss_val.backward()
 
     self.writer.add_scalar("cluster assignment loss", float(loss_val), self.step_id)
@@ -360,11 +347,6 @@ class ClusterAETraining(ClusteringTraining):
           if self.step_id % 50 == 0:
             self.checkpoint()
 
-      # embedding = self.embed_all().numpy()
-      # tsne = TSNE(2).fit_transform(embedding.reshape(embedding.shape[0], -1))
-      # fig, ax = plt.subplots()
-      # ax.scatter(tsne[:, 0], tsne[:, 1])
-      # self.writer.add_figure("clustering", fig, self.step_id)
       self.each_cluster()
       self.alpha *= float(np.power(2.0, (-(np.log(epoch_id + 1) ** 2))))
 
@@ -413,7 +395,7 @@ class DEPICTTraining(ClusteringTraining):
         sample = torch.randn_like(std).mul(std).add_(mean)
         latent_point = func.adaptive_avg_pool2d(sample, 1)
 
-        latent_point = latent_point#.to("cpu")
+        latent_point = latent_point
         latent_point = latent_point.reshape(latent_point.size(0), -1)
         embedding.append(latent_point)
       embedding = torch.cat(embedding, dim=0)
@@ -548,13 +530,8 @@ class HierarchicalClusteringTraining(ClusteringTraining):
     loss_val = torch.tensor(0.0).to(self.device)
     for level, _ in enumerate(self.clusterings):
       level_center = centers[level].to(self.device).unsqueeze(0)
-      # level_center = self.cluster_embeddings(level_center)
-      # level_logits = level_center.matmul(attention.unsqueeze(2))
       level_logits = self.cluster_embeddings[level](attention)
       level_label = label[:, level].long().to(self.device)
-      # print(level_center.size())
-      # print(level_logits.size())
-      # print(level_label.size())
       level_loss = self.loss(level_logits, level_label)
       loss_val += level_loss / np.log(self.depth[level])
     loss_val.backward()
@@ -625,17 +602,28 @@ class VAEClusteringTraining(HierarchicalClusteringTraining):
     )
 
   def checkpoint(self):
+    the_net = self.net
+    if isinstance(the_net, torch.nn.DataParallel):
+      the_net = the_net.module
     netwrite(
-      self.net,
+      the_net,
       f"{self.network_name}-encoder-epoch-{self.epoch_id}-step-{self.step_id}.torch"
     )
+
+    the_net = self.decoder
+    if isinstance(the_net, torch.nn.DataParallel):
+      the_net = the_net.module
     netwrite(
-      self.decoder,
+      the_net,
       f"{self.network_name}-decoder-epoch-{self.epoch_id}-step-{self.step_id}.torch"
     )
+
     for idx, classifier in enumerate(self.cluster_embeddings):
+      the_net = classifier
+      if isinstance(the_net, torch.nn.DataParallel):
+        the_net = the_net.module
       netwrite(
-        classifier,
+        the_net,
         f"{self.network_name}-classifier-{idx}-epoch-{self.epoch_id}-step-{self.step_id}.torch"
       )
     self.each_checkpoint()
@@ -655,7 +643,6 @@ class VAEClusteringTraining(HierarchicalClusteringTraining):
     reconstruction = self.decoder(sample)
 
     with torch.no_grad():
-      print(data.size(), reconstruction.size())
       weirdness = (sample[0] + sample[1]).unsqueeze(0) / 2
       self.decoder.eval()
       weird_reconstruction = self.decoder(weirdness)
@@ -721,17 +708,28 @@ class RegularizedClusteringTraining(HierarchicalClusteringTraining):
     )
 
   def checkpoint(self):
+    the_net = self.net
+    if isinstance(the_net, torch.nn.DataParallel):
+      the_net = the_net.module
     netwrite(
-      self.net,
+      the_net,
       f"{self.network_name}-encoder-epoch-{self.epoch_id}-step-{self.step_id}.torch"
     )
+
+    the_net = self.decoder
+    if isinstance(the_net, torch.nn.DataParallel):
+      the_net = the_net.module
     netwrite(
-      self.decoder,
+      the_net,
       f"{self.network_name}-decoder-epoch-{self.epoch_id}-step-{self.step_id}.torch"
     )
+
     for idx, classifier in enumerate(self.cluster_embeddings):
+      the_net = classifier
+      if isinstance(the_net, torch.nn.DataParallel):
+        the_net = the_net.module
       netwrite(
-        classifier,
+        the_net,
         f"{self.network_name}-classifier-{idx}-epoch-{self.epoch_id}-step-{self.step_id}.torch"
       )
     self.each_checkpoint()
@@ -745,11 +743,9 @@ class RegularizedClusteringTraining(HierarchicalClusteringTraining):
     data = data.to(self.device)
     sample = self.net(data)
     sample += 0.05 * torch.randn_like(sample)
-    
     reconstruction = self.decoder(sample)
 
     with torch.no_grad():
-      print(data.size(), reconstruction.size())
       weirdness = (sample[0] + sample[1]).unsqueeze(0) / 2
       self.decoder.eval()
       weird_reconstruction = self.decoder(weirdness)
