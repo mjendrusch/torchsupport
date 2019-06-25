@@ -10,7 +10,7 @@ from tensorboardX import SummaryWriter
 
 from torchsupport.training.training import Training
 import torchsupport.modules.losses.vae as vl
-from torchsupport.data.io import netwrite
+from torchsupport.data.io import netwrite, to_device
 
 class AbstractGANTraining(Training):
   """Abstract base class for GAN training."""
@@ -56,7 +56,7 @@ class AbstractGANTraining(Training):
     self.generator_names = []
     for network in generators:
       self.generator_names.append(network)
-      network_object = generators[network]
+      network_object = generators[network].to(device)
       setattr(self, network, network_object)
       generator_netlist.extend(list(network_object.parameters()))
 
@@ -64,7 +64,7 @@ class AbstractGANTraining(Training):
     self.discriminator_names = []
     for network in discriminators:
       self.discriminator_names.append(network)
-      network_object = discriminators[network]
+      network_object = discriminators[network].to(device)
       setattr(self, network, network_object)
       discriminator_netlist.extend(list(network_object.parameters()))
 
@@ -91,7 +91,7 @@ class AbstractGANTraining(Training):
       **generator_optimizer_kwargs
     )
     self.discriminator_optimizer = optimizer(
-      generator_netlist,
+      discriminator_netlist,
       **discriminator_optimizer_kwargs
     )
 
@@ -122,18 +122,7 @@ class AbstractGANTraining(Training):
       data: data points used for training.
     """
     self.discriminator_optimizer.zero_grad()
-    if isinstance(data, (list, tuple)):
-      data = [
-        point.to(self.device)
-        for point in data
-      ]
-    elif isinstance(data, dict):
-      data = {
-        key : data[key].to(self.device)
-        for key in data
-      }
-    else:
-      data = data.to(self.device)
+    data = to_device(data, self.device)
     args = self.run_discriminator(data)
     loss_val = self.discriminator_loss(*args)
 
@@ -153,18 +142,7 @@ class AbstractGANTraining(Training):
       data: data points used for training.
     """
     self.generator_optimizer.zero_grad()
-    if isinstance(data, (list, tuple)):
-      data = [
-        point.to(self.device)
-        for point in data
-      ]
-    elif isinstance(data, dict):
-      data = {
-        key : data[key].to(self.device)
-        for key in data
-      }
-    else:
-      data = data.to(self.device)
+    data = to_device(data, self.device)
     args = self.run_generator(data)
     loss_val = self.generator_loss(*args)
 
@@ -184,9 +162,9 @@ class AbstractGANTraining(Training):
     Args:
       data: data points used for training."""
     for _ in range(self.n_critic):
-      self.discriminator_step(data)
+      self.discriminator_step(next(data))
     for _ in range(self.n_actor):
-      self.generator_step(data)
+      self.generator_step(next(data))
     self.each_step()
 
   def checkpoint(self):
@@ -216,9 +194,14 @@ class AbstractGANTraining(Training):
       self.train_data = None
       self.train_data = DataLoader(
         self.data, batch_size=self.batch_size, num_workers=8,
-        shuffle=True
+        shuffle=True, drop_last=True
       )
-      for data, *_ in self.train_data:
+
+      batches_per_step = self.n_actor + self.n_critic
+      steps_per_episode = len(self.train_data) // batches_per_step
+
+      data = iter(self.train_data)
+      for _ in range(steps_per_episode):
         self.step(data)
         self.step_id += 1
       self.checkpoint()
@@ -257,11 +240,12 @@ class GANTraining(AbstractGANTraining):
     )
 
   def sample(self):
-    return self.generator.sample(self.batch_size())
+    return self.generator.sample(self.batch_size).to(self.device)
 
   def generator_loss(self, generated):
     loss_val = func.binary_cross_entropy_with_logits(
-      self.discriminator(generated), 0
+      self.discriminator(generated),
+      torch.ones(generated.size(0), 1)
     )
 
     return loss_val
@@ -269,10 +253,10 @@ class GANTraining(AbstractGANTraining):
   def discriminator_loss(self, generated, real,
                          generated_result, real_result):
     generated_loss = func.binary_cross_entropy_with_logits(
-      generated_result, 1
+      generated_result, torch.zeros(generated_result.size(0), 1).to(self.device)
     )
     real_loss = func.binary_cross_entropy_with_logits(
-      real_result, 0
+      real_result, 0.9 * torch.ones(real_result.size(0), 1).to(self.device)
     )
 
     return generated_loss + real_loss
@@ -280,11 +264,11 @@ class GANTraining(AbstractGANTraining):
   def run_generator(self, data):
     sample = self.sample()
     generated = self.generator(sample)
-    return generated
+    return data, generated
 
   def run_discriminator(self, data):
-    fake_batch = self.run_generator(data)
-    fake_result = self.discriminator(fake_batch)
+    _, fake_batch = self.run_generator(data)
+    fake_result = self.discriminator(fake_batch.detach())
     real_result = self.discriminator(data)
     return data, fake_batch, fake_result, real_result
 
