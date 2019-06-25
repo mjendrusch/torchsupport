@@ -34,7 +34,7 @@ class NeuralConditionerTraining(GANTraining):
     )
     loss_val = func.binary_cross_entropy_with_logits(
       discriminator_result,
-      torch.ones(generated.size(0), 1).to(self.device)
+      torch.ones(self.batch_size, 1).to(self.device)
     )
 
     return loss_val
