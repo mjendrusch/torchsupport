@@ -1,12 +1,12 @@
 import random
 from copy import copy
 import torch
-from torch.utils.data import DataLoader
 
 from tensorboardX import SummaryWriter
 
 from torchsupport.data.io import netwrite, to_device
 from torchsupport.data.episodic import SupportData
+from torchsupport.data.collate import DataLoader
 
 class Training(object):
   """Abstract training process class.

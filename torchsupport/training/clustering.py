@@ -5,8 +5,8 @@ import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as func
-from torch.utils.data import DataLoader
 from torch.utils.data.sampler import WeightedRandomSampler
+from torchsupport.data.collate import DataLoader
 from torchsupport.training.training import Training
 from torchsupport.reporting.reporting import tensorplot
 from torchsupport.data.io import netwrite

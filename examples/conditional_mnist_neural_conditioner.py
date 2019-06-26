@@ -186,7 +186,7 @@ if __name__ == "__main__":
 
   training = MNISTConditionerTraining(
     generator, discriminator, data,
-    network_name="mnist-nc",
+    network_name="conditional-mnist-nc",
     device="cuda:0",
     n_critic=10,
     batch_size=64,

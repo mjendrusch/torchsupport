@@ -3,7 +3,6 @@ import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as func
-from torch.utils.data import DataLoader
 from torch.distributions import Normal, RelaxedOneHotCategorical
 
 from tensorboardX import SummaryWriter
@@ -11,6 +10,7 @@ from tensorboardX import SummaryWriter
 from torchsupport.training.training import Training
 import torchsupport.modules.losses.vae as vl
 from torchsupport.data.io import netwrite
+from torchsupport.data.collate import DataLoader
 
 from torchsupport.training.gan import GANTraining
 

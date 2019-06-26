@@ -38,7 +38,7 @@ class ConnectionStructure(object):
     return cls.reachable_nodes(nodes, structures, depth=depth - 1)
 
   @classmethod
-  def cat(cls, structures):
+  def collate(cls, structures):
     assert structures
     assert all(map(lambda x: x.source == structures[0].source, structures))
     assert all(map(lambda x: x.target == structures[0].target, structures))
@@ -55,6 +55,12 @@ class ConnectionStructure(object):
       structures[0].target,
       connections
     )
+
+  @classmethod
+  def cat(cls, structures):
+    assert all(map(lambda x: x.__class__ is structures[0].__class__, structures))
+    the_class = structures[0].__class__
+    return the_class.collate(structures)
 
   @classmethod
   def from_edges(cls, edges, source, target, nodes, directed=False):
@@ -112,10 +118,20 @@ class ConnectionStructure(object):
       else:
         yield torch.zeros_like(source[0:1]).unsqueeze(0)
 
-class CompoundStructure(object):
+class CompoundStructure(ConnectionStructure):
   def __init__(self, structures):
     assert all(map(lambda x: x.target == structures[0].target, structures))
     self.structures = structures
+
+  @classmethod
+  def collate(cls, structures):
+    slots = [[] for idx in range(len(structures[0].structures))]
+    for structure in structures:
+      for idx, substructure in enumerate(structure.structures):
+        slots[idx].append(substructure)
+    for idx, slot in enumerate(slots):
+      slots[idx] = ConnectionStructure.cat(slot)
+    return cls(slots)
 
   def message(self, source, target):
     for combination in zip(*map(lambda x: x.message(source, target), self.structures)):
@@ -125,6 +141,14 @@ class SubgraphStructure(ConnectionStructure):
   def __init__(self, membership):
     super(SubgraphStructure, self).__init__(None, None, None)
     self.membership = membership
+
+  @classmethod
+  def collate(cls, structures):
+    return cls([
+      subgraph
+      for structure in structures
+      for subgraph in structure.membership
+    ])
 
   def message(self, source, target):
     for subgraph in self.membership:
@@ -136,6 +160,23 @@ class ConstantStructure(ConnectionStructure):
     self.target = target
     self.connections = torch.tensor(connections, dtype=torch.long, requires_grad=False)
 
+  @classmethod
+  def collate(cls, structures):
+    assert structures
+    assert all(map(lambda x: x.source == structures[0].source, structures))
+    assert all(map(lambda x: x.target == structures[0].target, structures))
+    connections = []
+    offset = 0
+    for structure in structures:
+      current_connections = structure.connections
+      current_connections += offset
+      offset += current_connections.size(0)
+    return cls(
+      structures[0].source,
+      structures[0].target,
+      torch.cat(connections, dim=0)
+    )
+
   def message(self, source, target):
     return source[self.connections]
 
@@ -145,6 +186,11 @@ class ConstantifiedStructure(ConstantStructure):
     self.target = structure.target
     self.connections = structure.connections
     self.structure = structure
+
+  @classmethod
+  def collate(cls, structures):
+    structure_class = structures[0].structure.__class__
+    return cls(structure_class.cat(structures))
 
   def message(self, source, target):
     results = []
@@ -293,7 +339,7 @@ class EntityTensor(object):
       setattr(self, typ, entity_tensors[typ])
 
   @classmethod
-  def cat(cls, tensors, view=None, dim=0):
+  def collate(cls, tensors, view=None, dim=0):
     assert tensors
     result = tensors[0].new_like()
     if view is not None:
