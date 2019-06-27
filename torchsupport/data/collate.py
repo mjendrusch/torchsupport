@@ -2,7 +2,17 @@
 
 import torch
 from torch.utils.data import DataLoader as TorchDataLoader
-from torchsupport.modules.structured import ConnectionStructure
+
+class Collatable():
+  @classmethod
+  def collate(cls, inputs):
+    raise NotImplementedError("Abstract.")
+
+  @classmethod
+  def cat(cls, inputs):
+    assert all(map(lambda x: x.__class__ is inputs[0].__class__, inputs))
+    the_class = inputs[0].__class__
+    return the_class.collate(inputs)
 
 error_message_format = (
   "default_collate: batch must contain tensors, structures, numpy arrays, "
@@ -19,8 +29,8 @@ def default_collate(batch):
   elif isinstance(elem, (list, tuple)):
     transposed = zip(*batch)
     return [default_collate(samples) for samples in transposed]
-  elif isinstance(elem, ConnectionStructure):
-    return ConnectionStructure.cat(batch)
+  elif isinstance(elem, Collatable):
+    return Collatable.cat(batch)
   else:
     return torch.utils.data.dataloader.default_collate(batch)
   raise TypeError(error_message_format.format(elem_type))

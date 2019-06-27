@@ -3,6 +3,8 @@ from copy import copy, deepcopy
 import torch
 import networkx as nx
 
+from torchsupport.data.collate import Collatable
+
 class RangedArray(object):
   def __init__(self, values, ranges):
     self.values = values
@@ -14,7 +16,7 @@ class RangedArray(object):
   def __getitem__(self, idx):
     return self.values[self.ranges[idx]:self.ranges[idx]+1]
 
-class ConnectionStructure(object):
+class ConnectionStructure(Collatable, object):
   def __init__(self, source, target, connections):
     self.source = source
     self.target = target
@@ -55,12 +57,6 @@ class ConnectionStructure(object):
       structures[0].target,
       connections
     )
-
-  @classmethod
-  def cat(cls, structures):
-    assert all(map(lambda x: x.__class__ is structures[0].__class__, structures))
-    the_class = structures[0].__class__
-    return the_class.collate(structures)
 
   @classmethod
   def from_edges(cls, edges, source, target, nodes, directed=False):
