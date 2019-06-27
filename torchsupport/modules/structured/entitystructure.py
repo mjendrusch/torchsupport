@@ -234,7 +234,9 @@ class PairwiseData(ConstantStructureMixin, ConnectionStructure):
 
   def message(self, source, target):
     for idx, _ in enumerate(target):
-      if self.connections[idx]:
+      neighbours = self.connections[idx]
+      has_elements = len(neighbours) > 0
+      if has_elements:
         pairwise = self.compare(
           source[self.connections[idx]],
           target[idx]

@@ -14,11 +14,14 @@ class Collatable():
     the_class = inputs[0].__class__
     return the_class.collate(inputs)
 
-class BatchFirst(Collatable, torch.Tensor):
+class BatchFirst(Collatable):
+  def __init__(self, tensor):
+    self.tensor = tensor
+
   @classmethod
   def collate(cls, inputs):
     return torch.cat([
-      tensor
+      tensor.tensor
       for tensor in inputs
     ], dim=0)
 

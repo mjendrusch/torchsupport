@@ -7,7 +7,7 @@ import os
 
 def imread(path, type='float32'):
   """Reads a given image from file, returning a `Tensor`.
-  
+
   Args:
     path (str): path to an image file.
     type (str): the desired type of the output tensor, defaults to 'float32'.
@@ -31,7 +31,7 @@ def imread(path, type='float32'):
 
 def stackread(path, type='float32'):
   """Reads a given image from file, returning a `Tensor`.
-  
+
   Args:
     path (str): path to an image file.
     type (str): the desired type of the output tensor, defaults to 'float32'.
@@ -55,7 +55,7 @@ def stackread(path, type='float32'):
 
 def netwrite(network, path):
   """Writes a given neural network to a file.
-  
+
   Args:
     network (nn.Module): the network to be written, needs to inherit from `Module`.
     path (str): path to the file where the network will be written.
@@ -99,6 +99,10 @@ def netread(network, path):
         print("Unexpected OSError. Aborting ...")
         raise e
 
+class DeviceMovable():
+  def move_to(self, device):
+    raise NotImplementedError("Abstract.")
+
 def to_device(data, device):
   if isinstance(data, torch.Tensor):
     return data.to(device)
@@ -112,3 +116,5 @@ def to_device(data, device):
       key : to_device(data[key], device)
       for key in data
     }
+  if isinstance(data, DeviceMovable):
+    return data.move_to(device)

@@ -4,6 +4,7 @@ import torch
 import networkx as nx
 
 from torchsupport.data.collate import Collatable
+from torchsupport.data.io import DeviceMovable
 
 class RangedArray(object):
   def __init__(self, values, ranges):
@@ -16,11 +17,11 @@ class RangedArray(object):
   def __getitem__(self, idx):
     return self.values[self.ranges[idx]:self.ranges[idx]+1]
 
-class ConnectionStructure(Collatable, object):
+class ConnectionStructure(DeviceMovable, Collatable, object):
   def __init__(self, source, target, connections):
     self.source = source
     self.target = target
-    self.connections = list(connections)
+    self.connections = connections
 
   @classmethod
   def reachable_nodes(cls, start_nodes, structures, depth=1):
@@ -85,6 +86,9 @@ class ConnectionStructure(Collatable, object):
           connections.append(list(map(int, cleaned.split(","))))
     return cls(source, target, connections)
 
+  def move_to(self, device):
+    return self
+
   def select(self, sources, targets=None):
     """Selects a sub-adjacency structure from an adjacency structure
        given a set of source and target nodes to keep.
@@ -135,7 +139,6 @@ class CompoundStructure(ConnectionStructure):
 
 class SubgraphStructure(ConnectionStructure):
   def __init__(self, membership):
-    super(SubgraphStructure, self).__init__(None, None, None)
     self.membership = membership
 
   @classmethod
@@ -154,7 +157,17 @@ class ConstantStructure(ConnectionStructure):
   def __init__(self, source, target, connections):
     self.source = source
     self.target = target
-    self.connections = torch.tensor(connections, dtype=torch.long, requires_grad=False)
+    self.connections = connections
+    if not isinstance(self.connections, torch.Tensor):
+      self.connections = torch.tensor(
+        connections, dtype=torch.long, requires_grad=False
+      )
+
+  def move_to(self, device):
+    return ConstantStructure(
+      self.source, self.target,
+      self.connections.to(device)
+    )
 
   @classmethod
   def collate(cls, structures):
@@ -166,6 +179,7 @@ class ConstantStructure(ConnectionStructure):
     for structure in structures:
       current_connections = structure.connections
       current_connections += offset
+      connections.append(current_connections)
       offset += current_connections.size(0)
     return cls(
       structures[0].source,

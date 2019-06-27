@@ -95,7 +95,9 @@ class SupervisedTraining(Training):
 
   def run_networks(self, data):
     inputs, *labels = data
-    predictions = self.net(inputs)
+    if not isinstance(inputs, (list, tuple)):
+      inputs = [inputs]
+    predictions = self.net(*inputs)
     if not isinstance(predictions, (list, tuple)):
       predictions = [predictions]
     return [combined for combined in zip(predictions, labels)]
