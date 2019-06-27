@@ -14,6 +14,14 @@ class Collatable():
     the_class = inputs[0].__class__
     return the_class.collate(inputs)
 
+class BatchFirst(Collatable, torch.Tensor):
+  @classmethod
+  def collate(cls, inputs):
+    return torch.cat([
+      tensor
+      for tensor in inputs
+    ], dim=0)
+
 error_message_format = (
   "default_collate: batch must contain tensors, structures, numpy arrays, "
   "numbers, dicts or lists; found {}"
