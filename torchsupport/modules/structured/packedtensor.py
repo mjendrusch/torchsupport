@@ -39,8 +39,14 @@ class PackedTensor(torch.Tensor, Collatable):
       return result
 
   def __repr__(self):
-    prefix = "PackedTensor of lengths:\n{self.index}\ncontaining:\n"
+    prefix = f"PackedTensor of lengths:\n{self.index}\ncontaining:\n"
     return prefix + super(PackedTensor, self).__repr__()
+
+  def to(self, args):
+    result = PackedTensor(super().to(args))
+    result.index = self.index
+    result.pack_dim = self.pack_dim
+    return result
 
 def packed(tensor, dim=0):
   return PackedTensor(tensor, dim=0)

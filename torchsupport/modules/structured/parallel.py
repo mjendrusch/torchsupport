@@ -18,7 +18,19 @@ def chunk_sizes(lengths, num_targets):
   return result
 
 def chunk_tensor(tensor, lengths, targets, dim=0):
-  return Scatter.apply(targets, chunk_sizes, dim, tensor)
+  return Scatter.apply(targets, lengths, dim, tensor)
+
+def chunk_packed_tensor(tensor, targets):
+  sizes = chunk_sizes(tensor.index, len(targets))
+  chunks = chunk_tensor(tensor, sizes, targets, dim=0)
+  result = []
+  offset = 0
+  step = len(tensor.index) // len(targets)
+  for chunk in chunks:
+    the_tensor = PackedTensor(chunk)
+    the_tensor.index = tensor.index[offset:offset + step]
+    result.append(the_tensor)
+  return result
 
 class Chunkable():
   def chunk(self, obj):
@@ -34,8 +46,7 @@ def scatter_chunked(inputs, target_gpus, dim=0):
     if isinstance(obj, Chunkable):
       return obj.chunk(target_gpus, dim)
     if isinstance(obj, PackedTensor):
-      sizes = chunk_sizes(obj.lengths, len(target_gpus))
-      return chunk_tensor(obj, sizes, target_gpus, dim=dim)
+      return chunk_packed_tensor(obj, target_gpus)
     if isinstance(obj, torch.Tensor):
       return Scatter.apply(target_gpus, None, dim, obj)
 
