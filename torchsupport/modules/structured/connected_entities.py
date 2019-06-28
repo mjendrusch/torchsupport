@@ -5,6 +5,9 @@ import networkx as nx
 
 from torchsupport.data.collate import Collatable
 from torchsupport.data.io import DeviceMovable
+from torchsupport.modules.structured.parallel import (
+  Chunkable, chunk_sizes, chunk_tensor
+)
 
 class RangedArray(object):
   def __init__(self, values, ranges):
@@ -22,6 +25,7 @@ class ConnectionStructure(DeviceMovable, Collatable, object):
     self.source = source
     self.target = target
     self.connections = connections
+    self.lengths = [len(connections)]
 
   @classmethod
   def reachable_nodes(cls, start_nodes, structures, depth=1):
@@ -47,17 +51,21 @@ class ConnectionStructure(DeviceMovable, Collatable, object):
     assert all(map(lambda x: x.target == structures[0].target, structures))
     connections = []
     offset = 0
+    lengths = []
     for structure in structures:
       connections += list(map(
         lambda x: list(map(lambda y: y + offset, x)),
         structure.connections
       ))
+      lengths.append(len(structure.connections))
       offset += len(structure.connections)
-    return cls(
+    result = cls(
       structures[0].source,
       structures[0].target,
       connections
     )
+    result.lengths = lengths
+    return result
 
   @classmethod
   def from_edges(cls, edges, source, target, nodes, directed=False):
@@ -88,6 +96,17 @@ class ConnectionStructure(DeviceMovable, Collatable, object):
 
   def move_to(self, device):
     return self
+
+  def chunk(self, targets):
+    sizes = chunk_sizes(self.lengths, len(targets))
+    result = []
+    offset = 0
+    for size in sizes:
+      the_copy = copy(self)
+      the_copy.connections = self.connections[offset:offset + size]
+      result.append(the_copy)
+      offset += size
+    return result
 
   def select(self, sources, targets=None):
     """Selects a sub-adjacency structure from an adjacency structure
@@ -133,6 +152,21 @@ class CompoundStructure(ConnectionStructure):
       slots[idx] = ConnectionStructure.cat(slot)
     return cls(slots)
 
+  def chunk(self, targets):
+    result = [
+      structure.chunk(targets)
+      for structure in self.structures
+    ]
+    n_chunks = len(result[0])
+    result = [
+      CompoundStructure([
+        structure[idx]
+        for structure in result
+      ])
+      for idx in range(n_chunks)
+    ]
+    return result
+
   def message(self, source, target):
     for combination in zip(*map(lambda x: x.message(source, target), self.structures)):
       yield torch.cat(combination, dim=2)
@@ -169,6 +203,14 @@ class ConstantStructure(ConnectionStructure):
       self.connections.to(device)
     )
 
+  def chunk(self, targets):
+    sizes = chunk_sizes(self.lengths, len(targets))
+    connections = chunk_tensor(self.connections, sizes, targets)
+    return [
+      ConstantStructure(self.source, self.target, the_chunk)
+      for the_chunk in connections
+    ]
+
   @classmethod
   def collate(cls, structures):
     assert structures
@@ -201,6 +243,12 @@ class ConstantifiedStructure(ConstantStructure):
   def collate(cls, structures):
     structure_class = structures[0].structure.__class__
     return cls(structure_class.cat(structures))
+
+  def chunk(self, targets):
+    return [
+      ConstantifiedStructure(the_chunk)
+      for the_chunk in self.structure.chunk(targets)
+    ]
 
   def message(self, source, target):
     results = []

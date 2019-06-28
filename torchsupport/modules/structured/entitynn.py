@@ -113,6 +113,8 @@ class NeighbourMultiHeadAttention(ConnectedModule):
     """
     super(NeighbourMultiHeadAttention, self).__init__()
     query_size = query_size if query_size is not None else in_size
+    self.query_size = query_size
+    self.attention_size = attention_size
     self.heads = heads
     self.query = nn.Linear(query_size, heads * attention_size)
     self.key = nn.Linear(in_size, heads * attention_size)
@@ -135,7 +137,8 @@ class NeighbourMultiHeadAttention(ConnectedModule):
 
 class NeighbourDotMultiHeadAttention(NeighbourMultiHeadAttention):
   def attend(self, query, data):
-    return (query * data).sum(dim=-2)
+    scaling = torch.sqrt(torch.tensor(self.attention_size, dtype=torch.float))
+    return (query * data).sum(dim=-2) / scaling
 
 class NeighbourAddMultiHeadAttention(NeighbourMultiHeadAttention):
   def attend(self, query, data):
