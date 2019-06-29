@@ -2,7 +2,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as func
 
-from torchsupport.modules.structured.connected_entities import EntityTensor, AdjacencyStructure, ConstantStructure
+from torchsupport.structured.structures import (
+  ConstantStructure, ScatterStructure
+)
+from .. import scatter
 
 def flatten_message(message):
   return message.view(-1, *message.shape[2:])
@@ -11,17 +14,28 @@ def unflatten_message(output, message):
   return output.view(*message.shape[:2], *output.shape[1:])
 
 class ConnectedModule(nn.Module):
-  def __init__(self):
+  def __init__(self, has_scatter=False):
     """Applies a reduction function to the neighbourhood of each entity."""
     super(ConnectedModule, self).__init__()
+    self.has_scatter = has_scatter
 
   def reduce(self, own_data, source_messages):
+    raise NotImplementedError("Abstract")
+
+  def reduce_scatter(self, own_data, source_message, indices):
     raise NotImplementedError("Abstract")
 
   def forward(self, source, target, structure):
     # constant-width neighbourhoods:
     if isinstance(structure, ConstantStructure):
       return self.reduce(target, structure.message(source, target))
+    if isinstance(structure, ScatterStructure):
+      if not self.has_scatter:
+        raise NotImplementedError(
+          "Scattering-based implementation not supported for {self.__class__.__name__}."
+        )
+      target, source, indices = structure.message(source, target)
+      return self.reduce_scatter(target, source, indices)
 
     results = []
     for idx, message in enumerate(structure.message(source, target)):
@@ -31,8 +45,14 @@ class ConnectedModule(nn.Module):
 
 class NeighbourLinear(ConnectedModule):
   def __init__(self, source_channels, target_channels):
-    super(NeighbourLinear, self).__init__()
+    super(NeighbourLinear, self).__init__(has_scatter=True)
     self.linear = nn.Linear(source_channels, target_channels)
+
+  def reduce_scatter(self, own_data, source_message, indices):
+    return scatter.mean(
+      own_data + func.relu(self.linear(source_message)),
+      indices, dim_size=own_data.size(0)
+    )
 
   def reduce(self, own_data, source_message):
     inputs = flatten_message(source_message)
@@ -48,13 +68,24 @@ class NeighbourAssignment(ConnectedModule):
       out_channels (int): number of output features.
       size (int): number of distinct weight matrices (equivalent to kernel size).
     """
-    super(NeighbourAssignment, self).__init__()
+    super(NeighbourAssignment, self).__init__(has_scatter=True)
     self.linears = nn.ModuleList([
       nn.Linear(source_channels, out_channels)
       for _ in range(size)
     ])
     self.source = nn.Linear(source_channels, size)
     self.target = nn.Linear(target_channels, size)
+
+  def reduce_scatter(self, own_data, source_message, indices):
+    target = self.target(own_data)
+    source = self.source(source_message)
+    weight_tensors = []
+    for module in self.linears:
+      weight_tensors.append(module(source_message).unsqueeze(0))
+    weighted = torch.cat(weight_tensors, dim=0)
+    assignment = func.softmax(source + target, dim=-1).unsqueeze(0)
+    result = assignment.transpose(0, 3) * weighted
+    return scatter.mean(result, dim_size=own_data.size(0))
 
   def reduce(self, own_data, source_message, idx=None):
     inputs = flatten_message(source_message)
@@ -75,7 +106,7 @@ class NeighbourAttention(ConnectedModule):
     Args:
       size (int): size of the attention embedding.
     """
-    super(NeighbourAttention, self).__init__()
+    super(NeighbourAttention, self).__init__(has_scatter=True)
     query_size = query_size if query_size is not None else in_size
     attention_size = attention_size if attention_size is not None else in_size
     self.query = nn.Linear(query_size, attention_size)
@@ -84,6 +115,18 @@ class NeighbourAttention(ConnectedModule):
 
   def attend(self, query, data):
     raise NotImplementedError("Abstract.")
+
+  def reduce_scatter(self, own_data, source_message, indices):
+    target = self.query(own_data)
+    source = self.key(source_message)
+    value = self.value(source_message)
+    attention = scatter.softmax(
+      self.attend(target, source), indices, dim_size=own_data.size(0)
+    )
+    result = scatter.add(
+      (attention.unsqueeze(-1) * value), indices, dim_size=own_data.size(0)
+    )
+    return result
 
   def reduce(self, own_data, source_message):
     target = self.query(own_data)
@@ -111,7 +154,7 @@ class NeighbourMultiHeadAttention(ConnectedModule):
     Args:
       size (int): size of the attention embedding.
     """
-    super(NeighbourMultiHeadAttention, self).__init__()
+    super(NeighbourMultiHeadAttention, self).__init__(has_scatter=True)
     query_size = query_size if query_size is not None else in_size
     self.query_size = query_size
     self.attention_size = attention_size
@@ -123,6 +166,19 @@ class NeighbourMultiHeadAttention(ConnectedModule):
 
   def attend(self, query, data):
     raise NotImplementedError("Abstract.")
+
+  def reduce_scatter(self, own_data, source_message, indices):
+    target = self.query(own_data).view(*own_data.shape[:-1], -1, self.heads)
+    source = self.key(source_message).view(*source_message.shape[:-1], -1, self.heads)
+    value = self.value(source_message).view(*source_message.shape[:-1], -1, self.heads)
+    attention = scatter.softmax(
+      self.attend(target, source), indices, dim_size=own_data.size(0)
+    )
+    result = scatter.add(
+      (attention.unsqueeze(-2) * value), indices, dim_size=own_data.size(0)
+    )
+    result = self.output(result)
+    return result
 
   def reduce(self, own_data, source_message):
     target = self.query(own_data).view(*own_data.shape[:-1], -1, self.heads)

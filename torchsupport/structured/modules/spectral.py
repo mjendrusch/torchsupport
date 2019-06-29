@@ -2,17 +2,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as func
 
-from torchsupport.modules.structured.connected_entities import EntityTensor, AdjacencyStructure
-from torchsupport.modules.structured import entitynn as enn
+from torchsupport.structured.modules import basic as snn
 
-class AdjacencyAction(enn.ConnectedModule):
+class AdjacencyAction(snn.ConnectedModule):
   def reduce(self, data, message):
     return (data + message.sum(dim=0)) / (message.size(0) + 1)
 
-class LaplacianAction(enn.ConnectedModule):
+class LaplacianAction(snn.ConnectedModule):
   def __init__(self, normalized=False):
     super(LaplacianAction, self).__init__()
-    self.normalized = False
+    self.normalized = normalized
 
   def reduce(self, data, message):
     factor = 1

@@ -2,8 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as func
 
-from torchsupport.modules.structured import connected_entities as ce
-from torchsupport.modules.structured import entitystructure as es
+from torchsupport.structured import structures as cs
 
 class DeletionPool(nn.Module):
   def __init__(self, size):
@@ -15,7 +14,7 @@ class DeletionPool(nn.Module):
     median_val = torch.median(vals)
     keep_nodes = (vals > median_val).nonzeros()
     pooled_data = vals[keep_nodes] * data[keep_nodes]
-    pooled_structure = es.ConnectMissing(structure, keep_nodes)
+    pooled_structure = cs.ConnectMissing(structure, keep_nodes)
     return pooled_data, pooled_structure
 
 class SelectionPool(nn.Module):

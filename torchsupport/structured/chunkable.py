@@ -1,12 +1,7 @@
-from itertools import chain
-
 import torch
-import torch.nn as nn
-import torch.nn.parallel as par
-from torch.nn.parallel.scatter_gather import Scatter, scatter_kwargs
-import torch.nn.functional as func
+from torch.nn.parallel.scatter_gather import Scatter
 
-from torchsupport.modules.structured.packedtensor import PackedTensor
+from torchsupport.structured.packedtensor import PackedTensor
 
 def chunk_sizes(lengths, num_targets):
   num_entities = len(lengths)
@@ -74,7 +69,3 @@ def scatter_chunked_kwargs(inputs, kwargs, target_gpus, dim=0):
   inputs = tuple(inputs)
   kwargs = tuple(kwargs)
   return inputs, kwargs
-
-class DataParallel(nn.DataParallel):
-  def scatter(self, inputs, kwargs, device_ids):
-    return scatter_chunked_kwargs(inputs, kwargs, device_ids, dim=self.dim)

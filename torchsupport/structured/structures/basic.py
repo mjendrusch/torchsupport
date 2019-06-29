@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as func
 
-from torchsupport.structured import (
+from .connection import (
   ConnectionStructure, SubgraphStructure, ConstantStructureMixin
 )
 
