@@ -1,3 +1,5 @@
+from enum import Enum
+
 from copy import copy, deepcopy
 
 import torch
@@ -9,18 +11,55 @@ from torchsupport.structured.chunkable import (
   Chunkable, chunk_sizes, chunk_tensor
 )
 
-class RangedArray(object):
-  def __init__(self, values, ranges):
-    self.values = values
-    self.ranges = ranges
+class MessageMode(Enum):
+  iterative = 0
+  constant = 1
+  scatter = 2
 
-  def __len__(self):
-    return len(self.ranges) - 1
+class AbstractStructure(DeviceMovable, Chunkable, Collatable):
+  message_modes = set()
+  current_mode = None
 
-  def __getitem__(self, idx):
-    return self.values[self.ranges[idx]:self.ranges[idx]+1]
+  def mode(self, value):
+    if value in self.message_modes:
+      self.current_mode = value
+      return self
+    raise ValueError(
+      f"Invalid MessageMode {value} not in {self.message_modes}."
+    )
 
-class ConnectionStructure(DeviceMovable, Collatable, object):
+  def move_to(self, target):
+    return self
+
+  def mode_is(self, mode):
+    if self.current_mode is not None:
+      return mode == self.current_mode
+    else:
+      return mode in self.message_modes
+
+  def message_iterative(self, *args, **kwargs):
+    raise NotImplementedError("Abstract.")
+
+  def message_constant(self, *args, **kwargs):
+    raise NotImplementedError("Abstract.")
+
+  def message_scatter(self, *args, **kwargs):
+    raise NotImplementedError("Abstract.")
+
+  def message_mode(self, mode, *args, **kwargs):
+    to_call = getattr(self, f"message_{mode.name}")
+    return to_call(*args, **kwargs)
+
+  def message(self, *args, **kwargs):
+    if self.current_mode is not None:
+      return self.message_mode(self.current_mode, *args, **kwargs)
+    if self.message_modes:
+      the_mode = MessageMode(max(map(lambda x: x.value, self.message_modes)))
+      return self.message_mode(the_mode, *args, **kwargs)
+    raise ValueError("No valid MessageMode found.")
+
+class ConnectionStructure(AbstractStructure):
+  message_modes = {MessageMode.iterative}
   def __init__(self, source, target, connections):
     self.source = source
     self.target = target
@@ -143,7 +182,9 @@ class ConnectionStructure(DeviceMovable, Collatable, object):
       else:
         yield torch.zeros_like(source[0:1]).unsqueeze(0)
 
-class CompoundStructure(ConnectionStructure):
+class CompoundStructure(AbstractStructure):
+  message_modes = {MessageMode.iterative}
+  current_mode = MessageMode.iterative
   def __init__(self, structures):
     assert all(map(lambda x: x.target == structures[0].target, structures))
     self.structures = structures
@@ -177,7 +218,9 @@ class CompoundStructure(ConnectionStructure):
     for combination in zip(*map(lambda x: x.message(source, target), self.structures)):
       yield torch.cat(combination, dim=2)
 
-class SubgraphStructure(ConnectionStructure):
+class SubgraphStructure(AbstractStructure):
+  message_modes = {MessageMode.iterative}
+  current_mode = MessageMode.iterative
   def __init__(self, membership):
     self.membership = membership
 
@@ -193,7 +236,9 @@ class SubgraphStructure(ConnectionStructure):
     for subgraph in self.membership:
       yield source[subgraph]
 
-class ConstantStructure(ConnectionStructure):
+class ConstantStructure(AbstractStructure):
+  message_modes = {MessageMode.constant, MessageMode.iterative}
+  current_mode = MessageMode.constant
   def __init__(self, source, target, connections):
     self.source = source
     self.target = target
@@ -278,16 +323,20 @@ class ConstantStructureMixin():
   def constant(self):
     return ConstantifiedStructure(self)
 
-class ScatterStructure(ConnectionStructure):
+class ScatterStructure(AbstractStructure):
+  message_modes = {MessageMode.scatter}
+  current_mode = MessageMode.scatter
   def __init__(self, source, target, indices,
-               connections, length=None):
+               connections, node_count=None):
     self.source = source
     self.target = target
     self.indices = indices
     self.connections = connections
-    self.lengths = [
-      length if length is not None else indices.max()
-    ]
+    self.node_count = node_count
+    if self.node_count is None:
+      self.node_count = indices.max() + 1
+    self.lengths = [len(self.indices)]
+    self.node_counts = [self.node_count]
 
   @classmethod
   def from_connections(cls, source, target, connections):
@@ -304,46 +353,66 @@ class ScatterStructure(ConnectionStructure):
     return cls(
       source, target,
       indices, connections,
-      length=len(connections)
+      node_count=len(connections)
+    )
+
+  @classmethod
+  def from_connection_structure(cls, structure):
+    return cls.from_connections(
+      structure.source, structure.target,
+      structure.connections
     )
 
   @classmethod
   def collate(cls, structures):
-    structure_class = structures[0].structure.__class__
+    structure_class = structures[0].__class__
     source = structures[0].source
     target = structures[0].target
     indices = []
     connections = []
     lengths = []
+    node_counts = []
     offset = 0
     for struc in structures:
       indices.append(struc.indices + offset)
       connections.append(struc.connections + offset)
-      offset += sum(struc.lengths)
+      offset += struc.node_count
       lengths += struc.lengths
-    lengths = [
-      length
-      for struc in structures
-      for length in struc.lengths
-    ]
+      node_counts += struc.node_counts
     result = structure_class(
       source, target,
       torch.cat(indices, dim=0),
       torch.cat(connections, dim=0)
     )
+    result.node_count = offset
+    result.node_counts = node_counts
     result.lengths = lengths
     return result
 
   def chunk(self, targets):
     sizes = chunk_sizes(self.lengths, len(targets))
+    step = len(self.lengths) // len(targets)
     result = []
     offset = 0
-    for size in sizes:
+    index_offset = 0
+    for idx, size in enumerate(sizes):
       the_copy = copy(self)
-      the_copy.connections = self.connections[offset:offset + size]
+      the_copy.indices = self.indices[offset:offset + size] - index_offset
+      the_copy.connections = self.connections[offset:offset + size] - index_offset
+      the_copy.lengths = self.lengths[idx * step:(idx + 1) * step]
+      the_copy.node_counts = self.node_counts[idx * step:(idx + 1) * step]
+      the_copy.node_count = sum(the_copy.node_counts)
       result.append(the_copy)
       offset += size
+      index_offset += the_copy.node_count
     return result
+
+  def __len__(self):
+    return self.node_count
+
+  def __getitem__(self, idx):
+    assert idx < self.node_count
+    return self.connections[self.indices == idx]
 
   def message(self, source, target):
     return source[self.connections], target[self.indices], self.indices

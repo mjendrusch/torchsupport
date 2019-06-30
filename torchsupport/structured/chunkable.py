@@ -28,7 +28,7 @@ def chunk_packed_tensor(tensor, targets):
   return result
 
 class Chunkable():
-  def chunk(self, obj):
+  def chunk(self, targets):
     raise NotImplementedError("Abstract.")
 
 def scatter_chunked(inputs, target_gpus, dim=0):
@@ -39,7 +39,7 @@ def scatter_chunked(inputs, target_gpus, dim=0):
   """
   def scatter_map(obj):
     if isinstance(obj, Chunkable):
-      return obj.chunk(target_gpus, dim)
+      return obj.chunk(target_gpus)
     if isinstance(obj, PackedTensor):
       return chunk_packed_tensor(obj, target_gpus)
     if isinstance(obj, torch.Tensor):

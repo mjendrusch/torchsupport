@@ -6,7 +6,9 @@ import torch.nn as nn
 import torch.nn.functional as func
 
 from .connection import (
-  ConnectionStructure, SubgraphStructure, ConstantStructureMixin
+  AbstractStructure, ConnectionStructure,
+  SubgraphStructure, ConstantStructureMixin,
+  ScatterStructure, MessageMode
 )
 
 def to_graph(batched_tensor):
@@ -49,28 +51,42 @@ def random_substructure(structure, num_nodes, depth):
   )
   return full_nodes, substructure
 
-class DropoutStructure(ConnectionStructure):
+class DropoutStructure(AbstractStructure):
   def __init__(self, structure, p=0.5):
     """Drops random messages from a given structure.
 
     Args:
-      structure (ConnectionStructure): Structure to sample edges from.
+      structure (ConnectionStructure or ScatterStructure): Structure to sample edges from.
       p (float): probability of dropping an edge.
     """
-    super(DropoutStructure, self).__init__(
-      structure.source,
-      structure.target,
-      structure.connections
-    )
+    super(DropoutStructure, self).__init__()
+    self.structure = structure
+    self.message_modes.update(self.structure.message_modes)
     self.p = p
 
-  def message(self, source, target):
-    for msg in super(DropoutStructure, self).message(source, target):
+  def message_scatter(self, source, target):
+    indices = self.structure.indices
+    connections = self.structure.connections
+    total = indices.size(0)
+    keep, _ = torch.randperm(total)[:int((1 - self.p) * total)].sort()
+    indices = indices[keep]
+    connections = indices[keep]
+    return source[connections], target[indices], indices
+
+  def message_iterative(self, source, target):
+    for msg in self.structure.message(source, target):
       randoms = torch.rand(len(msg)) > self.p
       if randoms.sum() > 0:
         yield msg[:, randoms]
       else:
         yield torch.zeros_like(msg[0].unsqueeze(0))
+
+  def message(self, source, target):
+    if MessageMode.scatter in self.message_modes:
+      return self.message_scatter(source, target)
+    if MessageMode.iterative in self.message_modes:
+      for message in self.message_iterative(source, target):
+        yield message
 
 class NHopStructure(ConnectionStructure):
   def __init__(self, structure, depth, with_self=False):
@@ -195,7 +211,7 @@ class ConnectMissing(ConnectionStructure):
       ]
     )
 
-class PairwiseData(ConstantStructureMixin, ConnectionStructure):
+class PairwiseData(ConstantStructureMixin, AbstractStructure):
   """Auxiliary structure for attaching pairwise "edge" data
   given data local to sources and targets.
   """
@@ -204,13 +220,14 @@ class PairwiseData(ConstantStructureMixin, ConnectionStructure):
     given data local to sources and targets.
 
     Args:
-      structure (ConnectionStructure): underlying connection structure.
+      structure (AbstractStructure): underlying connection structure.
       source_data (torch.Tensor): data present at source nodes.
       target_data (torch.Tensor): data present at target nodes.
     """
-    super(PairwiseData, self).__init__(
-      structure.source, structure.target, structure.connections
-    )
+    super(PairwiseData, self).__init__()
+    self.structure = structure
+    self.message_modes.update(self.structure.message_modes)
+    self.current_mode = self.structure.current_mode
 
   def compare(self, source, target):
     """Compare source and target data to produce edge features.
@@ -232,19 +249,39 @@ class PairwiseData(ConstantStructureMixin, ConnectionStructure):
     """
     raise NotImplementedError("Abstract.")
 
-  def message(self, source, target):
+  def message_iterative(self, source, target):
     for idx, _ in enumerate(target):
-      neighbours = self.connections[idx]
+      neighbours = self.structure.connections[idx]
       has_elements = len(neighbours) > 0
       if has_elements:
         pairwise = self.compare(
-          source[self.connections[idx]],
+          source[self.structure.connections[idx]],
           target[idx]
         )
         yield pairwise.unsqueeze(0)
       else:
         pairwise = self.compare_empty()
         yield pairwise.unsqueeze(0)
+
+  def message_scatter(self, source, target):
+    comparison = self.compare(
+      source[self.structure.connections],
+      target[self.structure.indices]
+    )
+    return comparison, self.structure.indices
+
+  def message_constant(self, source, target):
+    packed_source = source[self.structure.connections]
+    packed_target = target.unsqueeze(1).expand(
+      target.size(0), packed_source.size(1), *target.shape[1:]
+    )
+    unpacked_source = packed_source.view(-1, *packed_source.shape[2:])
+    unpacked_target = packed_target.contiguous().view(-1, *packed_target.shape[2:])
+    comparison = self.compare(unpacked_source, unpacked_target)
+    packed_comparison = comparison.view(
+      -1, self.structure.connections.size(1), *comparison.shape[1:]
+    )
+    return packed_comparison
 
 class PairwiseStructure(PairwiseData):
   """Auxiliary structure for attaching pairwise "edge" data
@@ -259,18 +296,16 @@ class PairwiseStructure(PairwiseData):
       source_data (torch.Tensor): data present at source nodes.
       target_data (torch.Tensor): data present at target nodes.
     """
-    super(PairwiseStructure, self).__init__(
-      structure.source, structure.target, structure.connections
-    )
+    super(PairwiseStructure, self).__init__(structure)
     self.source_data = source_data
     self.target_data = target_data
 
-  def message(self, source, target):
+  def message_iterative(self, source, target):
     for idx, _ in enumerate(target):
-      if self.connections[idx]:
-        data = source[self.connections[idx]]
+      if self.structure.connections[idx]:
+        data = source[self.structure.connections[idx]]
         pairwise = self.compare(
-          self.source_data[self.connections[idx]],
+          self.source_data[self.structure.connections[idx]],
           self.target_data[idx]
         )
         yield torch.cat((data, pairwise), dim=1).unsqueeze(0)
@@ -278,6 +313,16 @@ class PairwiseStructure(PairwiseData):
         data = torch.zeros_like(source[0:1])
         pairwise = self.compare_empty()
         yield torch.cat((data, pairwise), dim=1).unsqueeze(0)
+
+  def message_constant(self, source, target):
+    pairwise = super().message_constant(self.source_data, self.target_data)
+    data = self.structure.message_constant(source, target)
+    return torch.cat((data, pairwise))
+
+  def message_scatter(self, source, target):
+    pairwise, indices = super().message(self.source_data, self.target_data)
+    source, target, indices = self.structure.message_scatter(source, target)
+    return torch.cat((source, pairwise), dim=1), target, indices
 
 class DistanceStructure(ConnectionStructure):
   def __init__(self, entity_tensor, subgraph_structure, typ,

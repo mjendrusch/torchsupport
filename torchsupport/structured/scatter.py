@@ -138,7 +138,7 @@ def reduced_sequential(module, data, indices, out=None, dim_size=None):
 
 def batched(module, data, indices, padding_value=0):
   padded, _, counts = pad(data, indices, value=padding_value)
-  result = module(padded)
+  result = module(padded.transpose(1, 2)).transpose(1, 2)
   packed = nn.utils.rnn.pack_padded_sequence(result, counts, batch_first=True)
   result = packed.data
   return result
@@ -146,7 +146,7 @@ def batched(module, data, indices, padding_value=0):
 def reduced_batched(module, data, indices, out=None,
                     dim_size=None, padding_value=0):
   padded, pad_indices, counts = pad(data, indices, value=padding_value)
-  result = module(padded)
+  result = module(padded.transpose(1, 2)).transpose(1, 2)
   result = result.sum(dim=1) / counts.float()
   if dim_size is None:
     dim_size = result.size(0)

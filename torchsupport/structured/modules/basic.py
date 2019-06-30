@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as func
 
 from torchsupport.structured.structures import (
-  ConstantStructure, ScatterStructure
+  ConstantStructure, ScatterStructure, MessageMode
 )
 from .. import scatter
 
@@ -27,9 +27,9 @@ class ConnectedModule(nn.Module):
 
   def forward(self, source, target, structure):
     # constant-width neighbourhoods:
-    if isinstance(structure, ConstantStructure):
+    if structure.mode_is(MessageMode.constant):
       return self.reduce(target, structure.message(source, target))
-    if isinstance(structure, ScatterStructure):
+    if structure.mode_is(MessageMode.scatter):
       if not self.has_scatter:
         raise NotImplementedError(
           "Scattering-based implementation not supported for {self.__class__.__name__}."
