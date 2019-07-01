@@ -340,20 +340,21 @@ class ScatterStructure(AbstractStructure):
 
   @classmethod
   def from_connections(cls, source, target, connections):
-    indices = torch.Tensor([
+    node_count = len(connections)
+    indices = torch.tensor([
       item
       for idx, connection in enumerate(connections)
       for item in len(connection) * [idx]
-    ])
-    connections = torch.Tensor([
-      connection
+    ], dtype=torch.long)
+    connections = torch.tensor([
+      item
       for connection in connections
       for item in connection
-    ])
+    ], dtype=torch.long)
     return cls(
       source, target,
       indices, connections,
-      node_count=len(connections)
+      node_count=node_count
     )
 
   @classmethod
@@ -415,4 +416,4 @@ class ScatterStructure(AbstractStructure):
     return self.connections[self.indices == idx]
 
   def message(self, source, target):
-    return source[self.connections], target[self.indices], self.indices
+    return source[self.connections], target[self.indices], self.indices, self.node_count

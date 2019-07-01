@@ -71,7 +71,7 @@ class DropoutStructure(AbstractStructure):
     keep, _ = torch.randperm(total)[:int((1 - self.p) * total)].sort()
     indices = indices[keep]
     connections = indices[keep]
-    return source[connections], target[indices], indices
+    return source[connections], target[indices], indices, self.structure.node_count
 
   def message_iterative(self, source, target):
     for msg in self.structure.message(source, target):
@@ -268,7 +268,7 @@ class PairwiseData(ConstantStructureMixin, AbstractStructure):
       source[self.structure.connections],
       target[self.structure.indices]
     )
-    return comparison, self.structure.indices
+    return comparison, self.structure.indices, self.structure.node_count
 
   def message_constant(self, source, target):
     packed_source = source[self.structure.connections]
@@ -321,8 +321,8 @@ class PairwiseStructure(PairwiseData):
 
   def message_scatter(self, source, target):
     pairwise, indices = super().message(self.source_data, self.target_data)
-    source, target, indices = self.structure.message_scatter(source, target)
-    return torch.cat((source, pairwise), dim=1), target, indices
+    source, target, indices, node_count = self.structure.message_scatter(source, target)
+    return torch.cat((source, pairwise), dim=1), target, indices, node_count
 
 class DistanceStructure(ConnectionStructure):
   def __init__(self, entity_tensor, subgraph_structure, typ,

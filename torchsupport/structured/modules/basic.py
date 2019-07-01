@@ -22,7 +22,7 @@ class ConnectedModule(nn.Module):
   def reduce(self, own_data, source_messages):
     raise NotImplementedError("Abstract")
 
-  def reduce_scatter(self, own_data, source_message, indices):
+  def reduce_scatter(self, own_data, source_message, indices, node_count):
     raise NotImplementedError("Abstract")
 
   def forward(self, source, target, structure):
@@ -34,8 +34,8 @@ class ConnectedModule(nn.Module):
         raise NotImplementedError(
           "Scattering-based implementation not supported for {self.__class__.__name__}."
         )
-      target, source, indices = structure.message(source, target)
-      return self.reduce_scatter(target, source, indices)
+      source, target, indices, node_count = structure.message(source, target)
+      return self.reduce_scatter(target, source, indices, node_count)
 
     results = []
     for idx, message in enumerate(structure.message(source, target)):
@@ -48,10 +48,10 @@ class NeighbourLinear(ConnectedModule):
     super(NeighbourLinear, self).__init__(has_scatter=True)
     self.linear = nn.Linear(source_channels, target_channels)
 
-  def reduce_scatter(self, own_data, source_message, indices):
+  def reduce_scatter(self, own_data, source_message, indices, node_count):
     return scatter.mean(
       own_data + func.relu(self.linear(source_message)),
-      indices, dim_size=own_data.size(0)
+      indices, dim_size=node_count
     )
 
   def reduce(self, own_data, source_message):
@@ -76,7 +76,7 @@ class NeighbourAssignment(ConnectedModule):
     self.source = nn.Linear(source_channels, size)
     self.target = nn.Linear(target_channels, size)
 
-  def reduce_scatter(self, own_data, source_message, indices):
+  def reduce_scatter(self, own_data, source_message, indices, node_count):
     target = self.target(own_data)
     source = self.source(source_message)
     weight_tensors = []
@@ -85,7 +85,7 @@ class NeighbourAssignment(ConnectedModule):
     weighted = torch.cat(weight_tensors, dim=0)
     assignment = func.softmax(source + target, dim=-1).unsqueeze(0)
     result = assignment.transpose(0, 3) * weighted
-    return scatter.mean(result, dim_size=own_data.size(0))
+    return scatter.mean(result, dim_size=node_count)
 
   def reduce(self, own_data, source_message, idx=None):
     inputs = flatten_message(source_message)
@@ -116,15 +116,15 @@ class NeighbourAttention(ConnectedModule):
   def attend(self, query, data):
     raise NotImplementedError("Abstract.")
 
-  def reduce_scatter(self, own_data, source_message, indices):
+  def reduce_scatter(self, own_data, source_message, indices, node_count):
     target = self.query(own_data)
     source = self.key(source_message)
     value = self.value(source_message)
     attention = scatter.softmax(
-      self.attend(target, source), indices, dim_size=own_data.size(0)
+      self.attend(target, source), indices, dim_size=node_count
     )
     result = scatter.add(
-      (attention.unsqueeze(-1) * value), indices, dim_size=own_data.size(0)
+      (attention.unsqueeze(-1) * value), indices, dim_size=node_count
     )
     return result
 
@@ -167,17 +167,17 @@ class NeighbourMultiHeadAttention(ConnectedModule):
   def attend(self, query, data):
     raise NotImplementedError("Abstract.")
 
-  def reduce_scatter(self, own_data, source_message, indices):
+  def reduce_scatter(self, own_data, source_message, indices, node_count):
     target = self.query(own_data).view(*own_data.shape[:-1], -1, self.heads)
     source = self.key(source_message).view(*source_message.shape[:-1], -1, self.heads)
     value = self.value(source_message).view(*source_message.shape[:-1], -1, self.heads)
     attention = scatter.softmax(
-      self.attend(target, source), indices, dim_size=own_data.size(0)
+      self.attend(target, source), indices, dim_size=node_count
     )
     result = scatter.add(
-      (attention.unsqueeze(-2) * value), indices, dim_size=own_data.size(0)
+      (attention.unsqueeze(-2) * value), indices, dim_size=node_count
     )
-    result = self.output(result)
+    result = self.output(result.view(*result.shape[:-2], -1))
     return result
 
   def reduce(self, own_data, source_message):

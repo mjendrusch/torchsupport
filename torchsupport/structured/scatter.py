@@ -2,17 +2,22 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as func
 
+def _compute_indices(data, indices, counts, max_count):
+  offset = max_count - counts
+  offset = offset.roll(1, 0)
+  offset[0] = 0
+  offset = torch.repeat_interleave(offset.cumsum(dim=0), counts, dim=0)
+
+  index = offset + torch.arange(len(indices))
+  return index
+
 def pad(data, indices, value=0):
   unique, counts = indices.unique(return_counts=True)
   result_indices = unique
-  tensors = []
-  offset = 0
-  for count in counts:
-    tensors.append(data[offset:offset + count])
-    offset += count
-  result = nn.utils.rnn.pad_sequence(
-    tensors, batch_first=True, padding_value=value
-  )
+  max_count = counts.max()
+  index = _compute_indices(data, indices, counts, max_count)
+  result = torch.zeros(len(counts), max_count, *data.shape[1:], dtype=data.dtype)
+  result.view(-1, *data.shape[1:])[index] = data
   return result, result_indices, counts
 
 def pack(data, indices):
@@ -50,7 +55,7 @@ except ImportError:
   def _scatter_op(operation, update, value=0):
     def _op(data, indices, dim=0, out=None, dim_size=None, fill_value=value):
       padded, pad_indices, counts = pad(data, indices, value=value)
-      processed = operation(padded, counts)
+      processed = operation(padded, counts.unsqueeze(1))
       if dim_size is None:
         dim_size = processed.size(0)
       if out is None:
@@ -99,8 +104,9 @@ except ImportError:
     _, counts = indices.unique(return_counts=True)
     counts = counts.float()
     factor = counts / (counts - 1)
+    factor = factor.unsqueeze(1)
     mean_value = mean(data, indices, dim_size=dim_size)[indices]
-    out = mean(factor * (data - mean_value) ** 2, indices, dim_size=dim_size)
+    out = factor * mean((data - mean_value) ** 2, indices, dim_size=dim_size)
     return out
 
   def std(data, indices, dim=0, out=None, dim_size=None, unbiased=True):
