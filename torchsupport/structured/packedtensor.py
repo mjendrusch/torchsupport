@@ -35,6 +35,6 @@ class PackedTensor(Collatable, Chunkable):
     step = len(self.lengths) // len(targets)
     for chunk in chunks:
       the_tensor = PackedTensor(chunk)
-      the_tensor.lengths = tensor.lengths[offset:offset + step]
+      the_tensor.lengths = self.lengths[offset:offset + step]
       result.append(the_tensor)
     return result
