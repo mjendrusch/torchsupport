@@ -22,10 +22,10 @@ class Transformer(nn.Module):
       query_size=query_size, heads=heads
     )
     self.local_bn = nn.LayerNorm(hidden_size)
-    self.residual_bn = nn.LayerNorm(hidden_size)
+    self.residual_bn = nn.LayerNorm(out_size)
     self.activation = activation
 
   def forward(self, data, structure):
     local = self.activation(self.local_bn(self.local(data)))
-    interaction = self.interact(local, structure)
+    interaction = self.interact(local, local, structure)
     return self.residual_bn(interaction + self.project_in(data))

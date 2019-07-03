@@ -40,7 +40,7 @@ class MILAttention(GraphPool):
     super(MILAttention, self).__init__()
     self.heads = heads
     self.query = nn.Linear(attention_size, heads)
-    self.gate = nn.Linear(attention_size, heads)
+    self.gate = nn.Linear(in_size, attention_size)
     self.key = nn.Linear(in_size, attention_size)
     self.value = nn.Linear(in_size, heads * attention_size)
     self.out = nn.Linear(heads * attention_size, out_size)
@@ -51,5 +51,5 @@ class MILAttention(GraphPool):
     value = self.value(nodes)
     weight = weight.view(*weight.shape[:-1], 1, self.heads)
     value = value.view(*value.shape[:-1], -1, self.heads)
-    result = scatter.sum(weight * value)
+    result = scatter.add(weight * value, indices)
     return self.out(result.view(*result.shape[:-2], -1))
