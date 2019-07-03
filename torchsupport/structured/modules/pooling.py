@@ -23,3 +23,13 @@ class SelectionPool(nn.Module):
 class CliquePool(nn.Module):
   def __init__(self):
     super(CliquePool, self).__init__()
+
+class GraphPool(nn.Module):
+  def __init__(self):
+    super(GraphPool, self).__init__()
+
+  def combine(self, nodes, indices):
+    raise NotImplementedError("Abstract.")
+
+  def forward(self, nodes, indices):
+    return self.combine(nodes, indices)

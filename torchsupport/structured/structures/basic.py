@@ -8,7 +8,7 @@ import torch.nn.functional as func
 from .connection import (
   AbstractStructure, ConnectionStructure,
   SubgraphStructure, ConstantStructureMixin,
-  ScatterStructure, MessageMode
+  ConstantStructure, ScatterStructure, MessageMode
 )
 
 def to_graph(batched_tensor):
@@ -50,6 +50,59 @@ def random_substructure(structure, num_nodes, depth):
     connections
   )
   return full_nodes, substructure
+
+class FullyConnectedScatter(ScatterStructure):
+  def __init__(self, indices):
+    unique, counts = indices.unique(return_counts=True)
+    structure_indices = torch.repeat_interleave(
+      unique, counts * counts
+    )
+    
+    # prepare offsets of connections:
+    repeated_counts = torch.repeat_interleave(counts, counts)
+    offset_factors = torch.arange(counts.sum()) * repeated_counts
+    offset = torch.repeat_interleave(offset_factors, repeated_counts)
+
+    structure_connections = torch.arange((counts * counts).sum()) - offset
+    super(FullyConnectedScatter, self).__init__(
+      0, 0,
+      structure_indices,
+      structure_connections
+    )
+
+class FullyConnectedConstant(ConstantStructure):
+  def __init__(self, batch, width):
+    # prepare offsets of connections:
+    offset_factors = torch.arange(width * batch) * width
+    offset = torch.repeat_interleave(offset_factors, width)
+
+    structure_connections = torch.arange(width * width * batch) - offset
+    structure_connections = structure_connections.reshape(batch * width, width)
+    super(FullyConnectedConstant, self).__init__(
+      0, 0,
+      structure_connections
+    )
+
+class FullyConnectedStructure(AbstractStructure):
+  message_modes = set()
+  def __init__(self, indices=None, batch=None, width=None):
+    if batch is not None and width is not None:
+      self.message_modes.update({MessageMode.constant})
+      self.message_mode = MessageMode.constant
+      self.structure = FullyConnectedConstant(batch, width)
+    elif indices is not None:
+      self.message_modes.update({MessageMode.scatter})
+      self.message_mode = MessageMode.scatter
+      self.structure = FullyConnectedScatter(indices)
+    else:
+      raise ValueError("Either `indices` or `batch` and `width` "
+                       "need to be not `None`.")
+
+  def message_scatter(self, source, target):
+    return self.structure.message_scatter(source, target)
+
+  def message_constant(self, source, target):
+    return self.structure.message_constant(source, target)
 
 class DropoutStructure(AbstractStructure):
   def __init__(self, structure, p=0.5):
