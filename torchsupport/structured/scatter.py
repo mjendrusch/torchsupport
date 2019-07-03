@@ -16,7 +16,10 @@ def pad(data, indices, value=0):
   result_indices = unique
   max_count = counts.max()
   index = _compute_indices(data, indices, counts, max_count)
-  result = torch.zeros(len(counts), max_count, *data.shape[1:], dtype=data.dtype)
+  result = torch.zeros(
+    len(counts), max_count, *data.shape[1:],
+    dtype=data.dtype, device=data.device
+  )
   result.view(-1, *data.shape[1:])[index] = data
   return result, result_indices, counts
 
@@ -59,7 +62,11 @@ except ImportError:
       if dim_size is None:
         dim_size = processed.size(0)
       if out is None:
-        out = torch.zeros(dim_size, *processed.shape[1:])
+        out = torch.zeros(
+          dim_size, *processed.shape[1:],
+          dtype=data.dtype,
+          device=data.device
+        )
         out.fill_(fill_value)
       out = update(out, processed, pad_indices)
       return out
@@ -98,7 +105,10 @@ except ImportError:
 
   def var(data, indices, dim=0, out=None, dim_size=None, unbiased=True):
     if out is None and dim_size is None:
-      out = torch.zeros(indices.max() + 1, *data.shape[1:])
+      out = torch.zeros(
+        indices.max() + 1, *data.shape[1:],
+        dtype=data.dtype, device=data.device
+      )
     if dim_size is None:
       dim_size = out.size(0)
     _, counts = indices.unique(return_counts=True)
@@ -135,7 +145,10 @@ def reduced_sequential(module, data, indices, out=None, dim_size=None):
   if dim_size is None:
     dim_size = indices.max() + 1
   if out is None:
-    out = torch.zeros(dim_size, result.shape[1:])
+    out = torch.zeros(
+      dim_size, result.shape[1:],
+      dtype=data.dtype, device=data.device
+    )
   out_hidden = torch.zeros_like(out)
   out[pack_indices] += result.data[last]
   out_hidden[pack_indices] += hidden.data[0]
@@ -157,7 +170,10 @@ def reduced_batched(module, data, indices, out=None,
   if dim_size is None:
     dim_size = result.size(0)
   if out is None:
-    out = torch.zeros(dim_size, *result.shape[1:])
+    out = torch.zeros(
+      dim_size, *result.shape[1:],
+      dtype=data.dtype, device=data.device
+    )
   out[pad_indices] += result
   return out
 

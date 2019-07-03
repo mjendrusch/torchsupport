@@ -1,52 +1,40 @@
 import torch
 from torchsupport.data.collate import Collatable
+from torchsupport.structured.chunkable import (
+  Chunkable, chunk_sizes, chunk_tensor
+)
 
-class PackedTensor(torch.Tensor, Collatable):
-  def __new__(cls, tensor, dim=0, requires_grad=False):
-    if isinstance(tensor, (list, tuple)):
-      tensor = torch.cat(tensor, dim)
-    result = torch.Tensor._make_subclass(cls, tensor, requires_grad)
-    return result
-
-  def __init__(self, tensor, dim=0, **kwargs):
-    if isinstance(tensor, (list, tuple)):
-      length = torch.tensor([
-        subitem
-        for item in tensor
-        for subitem in (
-          item.index
-          if isinstance(item, PackedTensor)
-          else [item.size(dim)]
-        )
-      ], dtype=torch.long)
-    elif isinstance(tensor, PackedTensor):
-      length = tensor.index
-    else:
-      length = torch.tensor([tensor.size(dim)], dtype=torch.long)
-    self.index = length
-    self.pack_dim = dim
+class PackedTensor(Collatable, Chunkable):
+  def __init__(self, tensors, lengths=None):
+    self.tensor = tensors
+    self.lengths = [len(tensors)]
+    if isinstance(self.tensor, (list, tuple)):
+      self.lengths = list(map(lambda x: x.size(0), tensors))
+      self.tensor = torch.cat(self.tensor, dim=0)
+    if lengths is not None:
+      self.lengths = lengths
 
   @classmethod
-  def collate(cls, instances):
-    return PackedTensor(instances, dim=instances[0].pack_dim)
+  def collate(cls, tensors):
+    data = [
+      tensor.tensor
+      for tensor in tensors
+    ]
+    lengths = [
+      length
+      for tensor in tensors
+      for length in tensor.lengths
+    ]
+    return PackedTensor(data, lengths=lengths)
 
-  def __deepcopy__(self, memo):
-    if id(self) in memo:
-      return memo[id(self)]
-    else:
-      result = type(self)(self.data.clone(), self.requires_grad)
-      memo[id(self)] = result
-      return result
-
-  def __repr__(self):
-    prefix = f"PackedTensor of lengths:\n{self.index}\ncontaining:\n"
-    return prefix + super(PackedTensor, self).__repr__()
-
-  def to(self, args):
-    result = PackedTensor(super().to(args))
-    result.index = self.index
-    result.pack_dim = self.pack_dim
+  def chunk(self, targets):
+    sizes = chunk_sizes(self.lengths, len(targets))
+    chunks = chunk_tensor(self, sizes, targets, dim=0)
+    result = []
+    offset = 0
+    step = len(self.lengths) // len(targets)
+    for chunk in chunks:
+      the_tensor = PackedTensor(chunk)
+      the_tensor.lengths = tensor.lengths[offset:offset + step]
+      result.append(the_tensor)
     return result
-
-def packed(tensor, dim=0):
-  return PackedTensor(tensor, dim=0)
