@@ -12,7 +12,8 @@ class Collatable():
   def cat(cls, inputs):
     assert all(map(lambda x: x.__class__ is inputs[0].__class__, inputs))
     the_class = inputs[0].__class__
-    return the_class.collate(inputs)
+    result = the_class.collate(inputs)
+    return result
 
 class BatchFirst(Collatable):
   def __init__(self, tensor):
