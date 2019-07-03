@@ -218,24 +218,6 @@ class CompoundStructure(AbstractStructure):
     for combination in zip(*map(lambda x: x.message(source, target), self.structures)):
       yield torch.cat(combination, dim=2)
 
-class SubgraphStructure(AbstractStructure):
-  message_modes = {MessageMode.iterative}
-  current_mode = MessageMode.iterative
-  def __init__(self, membership):
-    self.membership = membership
-
-  @classmethod
-  def collate(cls, structures):
-    return cls([
-      subgraph
-      for structure in structures
-      for subgraph in structure.membership
-    ])
-
-  def message(self, source, target):
-    for subgraph in self.membership:
-      yield source[subgraph]
-
 class ConstantStructure(AbstractStructure):
   message_modes = {MessageMode.constant, MessageMode.iterative}
   current_mode = MessageMode.constant
@@ -268,6 +250,32 @@ class ConstantStructure(AbstractStructure):
       ConstantStructure(self.source, self.target, the_chunk)
       for the_chunk in connections
     ]
+
+  def update(self, data):
+    (self.source, self.target, self.connections, self.lengths) = data
+    return self
+
+  def update_to(self, data):
+    return copy(self).update(data)
+
+  @classmethod
+  def collate_parameters(cls, structures):
+    assert structures
+    assert all(map(lambda x: x.source == structures[0].source, structures))
+    assert all(map(lambda x: x.target == structures[0].target, structures))
+    connections = []
+    lengths = []
+    offset = 0
+    for structure in structures:
+      current_connections = structure.connections
+      current_connections += offset
+      connections.append(current_connections)
+      lengths += structure.lengths
+      offset += current_connections.size(0)
+    source = structures[0].source
+    target = structures[0].target
+    connections = torch.cat(connections, dim=0)
+    return source, target, connections, lengths
 
   @classmethod
   def collate(cls, structures):
@@ -364,6 +372,37 @@ class ScatterStructure(AbstractStructure):
       structure.connections
     )
 
+  def update(self, data):
+    (self.source, self.target, self.indices, self.connections,
+     self.node_count, self.node_counts, self.lengths) = data
+    return self
+
+  def update_to(self, data):
+    return copy(self).update(data)
+
+  @classmethod
+  def collate_parameters(cls, structures):
+    source = structures[0].source
+    target = structures[0].target
+    indices = []
+    connections = []
+    lengths = []
+    node_counts = []
+    offset = 0
+    for struc in structures:
+      indices.append(struc.indices + offset)
+      connections.append(struc.connections + offset)
+      offset += struc.node_count
+      lengths += struc.lengths
+      node_counts += struc.node_counts
+    indices = torch.cat(indices, dim=0)
+    connections = torch.cat(connections, dim=0)
+    node_count = offset
+    return (
+      source, target, indices, connections,
+      node_count, node_counts, lengths
+    )
+
   @classmethod
   def collate(cls, structures):
     structure_class = structures[0].__class__
@@ -417,3 +456,44 @@ class ScatterStructure(AbstractStructure):
 
   def message(self, source, target):
     return source[self.connections], target[self.indices], self.indices, self.node_count
+
+class SubgraphStructure(AbstractStructure):
+  message_modes = {MessageMode.iterative, MessageMode.scatter}
+  current_mode = MessageMode.scatter
+  def __init__(self, membership):
+    self.indices = membership
+    unique, counts = self.indices.unique(return_counts=True)
+    self.unique = unique
+    self.counts = counts
+
+  @classmethod
+  def collate(cls, structures):
+    structure_class = structures[0].__class__
+    indices = []
+    offset = 0
+    for struc in structures:
+      indices.append(struc.indices + offset)
+      offset += struc.unique.max() + 1
+    result = structure_class(torch.cat(indices, dim=0))
+    return result
+
+  def chunk(self, targets):
+    sizes = chunk_sizes(self.counts, len(targets))
+    result = []
+    offset = 0
+    for size in sizes:
+      the_copy = copy(self)
+      the_copy.indices = self.indices[offset:offset + size]
+      the_copy.indices = the_copy.indices - the_copy.indices[0]
+      the_copy.unique, the_copy.counts = the_copy.indices.unique(return_counts=True)
+      result.append(the_copy)
+      offset += the_copy.indices.size(0)
+    return result
+
+  def message_iterative(self, source, target):
+    for subgraph in self.unique:
+      index = (self.indices == subgraph).view(-1).nonzero()
+      yield source[index]
+
+  def message_scatter(self, source, target):
+    return source, self.indices

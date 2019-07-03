@@ -70,6 +70,12 @@ class FullyConnectedScatter(ScatterStructure):
       structure_connections
     )
 
+  @classmethod
+  def collate(cls, structures):
+    return structures[0].update_to(
+      cls.collate_parameters(structures)
+    )
+
 class FullyConnectedConstant(ConstantStructure):
   def __init__(self, batch, width):
     # prepare offsets of connections:
@@ -81,6 +87,12 @@ class FullyConnectedConstant(ConstantStructure):
     super(FullyConnectedConstant, self).__init__(
       0, 0,
       structure_connections
+    )
+  
+  @classmethod
+  def collate(cls, structures):
+    return structures[0].update_to(
+      cls.collate_parameters(structures)
     )
 
 class FullyConnectedStructure(AbstractStructure):
@@ -97,6 +109,21 @@ class FullyConnectedStructure(AbstractStructure):
     else:
       raise ValueError("Either `indices` or `batch` and `width` "
                        "need to be not `None`.")
+
+  @classmethod
+  def collate(cls, structures):
+    the_class = structures[0].structure.__class__
+    assert all(map(
+      lambda x: x.structure.__class__ is the_class,
+      structures
+    ))
+    superstructure = the_class.collate([
+      struc.structure
+      for struc in structures
+    ])
+    the_copy = copy(structures[0])
+    the_copy.structure = superstructure
+    return the_copy
 
   def message_scatter(self, source, target):
     return self.structure.message_scatter(source, target)
