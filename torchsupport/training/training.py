@@ -127,6 +127,7 @@ class SupervisedTraining(Training):
 
   def validate(self):
     with torch.no_grad():
+      self.net.eval()
       vit = iter(self.validate_data)
       data = to_device(next(vit), self.device)
       outputs = self.run_networks(data)
@@ -135,6 +136,7 @@ class SupervisedTraining(Training):
       self.valid_callback(
         self, to_device(data, "cpu"), to_device(outputs, "cpu")
       )
+      self.net.train()
 
   def schedule_step(self):
     self.schedule.step(sum(self.validation_losses))
