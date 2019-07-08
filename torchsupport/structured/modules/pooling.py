@@ -53,3 +53,19 @@ class MILAttention(GraphPool):
     value = value.view(*value.shape[:-1], -1, self.heads)
     result = scatter.add(weight * value, indices)
     return self.out(result.view(*result.shape[:-2], -1))
+
+class MILRouting(GraphPool):
+  def __init__(self, in_size, k=3):
+    super(MILRouting, self).__init__()
+    self.k = k
+
+  def forward(self, nodes, indices):
+    weights = torch.zeros(nodes.size(0), 1)
+    for idx in range(self.k):
+      smax = torch.softmax(weights, dim=0)
+      sigma = scatter.add(smax * nodes)
+      norm = torch.norm(sigma, dim=1, keepdim=True)
+      norm2 = norm ** 2
+      sval = sigma / norm * norm2 / (1 + norm2)
+      weights = weights + nodes * sigma[indices]
+    return sigma
