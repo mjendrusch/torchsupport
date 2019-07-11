@@ -1,5 +1,6 @@
 import inspect
 import argparse
+import re
 
 def get_args(method):
   """
@@ -37,12 +38,15 @@ def get_docs(method, names):
     line.strip()
     for line in doc.split("\n")
   ]
+  pattern = r"^(?::param +)?{name}\b[ ]*(?:\(.*\)|\[.*\])?:\s*(.*)$"
   docs = {}
   for name in names:
+    regex = re.compile(pattern.format(name=name))
     docs[name] = ""
     for line in lines:
-      if line.startswith(name) and ':' in line:
-        docs[name] = line
+      match = regex.match(line)
+      if match:
+        docs[name] = match.group(1)
   return docs
 
 def _maybe(data, default):
@@ -152,7 +156,7 @@ class OptionWrapper():
   def __getitem__(self, key):
     raise NotImplementedError
   def __setitem__(self, key, value):
-    raise NotImplementedError:
+    raise NotImplementedError
   def __delitem__(self, key):
     raise NotImplementedError
   def __contains__(self, key):

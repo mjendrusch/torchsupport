@@ -104,10 +104,10 @@ def test_getargs_badtypes():
 def test_getdocs_simple():
   # TODO: Improve the coverage of weirder cases
   # Maybe require a prettier return
-  assert ap.get_docs(example_kwargs, [*'abc']) == {'a': 'a: value', 'b': 'b[int]: test', 'c': 'c : me'}
+  assert ap.get_docs(example_kwargs, [*'abc']) == {'a': 'value', 'b': 'test', 'c': 'me'}
 
 def test_getdocs_harder():
-  desired = {'pos': 'pos:', 'a': 'a: value', 'b': 'b: test'} 
+  desired = {'pos': '', 'a': 'value', 'b': 'test', 'c': ''} 
   result = ap.get_docs(example_combi, ['pos', *'abc'])
   assert result == desired
 
