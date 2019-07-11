@@ -55,10 +55,25 @@ class ExampleClassArgs():
 
 class ExampleClassKwargs():
   def __init__(self, a=None, b=1, c='test'):
+    """
+    Regular docstring Google style
+    Args:
+      a: some value
+      b: some int
+      c: default=test
+    """
     pass
 
 class ExampleClassCombi():
   def __init__(self, pos, a=None, b=1, c='test'):
+    """
+    Regular docstring but in sphinx style
+    :param pos: I'm a regular positional argument
+    :param a: some value
+    :param b: some int
+    :param c: default=test
+    Constructors aren't known for their return value
+    """
     pass
 
 example_class_obj = ExampleClassEmpty()
@@ -110,5 +125,9 @@ def test_getdocs_harder():
   desired = {'pos': '', 'a': 'value', 'b': 'test', 'c': ''} 
   result = ap.get_docs(example_combi, ['pos', *'abc'])
   assert result == desired
+
+# endregion
+
+# region argparse.ClassesParser
 
 # endregion
