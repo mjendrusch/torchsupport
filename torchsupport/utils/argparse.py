@@ -73,10 +73,13 @@ def add_kwarg_parse(parser, kwarg, doc, namespace=None):
 
 def add_class_parse(parser, the_class, namespace=None):
   """
-  Expand a parser with the kwargs from a single class.
+  Expand a parser with the kwargs from a single class (or function).
   Ignores args.
   """
-  method = the_class.__init__
+  if inspect.isclass(the_class):
+    method = the_class.__init__
+  else:
+    method = the_class
   _, kwargs = get_args(method)
   names = [kwarg.name for kwarg in kwargs]
   spaced_names = [
@@ -93,7 +96,7 @@ def add_class_parse(parser, the_class, namespace=None):
 class ClassesParser():
   """
   Convenience wrapper for the standard argparse.ArgumentParser.
-  Takes a list of classes (TODO functions) 
+  Takes a list of classes (or functions) 
   and creates a namespaced argument parser (stored in self.parser)
   with flags for all keyword arguments
   """
