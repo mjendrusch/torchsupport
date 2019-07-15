@@ -42,9 +42,14 @@ class StyleGANBlock(nn.Module):
     super(StyleGANBlock, self).__init__()
     self.upsample = upsample
     self.register_parameter(
-      "noise",
-      nn.Parameter(torch.randn(2, 1, in_size, 1, 1))
+      "noise_0",
+      nn.Parameter(torch.randn(1, in_size, 1, 1))
     )
+    self.register_parameter(
+      "noise_1",
+      nn.Parameter(torch.randn(1, out_size, 1, 1))
+    )
+
     self.is_first = False
     if size is not None:
       self.is_first = True
@@ -53,8 +58,8 @@ class StyleGANBlock(nn.Module):
         nn.Parameter(torch.randn(1, in_size, *size))
       )
     self.convs = nn.ModuleList([
-      nn.Conv2d(in_size, in_size, 3),
-      nn.Conv2d(in_size, out_size, 3)
+      nn.Conv2d(in_size, in_size, 3, padding=1),
+      nn.Conv2d(in_size, out_size, 3, padding=1)
     ])
     self.adas = nn.ModuleList([
       tsn.AdaptiveInstanceNorm(in_size, ada_size),
@@ -66,12 +71,13 @@ class StyleGANBlock(nn.Module):
     out = inputs
     if self.is_first:
       out = self.start_map
+      out = out.expand(latent.size(0), *out.shape[1:])
     else:
       out = func.interpolate(out, scale_factor=self.upsample)
       out = self.activation(self.convs[0](out))
-    out = out + torch.randn_like(out) * self.noise[0]
+    out = out + torch.randn_like(out) * self.noise_0
     out = self.adas[0](out, latent)
     out = self.activation(self.convs[1](out))
-    out = out + torch.randn_like(out) * self.noise[1]
+    out = out + torch.randn_like(out) * self.noise_1
     out = self.adas[1](out, latent)
     return out

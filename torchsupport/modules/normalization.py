@@ -21,6 +21,7 @@ class AdaptiveInstanceNorm(nn.Module):
     in_view = inputs.view(inputs.size(0), inputs.size(1), 1, 1, -1)
     mean = in_view.mean(dim=-1)
     std = in_view.std(dim=-1)
-    scale = self.scale(style)
-    bias = self.bias(style)
+    scale = self.scale(style).view(style.size(0), -1, 1, 1)
+    bias = self.bias(style).view(style.size(0), -1, 1, 1)
+    print(inputs.shape, mean.shape, std.shape, scale.shape, bias.shape)
     return scale * (inputs - mean) / std + bias

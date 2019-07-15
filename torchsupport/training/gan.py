@@ -9,7 +9,8 @@ from tensorboardX import SummaryWriter
 
 from torchsupport.training.training import Training
 import torchsupport.modules.losses.vae as vl
-from torchsupport.data.io import netwrite, to_device
+from torchsupport.structured import DataParallel as SDP
+from torchsupport.data.io import netwrite, to_device, detach
 from torchsupport.data.collate import DataLoader
 
 class AbstractGANTraining(Training):
@@ -248,12 +249,15 @@ class GANTraining(AbstractGANTraining):
     )
 
   def sample(self):
-    return self.generator.sample(self.batch_size).to(self.device)
+    the_generator = self.generator
+    if isinstance(the_generator, nn.DataParallel):
+      the_generator = the_generator.module
+    return to_device(the_generator.sample(self.batch_size), self.device)
 
-  def generator_loss(self, generated):
+  def generator_loss(self, data, generated):
+    disc = self.discriminator(generated)
     loss_val = func.binary_cross_entropy_with_logits(
-      self.discriminator(generated),
-      torch.ones(generated.size(0), 1)
+      disc, torch.ones(disc.size(0), 1).to(self.device)
     )
 
     return loss_val
@@ -275,8 +279,9 @@ class GANTraining(AbstractGANTraining):
     return data, generated
 
   def run_discriminator(self, data):
-    _, fake_batch = self.run_generator(data)
-    fake_result = self.discriminator(fake_batch.detach())
+    with torch.no_grad():
+      _, fake_batch = self.run_generator(data)
+    fake_result = self.discriminator(fake_batch)
     real_result = self.discriminator(data)
     return data, fake_batch, fake_result, real_result
 
@@ -320,7 +325,7 @@ class WGANTraining(GANTraining):
 
     return loss_val + self.penalty * gradient_penalty
 
-  def generator_loss(self, generated):
+  def generator_loss(self, data, generated):
     return -self.discriminator(generated)
 
 class GPGANTraining(GANTraining):

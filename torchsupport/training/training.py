@@ -72,7 +72,7 @@ class SupervisedTraining(Training):
       train_data, batch_size=batch_size, num_workers=8, shuffle=True
     )
     self.validate_data = DataLoader(
-      validate_data, batch_size=batch_size, shuffle=True
+      validate_data, batch_size=batch_size, num_workers=8, shuffle=True
     )
     self.net = net.to(self.device)
     self.max_epochs = max_epochs
@@ -118,6 +118,7 @@ class SupervisedTraining(Training):
     return loss_val
 
   def step(self, data):
+    print("step", self.step_id)
     self.optimizer.zero_grad()
     outputs = self.run_networks(data)
     loss_val = self.loss(outputs)
@@ -125,11 +126,14 @@ class SupervisedTraining(Training):
     self.optimizer.step()
     self.each_step()
 
-  def validate(self):
+  def validate(self, data):
     with torch.no_grad():
+      print("valid start:", self.step_id)
       self.net.eval()
-      vit = iter(self.validate_data)
-      data = to_device(next(vit), self.device)
+      #print("data start", self.step_id)
+      #vit = iter(self.validate_data)
+      #data = to_device(next(vit), self.device)
+      #print("data end", self.step_id)
       outputs = self.run_networks(data)
       self.valid_loss(outputs)
       self.each_validate()
@@ -137,6 +141,7 @@ class SupervisedTraining(Training):
         self, to_device(data, "cpu"), to_device(outputs, "cpu")
       )
       self.net.train()
+      print("valid end:", self.step_id)
 
   def schedule_step(self):
     self.schedule.step(sum(self.validation_losses))
@@ -157,11 +162,19 @@ class SupervisedTraining(Training):
   def train(self):
     for epoch_id in range(self.max_epochs):
       self.epoch_id = epoch_id
+      valid_iter = iter(self.validate_data)
       for data in self.train_data:
         data = to_device(data, self.device)
         self.step(data)
         if self.step_id % 10 == 0:
-          self.validate()
+          vdata = None
+          try:
+            vdata = next(valid_iter)
+          except StopIteration:
+            valid_iter = iter(self.validate_data)
+            vdata = next(valid_iter)
+          vdata = to_device(vdata, self.device)
+          self.validate(vdata)
         self.step_id += 1
       self.schedule_step()
       self.each_epoch()
