@@ -24,7 +24,8 @@ class AbstractGANTraining(Training):
                batch_size=128,
                device="cpu",
                network_name="network",
-               verbose=False):
+               verbose=False,
+               report_steps=10):
     """Generic training setup for generative adversarial networks.
 
     Args:
@@ -47,6 +48,7 @@ class AbstractGANTraining(Training):
     super(AbstractGANTraining, self).__init__()
 
     self.verbose = verbose
+    self.report_steps = report_steps
     self.checkpoint_path = network_name
 
     self.n_critic = n_critic
@@ -115,6 +117,10 @@ class AbstractGANTraining(Training):
     """Abstract method. Runs discriminator training."""
     raise NotImplementedError("Abstract")
 
+  def each_generate(self, *inputs):
+    """Reports on generation."""
+    pass
+
   def discriminator_step(self, data):
     """Performs a single step of discriminator training.
 
@@ -147,6 +153,8 @@ class AbstractGANTraining(Training):
     loss_val = self.generator_loss(*args)
 
     if self.verbose:
+      if self.step_id % self.report_steps == 0:
+        self.each_generate(*args)
       for loss_name in self.current_losses:
         loss_float = self.current_losses[loss_float]
         self.writer.add_scalar(f"{loss_name} loss", loss_float, self.step_id)

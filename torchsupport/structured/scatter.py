@@ -36,6 +36,22 @@ def pack(data, indices):
   )
   return result, result_indices, counts
 
+def repack(data, indices, target_indices):
+  out = torch.zeros(
+    target_indices.size(0), *data.shape[1:],
+    dtype=data.dtype, device=data.device
+  )
+  unique, lengths = indices.unique(return_counts=True)
+  unique, target_lengths = target_indices.unique(return_counts=True)
+  offset = target_lengths - lengths
+  offset = offset.roll(1, 0)
+  offset[0] = 0
+  offset = torch.repeat_interleave(offset.cumsum(dim=0), lengths, dim=0)
+  index = offset + torch.arange(len(indices))
+
+  out[index] = data
+  return data, target_indices
+
 HAS_SCATTER = True
 try:
   import torch_scatter as tsc
