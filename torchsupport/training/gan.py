@@ -285,12 +285,33 @@ class GANTraining(AbstractGANTraining):
     real_result = self.discriminator(data)
     return data, fake_batch, fake_result, real_result
 
-def _mix_on_path(real, fake):
+def _mix_on_path_aux(real, fake):
   sample = torch.rand(
     real.size(0),
     *[1 for _ in range(real.dim() - 1)]
   )
   return real * sample + fake * (1 - sample)
+
+def _mix_on_path(real, fake):
+  result = None
+  if isinstance(real, (list, tuple)):
+    result = [
+      _mix_on_path(real_part, fake_part)
+      for real_part, fake_part in zip(real, fake)
+    ]
+  elif isinstance(real, dict):
+    result = {
+      key: _mix_on_path(real[key], fake[key])
+      for key in real
+    }
+  elif isinstance(real, torch.Tensor):
+    if real.dtype in (torch.half, torch.float, torch.double):
+      result = _mix_on_path_aux(real, fake)
+    else:
+      result = random.choice([real, fake])
+  else:
+    result = random.choice([real, fake])
+  return result
 
 class WGANTraining(GANTraining):
   """Wasserstein-GAN (Arjovsky et al. 2017) training setup
