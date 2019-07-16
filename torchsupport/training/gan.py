@@ -135,7 +135,7 @@ class AbstractGANTraining(Training):
 
     if self.verbose:
       for loss_name in self.current_losses:
-        loss_float = self.current_losses[loss_float]
+        loss_float = self.current_losses[loss_name]
         self.writer.add_scalar(f"{loss_name} loss", loss_float, self.step_id)
     self.writer.add_scalar("discriminator total loss", float(loss_val), self.step_id)
 
@@ -157,7 +157,7 @@ class AbstractGANTraining(Training):
       if self.step_id % self.report_steps == 0:
         self.each_generate(*args)
       for loss_name in self.current_losses:
-        loss_float = self.current_losses[loss_float]
+        loss_float = self.current_losses[loss_name]
         self.writer.add_scalar(f"{loss_name} loss", loss_float, self.step_id)
     self.writer.add_scalar("generator total loss", float(loss_val), self.step_id)
 
@@ -289,8 +289,8 @@ def _mix_on_path_aux(real, fake):
   sample = torch.rand(
     real.size(0),
     *[1 for _ in range(real.dim() - 1)]
-  )
-  return real * sample + fake * (1 - sample)
+  ).to(real.device)
+  return (real * sample + fake * (1 - sample)).requires_grad_(True)
 
 def _mix_on_path(real, fake):
   result = None
@@ -313,6 +313,18 @@ def _mix_on_path(real, fake):
     result = random.choice([real, fake])
   return result
 
+def _gradient_norm(inputs, parameters):
+  out = torch.ones(inputs.size()).to(inputs.device)
+  gradients = torch.autograd.grad(
+    inputs, parameters, create_graph=True, retain_graph=True,
+    grad_outputs=out
+  )
+  grad_sum = 0.0
+  for gradient in gradients:
+    grad_sum += (gradient ** 2).view(gradient.size(0), -1).sum(dim=1)
+  grad_sum = torch.sqrt(grad_sum)
+  return grad_sum, out
+
 class WGANTraining(GANTraining):
   """Wasserstein-GAN (Arjovsky et al. 2017) training setup
   with gradient penalty (Gulrajani et al. 2017) for more
@@ -331,15 +343,15 @@ class WGANTraining(GANTraining):
     super(WGANTraining, self).__init__(generator, discriminator, data, **kwargs)
     self.penalty = penalty
 
+  def mixing_key(self, data):
+    return data
+
   def discriminator_loss(self, fake, real, generated_result, real_result):
-    loss_val = torch.mean(real_result - generated_result)
-    penalty_function = \
-      (torch.norm(self.discriminator(_mix_on_path(real, fake)), 2) - 1) ** 2
-    gradient_penalty = torch.autograd.grad(
-      penalty_function,
-      self.discriminator.parameters(),
-      create_graph=True
-    )
+    loss_val = generated_result.mean() - real_result.mean()
+    mixed = _mix_on_path(real, fake)
+    mixed_result = self.discriminator(mixed)
+    grad_norm, out = _gradient_norm(mixed_result, self.mixing_key(mixed))
+    gradient_penalty = ((grad_norm - 1) ** 2).mean()
 
     self.current_losses["discriminator"] = float(loss_val)
     self.current_losses["gradient-penalty"] = float(gradient_penalty)
@@ -347,7 +359,7 @@ class WGANTraining(GANTraining):
     return loss_val + self.penalty * gradient_penalty
 
   def generator_loss(self, data, generated):
-    return -self.discriminator(generated)
+    return -self.discriminator(generated).mean()
 
 class GPGANTraining(GANTraining):
   """GAN training setup with zero-centered gradient penalty
@@ -369,14 +381,13 @@ class GPGANTraining(GANTraining):
 
   def discriminator_loss(self, fake, real, generated_result, real_result):
     loss_val = torch.mean(real_result - generated_result)
-    penalty_function = self.discriminator(_mix_on_path(real, fake)) ** 2
-    gradient_penalty = torch.autograd.grad(
-      penalty_function,
-      self.discriminator.parameters(),
-      create_graph=True
-    )
+    mixed = _mix_on_path(real, fake)
+    mixed_result = self.discriminator(mixed)
+    grad_norm, out = _gradient_norm(mixed_result, mixed)
+    gradient_penalty = grad_norm ** 2
 
     self.current_losses["discriminator"] = float(loss_val)
     self.current_losses["gradient-penalty"] = float(gradient_penalty)
 
     return loss_val + self.penalty * gradient_penalty
+
