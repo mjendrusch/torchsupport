@@ -361,6 +361,26 @@ class WGANTraining(GANTraining):
   def generator_loss(self, data, generated):
     return -self.discriminator(generated).mean()
 
+class VKLGANTraining(WGANTraining):
+  def discriminator_loss(self, fake, real, generated_result, real_result):
+    real_mean = real_result.mean()
+    generated_mean = generated_result.mean()
+    loss_val = generated_mean - real_mean
+    real_weight = max(real_mean ** 2 - 1, 0.0)
+    generated_weight = max(generated_mean ** 2 - 1, 0.0)
+    penalty = real_weight + generated_weight
+
+    mixed = _mix_on_path(real, fake)
+    mixed_result = self.discriminator(mixed)
+    grad_norm, out = _gradient_norm(mixed_result, self.mixing_key(mixed))
+    cm = (1.0 / grad_norm).mean()
+
+    self.current_losses["cm"] = float(cm)
+    self.current_losses["discriminator"] = float(loss_val)
+    self.current_losses["penalty"] = float(penalty)
+
+    return loss_val - penalty
+
 class GPGANTraining(GANTraining):
   """GAN training setup with zero-centered gradient penalty
   (Thanh-Tung et al. 2019) for more stable training of standard GAN."""
@@ -379,15 +399,17 @@ class GPGANTraining(GANTraining):
     super(GPGANTraining, self).__init__(generator, discriminator, data, **kwargs)
     self.penalty = penalty
 
+  def mixing_key(self, data):
+    return data
+
   def discriminator_loss(self, fake, real, generated_result, real_result):
     loss_val = torch.mean(real_result - generated_result)
     mixed = _mix_on_path(real, fake)
     mixed_result = self.discriminator(mixed)
-    grad_norm, out = _gradient_norm(mixed_result, mixed)
+    grad_norm, out = _gradient_norm(mixed_result, self.mixing_key(mixed))
     gradient_penalty = grad_norm ** 2
 
     self.current_losses["discriminator"] = float(loss_val)
     self.current_losses["gradient-penalty"] = float(gradient_penalty)
 
     return loss_val + self.penalty * gradient_penalty
-
