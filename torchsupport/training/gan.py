@@ -131,7 +131,7 @@ class AbstractGANTraining(Training):
     self.discriminator_optimizer.zero_grad()
     data = to_device(data, self.device)
     args = self.run_discriminator(data)
-    loss_val = self.discriminator_loss(*args)
+    loss_val, *grad_out = self.discriminator_loss(*args)
 
     if self.verbose:
       for loss_name in self.current_losses:
@@ -356,7 +356,7 @@ class WGANTraining(GANTraining):
     self.current_losses["discriminator"] = float(loss_val)
     self.current_losses["gradient-penalty"] = float(gradient_penalty)
 
-    return loss_val + self.penalty * gradient_penalty
+    return loss_val + self.penalty * gradient_penalty, out
 
   def generator_loss(self, data, generated):
     return -self.discriminator(generated).mean()
@@ -379,10 +379,47 @@ class VKLGANTraining(WGANTraining):
     self.current_losses["discriminator"] = float(loss_val)
     self.current_losses["penalty"] = float(penalty)
 
-    return loss_val + penalty
+    return loss_val + penalty, out
 
   def generator_loss(self, data, generated):
     return self.discriminator(generated).mean()
+
+class RothGANTraining(GANTraining):
+  def __init__(self, *args, gamma=0.1, **kwargs):
+    super(RothGANTraining, self).__init__(*args, **kwargs)
+    self.gamma = gamma
+
+  def mixing_key(self, data):
+    return data
+
+  def regularization(self, fake, real, generated_result, real_result):
+    fake_prob = torch.sigmoid(generated_result)
+    real_prob = torch.sigmoid(real_result)
+    real_norm, real_out = _gradient_norm(real_result, self.mixing_key(real))
+    fake_norm, fake_out = _gradient_norm(generated_result, self.mixing_key(fake))
+
+    real_penalty = real_norm ** 2 * (1 - real_prob) ** 2
+    fake_penalty = fake_norm ** 2 * fake_prob ** 2
+
+    penalty = 0.5 * self.gamma * (real_penalty + fake_penalty).mean()
+
+    out = (real_out, fake_out)
+
+    return penalty, out
+
+  def discriminator_loss(self, fake, real, generated_result, real_result):
+    loss_val = GANTraining.discriminator_loss(
+      self, fake, real, generated_result, real_result
+    )
+    penalty, out = self.regularization(
+      fake, real, generated_result, real_result
+    )
+
+    self.current_losses["discriminator"] = float(loss_val)
+    self.current_losses["penalty"] = float(penalty)
+
+    return loss_val + penalty, out
+>>>>>>> d3379d7be5d6d43c040477770ca40c54563da2b7
 
 class GPGANTraining(GANTraining):
   """GAN training setup with zero-centered gradient penalty
@@ -415,4 +452,4 @@ class GPGANTraining(GANTraining):
     self.current_losses["discriminator"] = float(loss_val)
     self.current_losses["gradient-penalty"] = float(gradient_penalty)
 
-    return loss_val + self.penalty * gradient_penalty
+    return loss_val + self.penalty * gradient_penalty, out
