@@ -227,6 +227,18 @@ class AbstractGANTraining(Training):
 
     return generators, discriminators
 
+def _make_differentiable(data):
+  if isinstance(data, torch.Tensor):
+    data.requires_grad_(True)
+  elif isinstance(data, (list, tuple)):
+    for item in data:
+      _make_differentiable(item)
+  elif isinstance(data, dict):
+    for key in data:
+      _make_differentiable(data[key])
+  else:
+    pass
+
 class GANTraining(AbstractGANTraining):
   """Standard GAN training setup."""
   def __init__(self, generator, discriminator, data, **kwargs):
@@ -281,9 +293,11 @@ class GANTraining(AbstractGANTraining):
   def run_discriminator(self, data):
     with torch.no_grad():
       _, fake_batch = self.run_generator(data)
+    _make_differentiable(fake_batch)
+    _make_differentiable(data)
     fake_result = self.discriminator(fake_batch)
     real_result = self.discriminator(data)
-    return data, fake_batch, fake_result, real_result
+    return fake_batch, data, fake_result, real_result
 
 def _mix_on_path_aux(real, fake):
   sample = torch.rand(
