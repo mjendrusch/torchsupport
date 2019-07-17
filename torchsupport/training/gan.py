@@ -419,7 +419,6 @@ class RothGANTraining(GANTraining):
     self.current_losses["penalty"] = float(penalty)
 
     return loss_val + penalty, out
->>>>>>> d3379d7be5d6d43c040477770ca40c54563da2b7
 
 class GPGANTraining(GANTraining):
   """GAN training setup with zero-centered gradient penalty
