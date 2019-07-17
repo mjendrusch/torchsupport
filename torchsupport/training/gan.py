@@ -365,7 +365,7 @@ class VKLGANTraining(WGANTraining):
   def discriminator_loss(self, fake, real, generated_result, real_result):
     real_mean = real_result.mean()
     generated_mean = generated_result.mean()
-    loss_val = generated_mean - real_mean
+    loss_val = -generated_mean + real_mean
     real_weight = max(real_mean ** 2 - 1, 0.0)
     generated_weight = max(generated_mean ** 2 - 1, 0.0)
     penalty = real_weight + generated_weight
@@ -379,7 +379,10 @@ class VKLGANTraining(WGANTraining):
     self.current_losses["discriminator"] = float(loss_val)
     self.current_losses["penalty"] = float(penalty)
 
-    return loss_val - penalty
+    return loss_val + penalty
+
+  def generator_loss(self, data, generated):
+    return self.discriminator(generated).mean()
 
 class GPGANTraining(GANTraining):
   """GAN training setup with zero-centered gradient penalty
