@@ -193,6 +193,52 @@ def reduced_batched(module, data, indices, out=None,
   out[pad_indices] += result
   return out
 
+def pairwise(op, data, indices, padding_value=0):
+  padded, _, counts = pad(data, indices, value=padding_value)
+  padded = padded.transpose(1, 2)
+  reference = padded.unsqueeze(-1)
+  padded = padded.unsqueeze(-2)
+  op_result = op(padded, reference)
+
+  # batch indices into pairwise tensor:
+  batch_indices = torch.arange(counts.size(0))
+  batch_indices = torch.repeat_interleave(batch_indices, counts ** 2)
+
+  # first dimension indices:
+  first_offset = counts.roll(1)
+  first_offset[0] = 0
+  first_offset = torch.cumsum(first_offset, dim=0)
+  first_offset = torch.repeat_interleave(first_offset, counts)
+  first_indices = torch.arange(counts.sum()) - first_offset
+  first_indices = torch.repeat_interleave(
+    first_indices,
+    torch.repeat_interleave(counts, counts)
+  )
+
+  # second dimension indices:
+  second_offset = torch.repeat_interleave(counts, counts).roll(1)
+  second_offset[0] = 0
+  second_offset = torch.cumsum(second_offset, dim=0)
+  second_offset = torch.repeat_interleave(second_offset, torch.repeat_interleave(counts, counts))
+  second_indices = torch.arange((counts ** 2).sum()) - second_offset
+
+  # extract tensor from padded result using indices:
+  result = op_result[batch_indices, first_indices, second_indices]
+
+  # access: cumsum(counts ** 2)[idx] + counts[idx] * idy + idz
+  access_batch = (counts ** 2).roll(1)
+  access_batch[0] = 0
+  access_batch = torch.cumsum(access_batch, dim=0)
+  access_first = counts
+
+  access = (access_batch, access_first)
+
+  return result, batch_indices, first_indices, second_indices, access
+
+def pairwise_get(data, access, idx):
+  index = access[0][idx[0]] + access[1][idx[0]] * idx[1] + idx[2]
+  return data[index]
+
 class ScatterModule(nn.Module):
   def __init__(self):
     """Applies a reduction function to the neighbourhood of each entity."""
