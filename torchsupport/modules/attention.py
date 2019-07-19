@@ -15,7 +15,13 @@ class NonLocal(nn.Module):
     self.project = nn.Conv2d(attention_size, in_size, 1)
 
   def forward(self, inputs):
-    scaled_inputs = func.interpolate(inputs, size=self.size, scale_factor=self.scale_factor)
+    scaled_inputs = None
+    if self.scale:
+      scaled_inputs = func.max_pool2d(inputs, self.scale)
+    elif self.size:
+      scaled_inputs = func.adaptive_max_pool2d(inputs, self.size)
+    else:
+      scaled_inputs = inputs
 
     query = self.query(scaled_inputs).view(scaled_inputs.size(0), self.attention_size, -1)
     key = self.key(scaled_inputs).view(scaled_inputs.size(0), self.attention_size, -1)
