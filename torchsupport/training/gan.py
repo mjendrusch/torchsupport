@@ -387,7 +387,7 @@ class VKLGANTraining(WGANTraining):
     mixed = _mix_on_path(real, fake)
     mixed_result = self.discriminator(mixed)
     grad_norm, out = _gradient_norm(mixed_result, self.mixing_key(mixed))
-    cm = (1.0 / grad_norm).mean()
+    cm = (1.0 / (grad_norm + 1e-16)).mean()
 
     self.current_losses["cm"] = float(cm)
     self.current_losses["discriminator"] = float(loss_val)

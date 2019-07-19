@@ -3,6 +3,31 @@ import torch.nn as nn
 import torch.nn.functional as func
 import sys
 
+class NonLocal(nn.Module):
+  def __init__(self, in_size, attention_size=32, size=None, scale=None):
+    super(NonLocal, self).__init__()
+    self.size = size
+    self.scale = scale
+    self.attention_size = attention_size
+    self.query = nn.Conv2d(in_size, attention_size, 1)
+    self.key = nn.Conv2d(in_size, attention_size, 1)
+    self.value = nn.Conv2d(in_size, attention_size, 1)
+    self.project = nn.Conv2d(attention_size, in_size, 1)
+
+  def forward(self, inputs):
+    scaled_inputs = func.interpolate(inputs, size=self.size, scale_factor=self.scale_factor)
+
+    query = self.query(scaled_inputs).view(scaled_inputs.size(0), self.attention_size, -1)
+    key = self.key(scaled_inputs).view(scaled_inputs.size(0), self.attention_size, -1)
+    value = self.value(inputs).view(inputs.size(0), self.attention_size, -1)
+
+    key = key.permute(0, 2, 1)
+    assignment = (key @ query).softmax(dim=1)
+    result = value @ assignment
+    result = result.view(inputs.size(0), self.attention_size, *inputs.shape[2:])
+
+    return self.project(result) + inputs
+
 class AttentionBranch(nn.Module):
   def __init__(self, N, branches, in_channels, preprocess=None, activation=func.tanh):
     """Pixel-wise branch selection layer using attention.
