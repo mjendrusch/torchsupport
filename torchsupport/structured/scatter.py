@@ -21,7 +21,10 @@ def pad(data, indices, value=0):
     dtype=data.dtype, device=data.device
   )
   result.view(-1, *data.shape[1:])[index] = data
-  return result, result_indices, counts
+  return result, result_indices, index, counts
+
+def unpad(data, index):
+  return data.contiguous().view(-1, *data.shape[2:])[index]
 
 def pack(data, indices):
   unique, counts = indices.unique(return_counts=True)
@@ -73,7 +76,7 @@ try:
 except ImportError:
   def _scatter_op(operation, update, value=0):
     def _op(data, indices, dim=0, out=None, dim_size=None, fill_value=value):
-      padded, pad_indices, counts = pad(data, indices, value=value)
+      padded, pad_indices, _, counts = pad(data, indices, value=value)
       processed = operation(padded, counts.unsqueeze(1))
       if dim_size is None:
         dim_size = processed.size(0)
@@ -172,15 +175,14 @@ def reduced_sequential(module, data, indices, out=None, dim_size=None):
   return out, out_hidden
 
 def batched(module, data, indices, padding_value=0):
-  padded, _, counts = pad(data, indices, value=padding_value)
+  padded, _, index, counts = pad(data, indices, value=padding_value)
   result = module(padded.transpose(1, 2)).transpose(1, 2)
-  packed = nn.utils.rnn.pack_padded_sequence(result, counts, batch_first=True)
-  result = packed.data
-  return result
+  print(data.shape, result.shape)
+  return unpad(result, index)
 
 def reduced_batched(module, data, indices, out=None,
                     dim_size=None, padding_value=0):
-  padded, pad_indices, counts = pad(data, indices, value=padding_value)
+  padded, pad_indices, _, counts = pad(data, indices, value=padding_value)
   result = module(padded.transpose(1, 2)).transpose(1, 2)
   result = result.sum(dim=1) / counts.float()
   if dim_size is None:
@@ -194,7 +196,7 @@ def reduced_batched(module, data, indices, out=None,
   return out
 
 def pairwise(op, data, indices, padding_value=0):
-  padded, _, counts = pad(data, indices, value=padding_value)
+  padded, _, _, counts = pad(data, indices, value=padding_value)
   padded = padded.transpose(1, 2)
   reference = padded.unsqueeze(-1)
   padded = padded.unsqueeze(-2)
@@ -223,6 +225,7 @@ def pairwise(op, data, indices, padding_value=0):
   second_indices = torch.arange((counts ** 2).sum()) - second_offset
 
   # extract tensor from padded result using indices:
+  print(reference.shape, padded.shape, op_result.shape)
   result = op_result[batch_indices, first_indices, second_indices]
 
   # access: cumsum(counts ** 2)[idx] + counts[idx] * idy + idz
