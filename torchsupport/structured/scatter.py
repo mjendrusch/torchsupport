@@ -7,8 +7,9 @@ def _compute_indices(data, indices, counts, max_count):
   offset = offset.roll(1, 0)
   offset[0] = 0
   offset = torch.repeat_interleave(offset.cumsum(dim=0), counts, dim=0)
+  offset = offset.to(data.device)
 
-  index = offset + torch.arange(len(indices))
+  index = offset + torch.arange(len(indices)).to(data.device)
   return index
 
 def pad(data, indices, value=0):
@@ -21,6 +22,7 @@ def pad(data, indices, value=0):
     dtype=data.dtype, device=data.device
   )
   result.view(-1, *data.shape[1:])[index] = data
+  print("rei", result_indices.dtype, indices.dtype)
   return result, result_indices, index, counts
 
 def unpad(data, index):
@@ -50,7 +52,7 @@ def repack(data, indices, target_indices):
   offset = offset.roll(1, 0)
   offset[0] = 0
   offset = torch.repeat_interleave(offset.cumsum(dim=0), lengths, dim=0)
-  index = offset + torch.arange(len(indices))
+  index = offset + torch.arange(len(indices)).to(data.device)
 
   out[index] = data
   return data, target_indices
@@ -95,6 +97,7 @@ except ImportError:
       _op = None
 
   def _update_add(out, processed, indices):
+    print(indices.shape, indices.dtype)
     out[indices] += processed
     return out
 
@@ -237,6 +240,27 @@ def pairwise(op, data, indices, padding_value=0):
   access = (access_batch, access_first)
 
   return result, batch_indices, first_indices, second_indices, access
+
+def pairwise_no_pad(op, data, indices):
+  unique, counts = indices.unique(return_counts=True)
+  expansion = torch.cumsum(counts, dim=0)
+  expansion = torch.repeat_interleave(expansion, counts).to(data.device)
+  offset = torch.arange(0, counts.sum()).to(data.device)
+  expansion = expansion - offset - 1
+  print(expansion.size(), data.size())
+  expanded = torch.repeat_interleave(data, expansion, dim=0)
+
+  expansion_offset = counts.roll(1)
+  expansion_offset[0] = 0
+  expansion_offset = torch.repeat_interleave(expansion_offset, counts).to(data.device)
+  expansion_offset = torch.repeat_interleave(expansion_offset, expansion)
+  off_start = torch.repeat_interleave(torch.repeat_interleave(counts, counts).to(data.device) - expansion, expansion)
+  access = torch.arange(expansion.sum()).to(data.device)
+  access = access - torch.repeat_interleave(expansion.roll(1).cumsum(dim=0), expansion) + off_start + expansion_offset
+
+  result = op(expanded, data[access])
+  print("INDS", indices.size(), expansion.size(), indices.dtype)
+  return result, torch.repeat_interleave(indices.to(data.device), expansion, dim=0)
 
 def pairwise_get(data, access, idx):
   index = access[0][idx[0]] + access[1][idx[0]] * idx[1] + idx[2]
