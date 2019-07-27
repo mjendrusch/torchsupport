@@ -345,15 +345,16 @@ class ClassifierGANTraining():
   def __init__(self, classifier, optimizer=torch.optim.Adam, classifier_optimizer_kwargs=None):
     if classifier_optimizer_kwargs is None:
       classifier_optimizer_kwargs = {}
-    self.classifier = classifier
-    self.classifier_optimizer = optimizer(**classifier_optimizer_kwargs)
+    self.classifier = classifier.to(self.device)
+    self.classifier_optimizer = optimizer(
+      self.classifier.parameters(),
+      **classifier_optimizer_kwargs
+    )
 
   def classifier_loss(self, result, label):
     loss_val = 0.0
     for res, lbl in zip(result, label):
       loss_val += func.cross_entropy(res, lbl)
-
-    self.current_losses["classifier"] = float(loss_val)
 
     return loss_val
 
@@ -361,14 +362,17 @@ class ClassifierGANTraining():
     loss_val = super().generator_loss(data, generated)
     gen, *label = generated
     dat, *dat_label = data
-    classifier_loss = self.classifier_loss(self.classifier(gen), label)
-    classifier_loss += self.classifier_loss(self.classifier(dat), dat_label)
+    classifier_fake = self.classifier_loss(self.classifier(gen), label)
+    classifier_real = self.classifier_loss(self.classifier(dat), dat_label)
 
-    return loss_val + classifier_loss
+    self.current_losses["classifier real"] = float(classifier_real)
+    self.current_losses["classifier fake"] = float(classifier_fake)
+
+    return loss_val + classifier_real + classifier_fake
 
   def generator_step(self, data):
     self.classifier_optimizer.zero_grad()
-    super().generator_step()
+    super().generator_step(data)
     self.classifier_optimizer.step()
 
 class WGANTraining(GANTraining):
