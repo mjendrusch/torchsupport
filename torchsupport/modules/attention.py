@@ -23,13 +23,15 @@ class NonLocal(nn.Module):
     else:
       scaled_inputs = inputs
 
-    query = self.query(scaled_inputs).view(scaled_inputs.size(0), self.attention_size, -1)
+    query = self.query(inputs).view(inputs.size(0), self.attention_size, -1)
     key = self.key(scaled_inputs).view(scaled_inputs.size(0), self.attention_size, -1)
-    value = self.value(inputs).view(inputs.size(0), self.attention_size, -1)
+    value = self.value(scaled_inputs).view(scaled_inputs.size(0), self.attention_size, -1)
 
     key = key.permute(0, 2, 1)
     assignment = (key @ query).softmax(dim=1)
+    print(assignment.shape, value.shape, key.shape, query.shape)
     result = value @ assignment
+    print(result.shape)
     result = result.view(inputs.size(0), self.attention_size, *inputs.shape[2:])
 
     return self.project(result) + inputs

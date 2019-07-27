@@ -60,13 +60,21 @@ class FullyConnectedScatter(ScatterStructure):
         counts, counts
       )
     )
-    
+
     # prepare offsets of connections:
     repeated_counts = torch.repeat_interleave(counts, counts)
-    offset_factors = torch.arange(counts.sum()) * repeated_counts
+    other_counts = repeated_counts.roll(1)
+    other_counts[0] = 0
+    other_counts = other_counts.cumsum(dim=0)
+    offset_factors = other_counts
     offset = torch.repeat_interleave(offset_factors, repeated_counts)
+    base = counts.roll(1)
+    base[0] = 0
+    base = base.cumsum(dim=0)
+    base = torch.repeat_interleave(torch.repeat_interleave(base, counts), repeated_counts)
 
-    structure_connections = torch.arange((counts * counts).sum()) - offset
+    structure_connections = torch.arange((counts * counts).sum()) - offset + base
+
     super(FullyConnectedScatter, self).__init__(
       0, 0,
       structure_indices,

@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as func
+from torch.nn.utils import spectral_norm
 
 import torchsupport.modules.normalization as tsn
 from torchsupport.modules.attention import NonLocal
@@ -31,7 +32,7 @@ class UpsampleBlock(nn.Module):
       out = out.view(out.size(0), -1, *self.size)
       out = self.pixnorm(out)
     else:
-      out = func.interpolate(out, scale_factor=self.upsample)
+      out = func.interpolate(out, scale_factor=self.upsample, mode="bilinear")
       out = self.activation(self.convs[0](out))
       out = self.pixnorm(out)
     out = self.activation(self.convs[1](out))
@@ -74,7 +75,7 @@ class StyleGANBlock(nn.Module):
       out = self.start_map
       out = out.expand(latent.size(0), *out.shape[1:])
     else:
-      out = func.interpolate(out, scale_factor=self.upsample)
+      out = func.interpolate(out, scale_factor=self.upsample, mode="bilinear")
       out = self.activation(self.convs[0](out))
     out = out + torch.randn_like(out) * self.noise_0
     out = self.adas[0](out, latent)
@@ -84,39 +85,39 @@ class StyleGANBlock(nn.Module):
     return out
 
 class BigGANBlock(nn.Module):
-  def __init__(self, in_size, out_size,
+  def __init__(self, in_size, out_size, latent_size,
                hidden_size=None, upsample=1,
-               normalization=tsn.AdaptiveInstanceNorm,
-               activation=func.relu_):
+               normalization=tsn.AdaptiveBatchNorm,
+               activation=func.relu):
     super(BigGANBlock, self).__init__()
     if hidden_size is None:
-      hidden_size = in_size
+      hidden_size = in_size // 4
     self.in_size = in_size
     self.out_size = out_size
     self.upsample = upsample
     self.bn = nn.ModuleList([
-      normalization(in_size),
-      normalization(hidden_size),
-      normalization(hidden_size),
-      normalization(hidden_size)
+      normalization(in_size, latent_size),
+      normalization(hidden_size, latent_size),
+      normalization(hidden_size, latent_size),
+      normalization(hidden_size, latent_size)
     ])
     self.blocks = nn.ModuleList([
-      nn.Conv2d(in_size, hidden_size, 1),
-      nn.Conv2d(hidden_size, hidden_size, 3, padding=1),
-      nn.Conv2d(hidden_size, hidden_size, 3, padding=1),
-      nn.Conv2d(hidden_size, out_size, 1)
+      spectral_norm(nn.Conv2d(in_size, hidden_size, 1)),
+      spectral_norm(nn.Conv2d(hidden_size, hidden_size, 3, padding=1)),
+      spectral_norm(nn.Conv2d(hidden_size, hidden_size, 3, padding=1)),
+      spectral_norm(nn.Conv2d(hidden_size, out_size, 1))
     ])
     self.activation = activation
 
   def forward(self, inputs, latent):
-    skip = inputs[:, :self.in_size]
-    skip = func.interpolate(skip, scale_factor=self.upsample)
+    skip = inputs[:, :self.out_size]
+    skip = func.interpolate(skip, scale_factor=self.upsample, mode="bilinear")
 
     out = inputs
     for idx, (bn, block) in enumerate(zip(self.bn, self.blocks)):
       out = self.activation(bn(out, latent))
       if idx == 1:
-        out = func.interpolate(out, scale_factor=self.upsample)
+        out = func.interpolate(out, scale_factor=self.upsample, mode="bilinear")
       out = block(out)
 
     return out + skip
@@ -124,7 +125,7 @@ class BigGANBlock(nn.Module):
 class BigGANDiscriminatorBlock(nn.Module):
   def __init__(self, in_size, out_size,
                hidden_size=None, downsample=2,
-               activation=func.relu_):
+               activation=func.relu):
     super(BigGANDiscriminatorBlock, self).__init__()
     if hidden_size is None:
       hidden_size = out_size
@@ -133,24 +134,29 @@ class BigGANDiscriminatorBlock(nn.Module):
     self.hidden_size = hidden_size
     self.downsample = downsample
     self.blocks = nn.ModuleList([
-      nn.Conv2d(in_size, hidden_size, 1),
-      nn.Conv2d(hidden_size, hidden_size, 3, padding=1),
-      nn.Conv2d(hidden_size, hidden_size, 3, padding=1),
-      nn.Conv2d(hidden_size, out_size, 1)
+      spectral_norm(nn.Conv2d(in_size, hidden_size, 1)),
+      spectral_norm(nn.Conv2d(hidden_size, hidden_size, 3, padding=1)),
+      spectral_norm(nn.Conv2d(hidden_size, hidden_size, 3, padding=1)),
+      spectral_norm(nn.Conv2d(hidden_size, out_size, 1))
     ])
     self.activation = activation
-    self.project = nn.Conv2d(in_size, out_size - in_size, 1)
+    if out_size > in_size:
+      self.project = spectral_norm(nn.Conv2d(in_size, out_size - in_size, 1))
+    else:
+      self.project = lambda x: None
   
   def forward(self, inputs):
     skip = func.avg_pool2d(inputs, self.downsample)
     missing = self.project(skip)
-    skip = torch.cat((skip, missing), dim=1)
+    if missing is not None:
+      skip = torch.cat((skip, missing), dim=1)
 
     out = inputs
     for idx, block in enumerate(self.blocks):
       out = self.activation(out)
       if idx == len(self.blocks) - 1:
-        out = func.avg_pool2d(inputs, self.downsample)
+        out = func.avg_pool2d(out, self.downsample)
       out = block(out)
 
     return skip + out
+

@@ -478,7 +478,9 @@ class SubgraphStructure(AbstractStructure):
     return result
 
   def chunk(self, targets):
+    print("CHUNKING SUBGRAPH", self.counts, self.unique, targets)
     sizes = chunk_sizes(self.counts, len(targets))
+    print("CHUNKING SUBGRAPH", sizes)
     result = []
     offset = 0
     for size in sizes:
@@ -488,6 +490,7 @@ class SubgraphStructure(AbstractStructure):
       the_copy.unique, the_copy.counts = the_copy.indices.unique(return_counts=True)
       result.append(the_copy)
       offset += the_copy.indices.size(0)
+    print("CHUNKING SUBGRAPH", len(result))
     return result
 
   def message_iterative(self, source, target):

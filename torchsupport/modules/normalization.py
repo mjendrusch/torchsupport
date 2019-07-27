@@ -34,8 +34,10 @@ class AdaptiveBatchNorm(nn.Module):
 
   def forward(self, inputs, style):
     in_view = inputs.view(inputs.size(0), -1)
-    mean = in_view.mean(dim=0)
-    std = in_view.mean(dim=0)
+    mean = inputs.mean(dim=0, keepdim=True)
+    std = inputs.std(dim=0, keepdim=True)
     scale = self.scale(style).view(style.size(0), -1, 1, 1)
+    scale = scale - scale.mean(dim=1, keepdim=True) + 1
     bias = self.bias(style).view(style.size(0), -1, 1, 1)
-    return scale * (inputs - mean) / std + bias
+    bias = bias - bias.mean(dim=1, keepdim=True)
+    return scale * (inputs - mean) / (std + 1e-6) + bias

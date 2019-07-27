@@ -269,21 +269,23 @@ class GANTraining(AbstractGANTraining):
   def generator_loss(self, data, generated):
     disc = self.discriminator(generated)
     loss_val = func.binary_cross_entropy_with_logits(
-      disc, torch.ones(disc.size(0), 1).to(self.device)
+      disc, torch.zeros(disc.size(0), 1).to(self.device)
     )
 
     return loss_val
 
   def discriminator_loss(self, generated, real,
                          generated_result, real_result):
+    gen_noise = 0.1 * torch.rand(generated_result.size(0), 1).to(self.device)
+    real_noise = 0.1 * torch.rand(real_result.size(0), 1).to(self.device)
     generated_loss = func.binary_cross_entropy_with_logits(
-      generated_result, torch.zeros(generated_result.size(0), 1).to(self.device)
+      generated_result, torch.ones(generated_result.size(0), 1).to(self.device) - gen_noise
     )
     real_loss = func.binary_cross_entropy_with_logits(
-      real_result, 0.9 * torch.ones(real_result.size(0), 1).to(self.device)
+      real_result, torch.zeros(real_result.size(0), 1).to(self.device) + real_noise
     )
 
-    return generated_loss + real_loss
+    return generated_loss + real_loss, None
 
   def run_generator(self, data):
     sample = self.sample()
@@ -422,7 +424,7 @@ class RothGANTraining(GANTraining):
     return penalty, out
 
   def discriminator_loss(self, fake, real, generated_result, real_result):
-    loss_val = GANTraining.discriminator_loss(
+    loss_val, _ = GANTraining.discriminator_loss(
       self, fake, real, generated_result, real_result
     )
     penalty, out = self.regularization(

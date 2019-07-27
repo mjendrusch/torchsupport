@@ -157,7 +157,7 @@ def softmax(data, indices, dim_size=None):
 def sequential(module, data, indices):
   packed, _, _ = pack(data, indices)
   result, hidden = module(packed)
-  return result.data, hidden.data
+  return result.data, hidden
 
 def reduced_sequential(module, data, indices, out=None, dim_size=None):
   packed, pack_indices, counts = pack(data, indices)
@@ -244,23 +244,23 @@ def pairwise(op, data, indices, padding_value=0):
 def pairwise_no_pad(op, data, indices):
   unique, counts = indices.unique(return_counts=True)
   expansion = torch.cumsum(counts, dim=0)
-  expansion = torch.repeat_interleave(expansion, counts).to(data.device)
-  offset = torch.arange(0, counts.sum()).to(data.device)
+  expansion = torch.repeat_interleave(expansion, counts)
+  offset = torch.arange(0, counts.sum())
   expansion = expansion - offset - 1
   print(expansion.size(), data.size())
-  expanded = torch.repeat_interleave(data, expansion, dim=0)
+  expanded = torch.repeat_interleave(data, expansion.to(data.device), dim=0)
 
   expansion_offset = counts.roll(1)
   expansion_offset[0] = 0
-  expansion_offset = torch.repeat_interleave(expansion_offset, counts).to(data.device)
+  expansion_offset = torch.repeat_interleave(expansion_offset, counts)
   expansion_offset = torch.repeat_interleave(expansion_offset, expansion)
-  off_start = torch.repeat_interleave(torch.repeat_interleave(counts, counts).to(data.device) - expansion, expansion)
-  access = torch.arange(expansion.sum()).to(data.device)
+  off_start = torch.repeat_interleave(torch.repeat_interleave(counts, counts) - expansion, expansion)
+  access = torch.arange(expansion.sum())
   access = access - torch.repeat_interleave(expansion.roll(1).cumsum(dim=0), expansion) + off_start + expansion_offset
 
-  result = op(expanded, data[access])
+  result = op(expanded, data[access.to(data.device)])
   print("INDS", indices.size(), expansion.size(), indices.dtype)
-  return result, torch.repeat_interleave(indices.to(data.device), expansion, dim=0)
+  return result, torch.repeat_interleave(indices, expansion, dim=0)
 
 def pairwise_get(data, access, idx):
   index = access[0][idx[0]] + access[1][idx[0]] * idx[1] + idx[2]
