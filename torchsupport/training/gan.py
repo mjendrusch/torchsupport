@@ -350,6 +350,7 @@ class ClassifierGANTraining():
       self.classifier.parameters(),
       **classifier_optimizer_kwargs
     )
+    self.discriminator_names.append("classifier")
 
   def classifier_loss(self, result, label):
     loss_val = 0.0
