@@ -1,6 +1,7 @@
 import inspect
 import argparse
 import re
+import json
 
 def get_args(method):
   """
@@ -100,8 +101,11 @@ class ClassesParser():
   and creates a namespaced argument parser (stored in self.parser)
   with flags for all keyword arguments
   """
-  def __init__(self, class_dict, **kwargs):
+  def __init__(self, class_dict, json_dict=None, **kwargs):
     parser, name_dict, space_dict, default_dict = self._classes_parser(class_dict, **kwargs)
+    self.option_dict = None
+    if json_dict is not None:
+      self.option_dict = json_dict
     self.parser = parser
     self.name_dict = name_dict
     self.space_dict = space_dict
@@ -133,14 +137,24 @@ class ClassesParser():
       kwargs: kwargs of argparse.ArgumentParser.parse_args
     """
     options = self.parser.parse_args(*args, **kwargs)
-    return OptionWrapper(options, self.name_dict, self.space_dict, self.default_dict)
+    return OptionWrapper(
+      options, self.name_dict, self.space_dict, self.default_dict,
+      option_dict=self.option_dict
+    )
 
 class OptionWrapper():
   """
   Object returned by torchsupport.utils.argparse.ClassesParser
   """
-  def __init__(self, options, name_dict, space_dict, default_dict):
-    option_dict = vars(options)
+  def __init__(self, options, name_dict, space_dict,
+               default_dict, option_dict=None):
+    if option_dict is None:
+      option_dict = vars(options)
+    else:
+      option_vars = vars(options)
+      for key in option_vars:
+        if option_vars[key] is not None:
+          option_dict[key] = option_vars[key]
     for name in space_dict:
       the_dict = {}
       for keyword in space_dict[name]:
@@ -149,12 +163,19 @@ class OptionWrapper():
           the_dict[unspace] = option_dict[keyword]
         elif option_dict[unspace] is not None:
           the_dict[unspace] = option_dict[unspace]
+          option_dict[keyword] = option_dict[unspace]
         else:
           the_dict[unspace] = default_dict[name][keyword]
+          option_dict[keyword] = default_dict[name][keyword]
       setattr(self, name, the_dict)
     for option in option_dict:
       setattr(self, option, option_dict[option])
-    
+    self.option_dict = option_dict
+
+  def dump_options(self, path):
+    with open(path, "w") as json_file:
+      json.dump(self.option_dict, json_file)
+
   # TODO: For greater compatibility 
   def __getitem__(self, key):
     raise NotImplementedError

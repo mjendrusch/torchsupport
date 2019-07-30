@@ -38,7 +38,9 @@ class PackedTensor(DeviceMovable, Collatable, Chunkable):
     return self
 
   def chunk(self, targets):
+    print("CHUNKING PACKED", self.split, self.lengths, targets)
     sizes = chunk_sizes(self.lengths, len(targets))
+    print("CHUNKING PACKED", sizes)
     chunks = chunk_tensor(self.tensor, sizes, targets, dim=0)
     result = []
     offset = 0
@@ -47,4 +49,5 @@ class PackedTensor(DeviceMovable, Collatable, Chunkable):
       the_tensor = PackedTensor(chunk)
       the_tensor.lengths = self.lengths[offset:offset + step]
       result.append(the_tensor.tensor)
+    print("CHUNKING PACKED", len(result))
     return result

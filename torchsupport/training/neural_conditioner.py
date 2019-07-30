@@ -26,7 +26,7 @@ class NeuralConditionerTraining(GANTraining):
     loss = GANTraining.discriminator_loss(self, data, fake, fake_res, real_res)
     regularizer = 0.5 * (fake_res.sigmoid().mean(dim=0) + real_res.sigmoid().mean(dim=0))
     loss += regularizer.mean(dim=0)
-    return loss
+    return loss, None
 
   def generator_loss(self, inputs, generated, available, requested):
     discriminator_result = self._run_discriminator_aux(

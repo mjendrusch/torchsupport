@@ -118,3 +118,19 @@ def to_device(data, device):
     }
   if isinstance(data, DeviceMovable):
     return data.move_to(device)
+
+def detach(data):
+  if isinstance(data, torch.Tensor):
+    return data.detach()
+  if isinstance(data, (list, tuple)):
+    return [
+      detach(point)
+      for point in data
+    ]
+  if isinstance(data, dict):
+    return {
+      key : detach(data[key])
+      for key in data
+    }
+  raise ArgumentError("cannot be detached.")
+

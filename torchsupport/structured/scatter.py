@@ -7,8 +7,9 @@ def _compute_indices(data, indices, counts, max_count):
   offset = offset.roll(1, 0)
   offset[0] = 0
   offset = torch.repeat_interleave(offset.cumsum(dim=0), counts, dim=0)
+  offset = offset.to(data.device)
 
-  index = offset + torch.arange(len(indices))
+  index = offset + torch.arange(len(indices)).to(data.device)
   return index
 
 def pad(data, indices, value=0):
@@ -21,7 +22,11 @@ def pad(data, indices, value=0):
     dtype=data.dtype, device=data.device
   )
   result.view(-1, *data.shape[1:])[index] = data
-  return result, result_indices, counts
+  print("rei", result_indices.dtype, indices.dtype)
+  return result, result_indices, index, counts
+
+def unpad(data, index):
+  return data.contiguous().view(-1, *data.shape[2:])[index]
 
 def pack(data, indices):
   unique, counts = indices.unique(return_counts=True)
@@ -35,6 +40,22 @@ def pack(data, indices):
     tensors, enforce_sorted=False
   )
   return result, result_indices, counts
+
+def repack(data, indices, target_indices):
+  out = torch.zeros(
+    target_indices.size(0), *data.shape[1:],
+    dtype=data.dtype, device=data.device
+  )
+  unique, lengths = indices.unique(return_counts=True)
+  unique, target_lengths = target_indices.unique(return_counts=True)
+  offset = target_lengths - lengths
+  offset = offset.roll(1, 0)
+  offset[0] = 0
+  offset = torch.repeat_interleave(offset.cumsum(dim=0), lengths, dim=0)
+  index = offset + torch.arange(len(indices)).to(data.device)
+
+  out[index] = data
+  return data, target_indices
 
 HAS_SCATTER = True
 try:
@@ -57,7 +78,7 @@ try:
 except ImportError:
   def _scatter_op(operation, update, value=0):
     def _op(data, indices, dim=0, out=None, dim_size=None, fill_value=value):
-      padded, pad_indices, counts = pad(data, indices, value=value)
+      padded, pad_indices, _, counts = pad(data, indices, value=value)
       processed = operation(padded, counts.unsqueeze(1))
       if dim_size is None:
         dim_size = processed.size(0)
@@ -76,6 +97,7 @@ except ImportError:
       _op = None
 
   def _update_add(out, processed, indices):
+    print(indices.shape, indices.dtype)
     out[indices] += processed
     return out
 
@@ -135,7 +157,7 @@ def softmax(data, indices, dim_size=None):
 def sequential(module, data, indices):
   packed, _, _ = pack(data, indices)
   result, hidden = module(packed)
-  return result.data, hidden.data
+  return result.data, hidden
 
 def reduced_sequential(module, data, indices, out=None, dim_size=None):
   packed, pack_indices, counts = pack(data, indices)
@@ -156,15 +178,14 @@ def reduced_sequential(module, data, indices, out=None, dim_size=None):
   return out, out_hidden
 
 def batched(module, data, indices, padding_value=0):
-  padded, _, counts = pad(data, indices, value=padding_value)
+  padded, _, index, counts = pad(data, indices, value=padding_value)
   result = module(padded.transpose(1, 2)).transpose(1, 2)
-  packed = nn.utils.rnn.pack_padded_sequence(result, counts, batch_first=True)
-  result = packed.data
-  return result
+  print(data.shape, result.shape)
+  return unpad(result, index)
 
 def reduced_batched(module, data, indices, out=None,
                     dim_size=None, padding_value=0):
-  padded, pad_indices, counts = pad(data, indices, value=padding_value)
+  padded, pad_indices, _, counts = pad(data, indices, value=padding_value)
   result = module(padded.transpose(1, 2)).transpose(1, 2)
   result = result.sum(dim=1) / counts.float()
   if dim_size is None:
@@ -176,6 +197,74 @@ def reduced_batched(module, data, indices, out=None,
     )
   out[pad_indices] += result
   return out
+
+def pairwise(op, data, indices, padding_value=0):
+  padded, _, _, counts = pad(data, indices, value=padding_value)
+  padded = padded.transpose(1, 2)
+  reference = padded.unsqueeze(-1)
+  padded = padded.unsqueeze(-2)
+  op_result = op(padded, reference)
+
+  # batch indices into pairwise tensor:
+  batch_indices = torch.arange(counts.size(0))
+  batch_indices = torch.repeat_interleave(batch_indices, counts ** 2)
+
+  # first dimension indices:
+  first_offset = counts.roll(1)
+  first_offset[0] = 0
+  first_offset = torch.cumsum(first_offset, dim=0)
+  first_offset = torch.repeat_interleave(first_offset, counts)
+  first_indices = torch.arange(counts.sum()) - first_offset
+  first_indices = torch.repeat_interleave(
+    first_indices,
+    torch.repeat_interleave(counts, counts)
+  )
+
+  # second dimension indices:
+  second_offset = torch.repeat_interleave(counts, counts).roll(1)
+  second_offset[0] = 0
+  second_offset = torch.cumsum(second_offset, dim=0)
+  second_offset = torch.repeat_interleave(second_offset, torch.repeat_interleave(counts, counts))
+  second_indices = torch.arange((counts ** 2).sum()) - second_offset
+
+  # extract tensor from padded result using indices:
+  print(reference.shape, padded.shape, op_result.shape)
+  result = op_result[batch_indices, first_indices, second_indices]
+
+  # access: cumsum(counts ** 2)[idx] + counts[idx] * idy + idz
+  access_batch = (counts ** 2).roll(1)
+  access_batch[0] = 0
+  access_batch = torch.cumsum(access_batch, dim=0)
+  access_first = counts
+
+  access = (access_batch, access_first)
+
+  return result, batch_indices, first_indices, second_indices, access
+
+def pairwise_no_pad(op, data, indices):
+  unique, counts = indices.unique(return_counts=True)
+  expansion = torch.cumsum(counts, dim=0)
+  expansion = torch.repeat_interleave(expansion, counts)
+  offset = torch.arange(0, counts.sum())
+  expansion = expansion - offset - 1
+  print(expansion.size(), data.size())
+  expanded = torch.repeat_interleave(data, expansion.to(data.device), dim=0)
+
+  expansion_offset = counts.roll(1)
+  expansion_offset[0] = 0
+  expansion_offset = torch.repeat_interleave(expansion_offset, counts)
+  expansion_offset = torch.repeat_interleave(expansion_offset, expansion)
+  off_start = torch.repeat_interleave(torch.repeat_interleave(counts, counts) - expansion, expansion)
+  access = torch.arange(expansion.sum())
+  access = access - torch.repeat_interleave(expansion.roll(1).cumsum(dim=0), expansion) + off_start + expansion_offset
+
+  result = op(expanded, data[access.to(data.device)])
+  print("INDS", indices.size(), expansion.size(), indices.dtype)
+  return result, torch.repeat_interleave(indices, expansion, dim=0)
+
+def pairwise_get(data, access, idx):
+  index = access[0][idx[0]] + access[1][idx[0]] * idx[1] + idx[2]
+  return data[index]
 
 class ScatterModule(nn.Module):
   def __init__(self):
