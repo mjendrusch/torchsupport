@@ -9,6 +9,7 @@ class MLP(nn.Module):
   def __init__(self, in_size, out_size,
                hidden_size=128, depth=3,
                activation=func.relu,
+               normalization=lambda x: x,
                batch_norm=True):
     """Multilayer preceptron module.
 
@@ -26,9 +27,9 @@ class MLP(nn.Module):
 
     if isinstance(hidden_size, list):
       self.blocks = nn.ModuleList([
-        nn.Linear(in_size, hidden_size[0])
+        normalization(nn.Linear(in_size, hidden_size[0]))
       ] + [
-        nn.Linear(hidden_size[idx], hidden_size[idx + 1])
+        normalization(nn.Linear(hidden_size[idx], hidden_size[idx + 1]))
         for idx in range(len(hidden_size) - 1)
       ])
       self.postprocess = nn.Linear(hidden_size[-1], out_size)
@@ -40,12 +41,12 @@ class MLP(nn.Module):
         ])
     else:
       self.blocks = nn.ModuleList([
-        nn.Linear(in_size, hidden_size)
+        normalization(nn.Linear(in_size, hidden_size))
       ] + [
-        nn.Linear(hidden_size, hidden_size)
+        normalization(nn.Linear(hidden_size, hidden_size))
         for _ in range(depth - 2)
       ])
-      self.postprocess = nn.Linear(hidden_size, out_size)
+      self.postprocess = normalization(nn.Linear(hidden_size, out_size))
 
       if batch_norm:
         self.bn = nn.ModuleList([
