@@ -1,5 +1,7 @@
 import random
 
+import numpy as np
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as func
@@ -223,6 +225,28 @@ class Langevin(nn.Module):
       # data = data - self.noise / 2 * gradient + self.noise * torch.randn_like(data)
     return data
 
+class AnnealedLangevin(nn.Module):
+  def __init__(self, noises, steps=100, epsilon=2e-5):
+    super(AnnealedLangevin, self).__init__()
+    self.noises = noises
+    self.steps = steps
+    self.epsilon = epsilon
+
+  def integrate(self, score, data, *args):
+    print("DASH", data.shape)
+    for noise in self.noises:
+      step_size = self.epsilon * (noise ** 2) / (self.noises[-1] ** 2)
+      noise = torch.ones(data.size(0), data.size(1), 1, 1, 1).to(data.device) * noise
+      for step in range(self.steps):
+        #print(data[0].max(), data[0].min(), data[0].mean())
+        _make_differentiable(data)
+        _make_differentiable(args)
+        gradient = score(data, noise, *args)
+        data = data + 0.5 * step_size * gradient + np.sqrt(step_size) * torch.randn_like(data)
+        data = data.clamp(0, 1)
+    print("GSH", gradient.shape)
+    return data
+
 class EnergyTraining(AbstractEnergyTraining):
   def __init__(self, score, *args, buffer_size=100, buffer_probability=0.9,
                sample_steps=10, decay=1, integrator=None, **kwargs):
@@ -335,3 +359,102 @@ class SetVAETraining(EnergyTraining):
     fake_result, fake_parameters = self.score(input_fake, reference_fake, *fake_args)
     oos_result, oos_parameters = self.score(input_oos, reference_oos, *oos_args)
     return real_result, fake_result, oos_result, real_parameters, fake_parameters, oos_parameters
+
+class DenoisingScoreTraining(EnergyTraining):
+  def __init__(self, score, data, *args, sigma=1, factor=0.8, n_sigma=10, **kwargs):
+    self.score = ...
+    EnergyTraining.__init__(
+      self, score, data, *args,
+      buffer_size=1, buffer_probability=0.0,
+      integrator=None, **kwargs
+    )
+
+    self.sigma = sigma
+    self.factor = factor
+    self.n_sigma = n_sigma
+
+  def data_key(self, data):
+    result, *args = data
+    return (result, *args)
+
+  def each_generate(self, data, *args):
+    pass
+
+  def noise(self, data):
+    scale = torch.randint(0, self.n_sigma, (data.size(0),))
+    sigma = self.sigma * self.factor ** scale.float()
+    sigma = sigma.to(self.device)
+    sigma = sigma.view(*sigma.shape, *((data.dim() - sigma.dim()) * [1]))
+    noise = data + sigma * torch.randn_like(data)
+    # noise = data.clamp(0, 1)
+    return noise, sigma
+
+  def prepare_sample(self):
+    results = []
+    for idx in range(self.batch_size):
+      results.append(self.prepare())
+    return default_collate(results)
+
+  def sample(self):
+    integrator = AnnealedLangevin([self.sigma * self.factor ** idx for idx in range(self.n_sigma)], epsilon=2e-4)
+    data, *args = self.data_key(self.prepare_sample())
+    data = integrator.integrate(self.score, data, *args).detach()
+    update = ((data[idx], *[arg[idx] for arg in args]) for idx in range(data.size(0)))
+    self.buffer.update(update)
+
+    return to_device((data, *args), self.device)
+
+  def energy_loss(self, score, data, noisy, sigma):
+    raw_loss = 0.5 * sigma ** 2 * ((score + (noisy - data) / sigma ** 2) ** 2)
+    raw_loss = raw_loss.sum(dim=1, keepdim=True)
+    return raw_loss.mean()
+
+  def each_step(self):
+    super(DenoisingScoreTraining, self).each_step()
+    if self.step_id % 10 == 0:
+      data, *args = self.sample()
+      self.each_generate(data, *args)
+
+  def run_energy(self, data):
+    data, *args = self.data_key(data)
+    noisy, sigma = self.noise(data)
+    result = self.score(noisy, sigma, *args)
+    return result.view(result.size(0), -1), data.view(result.size(0), -1), noisy.view(result.size(0), -1), sigma.view(result.size(0), -1)
+
+class SetScoreVAETraining(DenoisingScoreTraining):
+  def divergence_loss(self, parameters):
+    return normal_kl_loss(*parameters)
+
+  def loss(self, score, data, noisy, sigma, parameters):
+    energy_loss = self.energy_loss(score, data, noisy, sigma)
+    kld_loss = self.divergence_loss(parameters)
+
+    self.current_losses["energy"] = float(energy_loss)
+    self.current_losses["kullback leibler"] = float(kld_loss)
+
+    return energy_loss + kld_loss
+
+  def noise(self, data):
+    scale = torch.randint(0, self.n_sigma, (data.size(0), data.size(1)))
+    sigma = self.sigma * self.factor ** scale.float()
+    sigma = sigma.to(self.device)
+    sigma = sigma.view(*sigma.shape, *((data.dim() - sigma.dim()) * [1]))
+    print(data.shape, sigma.shape)
+    noise = data + sigma * torch.randn_like(data)
+    # noise = data.clamp(0, 1)
+    return noise, sigma
+
+  def prepare(self):
+    data = self.data[random.randrange(len(self.data))]
+    _, reference, *condition = self.data_key(data)
+    return (torch.rand_like(reference), reference, *condition)
+
+  def run_energy(self, data):
+    data, reference, *args = self.data_key(data)
+    noisy, sigma = self.noise(data)
+    result, parameters = self.score(noisy, sigma, reference, *args)
+    loss_data = data.view(data.size(0) * data.size(1), -1)
+    loss_noisy = noisy.view(noisy.size(0) * noisy.size(1), -1)
+    loss_sigma = sigma.view(noisy.size(0) * noisy.size(1), -1)
+    loss_score = result.view(noisy.size(0) * noisy.size(1), -1)
+    return loss_score, loss_data, loss_noisy, loss_sigma, parameters
