@@ -50,7 +50,7 @@ class MNISTSet(EnergyDataset):
 class SingleEncoder(nn.Module):
   def __init__(self, latents=32):
     super(SingleEncoder, self).__init__()
-    self.block = MLP(28 * 28, latents, hidden_size=128, depth=2, batch_norm=False, normalization=spectral_norm)
+    self.block = MLP(28 * 28, latents, hidden_size=64, depth=4, batch_norm=False, normalization=spectral_norm)
 
   def forward(self, inputs):
     return self.block(inputs)
@@ -61,6 +61,7 @@ class Encoder(nn.Module):
     self.size = size
     self.single = single
     self.weight = spectral_norm(nn.Linear(32, 1))
+    self.combine = MLP(32, 32, 64, depth=3, batch_norm=False, normalization=spectral_norm)
     self.mean = spectral_norm(nn.Linear(32, latents))
     self.logvar = spectral_norm(nn.Linear(32, latents))
 
@@ -70,7 +71,8 @@ class Encoder(nn.Module):
     weights = self.weight(out)
     out = out.view(-1, self.size, 32)
     weights = weights.view(-1, self.size, 1).softmax(dim=1)
-    pool = out.mean(dim=1)#(weights * out).sum(dim=1)
+    pool = (weights * out).sum(dim=1)
+    pool = self.combine(pool)
     return self.mean(pool), self.logvar(pool)
 
 class Energy(nn.Module):
@@ -82,14 +84,14 @@ class Energy(nn.Module):
     self.condition = Encoder(self.input)
     self.input_process = spectral_norm(nn.Linear(32, 64))
     self.postprocess = spectral_norm(nn.Linear(16, 64))
-    self.combine = MLP(128, 1, hidden_size=64, depth=3, batch_norm=False, normalization=spectral_norm)
+    self.combine = MLP(128, 1, hidden_size=64, depth=4, batch_norm=False, normalization=spectral_norm)
 
   def forward(self, image, condition):
     image = image.view(-1, 28 * 28)
     out = self.input_process(self.input(image))
     mean, logvar = self.condition(condition)
-    distribution = Normal(mean, torch.exp(0.5 * logvar))
-    sample = distribution.rsample()
+    #distribution = Normal(mean, torch.exp(0.5 * logvar))
+    sample = mean + torch.randn_like(mean) * torch.exp(0.5 * logvar)#distribution.rsample()
     cond = self.postprocess(sample)
     cond = torch.repeat_interleave(cond, 5, dim=0)
     result = self.combine(torch.cat((out, cond), dim=1))
@@ -107,18 +109,20 @@ class MNISTSetTraining(SetVAETraining):
     self.writer.add_image("samples", samples, self.step_id)
 
 if __name__ == "__main__":
-  mnist = MNIST("examples/", download=False, transform=ToTensor())
+  mnist = MNIST("examples/", download=True, transform=ToTensor())
   data = MNISTSet(mnist)
 
   energy = Energy()
-  integrator = Langevin(rate=100, steps=30, max_norm=None)
+  integrator = Langevin(rate=30, steps=30, max_norm=None)
   
   training = MNISTSetTraining(
     energy, data,
-    network_name="set-mnist-ebm",
-    device="cpu",
+    network_name="set-mnist-reg-noisy",
+    device="cuda:0",
     integrator=integrator,
-    batch_size=12,
+    buffer_probability=0.95,
+    buffer_size=10000,
+    batch_size=40,
     max_epochs=1000,
     verbose=True
   )

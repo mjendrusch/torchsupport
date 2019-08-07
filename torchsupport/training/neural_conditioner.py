@@ -12,9 +12,9 @@ import torchsupport.modules.losses.vae as vl
 from torchsupport.data.io import netwrite
 from torchsupport.data.collate import DataLoader
 
-from torchsupport.training.gan import GANTraining
+from torchsupport.training.gan import GANTraining, RothGANTraining, _make_differentiable
 
-class NeuralConditionerTraining(GANTraining):
+class NeuralConditionerTraining(RothGANTraining):
   def __init__(self, generator, discriminator, data, **kwargs):
     super(NeuralConditionerTraining, self).__init__(
       generator,
@@ -22,11 +22,18 @@ class NeuralConditionerTraining(GANTraining):
       data, **kwargs
     )
 
-  def discriminator_loss(self, data, fake, fake_res, real_res):
-    loss = GANTraining.discriminator_loss(self, data, fake, fake_res, real_res)
-    regularizer = 0.5 * (fake_res.sigmoid().mean(dim=0) + real_res.sigmoid().mean(dim=0))
-    loss += regularizer.mean(dim=0)
-    return loss, None
+  def mixing_key(self, data):
+    print(data)
+    if len(data) == 4:
+      return data[1]
+    else:
+      return data[0]
+
+  #def discriminator_loss(self, data, fake, fake_res, real_res):
+  #  loss, out = GANTraining.discriminator_loss(self, data, fake, fake_res, real_res)
+  #  regularizer = 0.5 * (fake_res.sigmoid().mean(dim=0) + real_res.sigmoid().mean(dim=0))
+  #  loss += regularizer.mean(dim=0)
+  #  return loss, out
 
   def generator_loss(self, inputs, generated, available, requested):
     discriminator_result = self._run_discriminator_aux(
@@ -34,7 +41,7 @@ class NeuralConditionerTraining(GANTraining):
     )
     loss_val = func.binary_cross_entropy_with_logits(
       discriminator_result,
-      torch.ones(self.batch_size, 1).to(self.device)
+      torch.zeros_like(discriminator_result).to(self.device)
     )
 
     return loss_val
@@ -60,7 +67,11 @@ class NeuralConditionerTraining(GANTraining):
     return result
 
   def run_discriminator(self, data):
-    _, fake_batch, _, _ = self.run_generator(data)
+    with torch.no_grad():
+      fake = self.run_generator(data)
+    _make_differentiable(fake)
+    _make_differentiable(data)
+    _, fake_batch, _, _ = fake
     inputs, available, requested = data
     fake_result = self._run_discriminator_aux(
       inputs, fake_batch,
@@ -70,4 +81,4 @@ class NeuralConditionerTraining(GANTraining):
       inputs, inputs,
       available, requested
     )
-    return data, fake_batch, fake_result, real_result
+    return fake, data, fake_result, real_result

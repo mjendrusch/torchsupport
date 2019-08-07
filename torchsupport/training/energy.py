@@ -10,7 +10,7 @@ from tensorboardX import SummaryWriter
 
 from torchsupport.training.training import Training
 from torchsupport.data.io import netwrite, to_device
-from torchsupport.data.collate import DataLoader
+from torchsupport.data.collate import DataLoader, default_collate
 from torchsupport.modules.losses.vae import normal_kl_loss
 
 class AbstractEnergyTraining(Training):
@@ -215,7 +215,7 @@ class Langevin(nn.Module):
       _make_differentiable(data)
       _make_differentiable(args)
       energy, *_ = score(data + self.noise * torch.randn_like(data), *args)
-      gradient = ag.grad(energy, data, torch.ones_like(energy, requires_grad=True))[0]
+      gradient = ag.grad(energy, data, torch.ones(*energy.shape, device=data.device, requires_grad=True))[0]
       if self.max_norm:
         gradient = clip_grad_by_norm(gradient, self.max_norm)
       data = data - self.rate * gradient
@@ -246,10 +246,10 @@ class EnergyTraining(AbstractEnergyTraining):
     pass
 
   def sample(self):
-    data, *args = self.data_key(next(iter(self.buffer_loader)))
+    data, *args = to_device(self.data_key(next(iter(self.buffer_loader))), self.device)
     data = self.integrator.integrate(self.score, data, *args).detach()
     detached = data.detach().cpu()
-    update = ((data[idx], *[arg[idx] for arg in args]) for idx in range(data.size(0)))
+    update = (to_device((data[idx], *[arg[idx] for arg in args]), "cpu") for idx in range(data.size(0)))
     self.buffer.update(update)
 
     return to_device((data, *args), self.device)
@@ -257,10 +257,10 @@ class EnergyTraining(AbstractEnergyTraining):
   def energy_loss(self, real_result, fake_result):
     regularization = (self.decay * (real_result ** 2 + fake_result ** 2)).mean()
     ebm = (real_result - fake_result).mean()
-    self.current_losses["real"] = real_result.mean()
-    self.current_losses["fake"] = fake_result.mean()
-    self.current_losses["regularization"] = regularization
-    self.current_losses["ebm"] = ebm
+    self.current_losses["real"] = float(real_result.mean())
+    self.current_losses["fake"] = float(fake_result.mean())
+    self.current_losses["regularization"] = float(regularization)
+    self.current_losses["ebm"] = float(ebm)
     return regularization + ebm
 
   def run_energy(self, data):
@@ -282,26 +282,41 @@ class SetVAETraining(EnergyTraining):
   def divergence_loss(self, parameters):
     return normal_kl_loss(*parameters)
 
-  def loss(self, real_result, fake_result, oos_result, real_parameters, fake_parameters):
+  def loss(self, real_result, fake_result, oos_result, real_parameters, fake_parameters, oos_parameters):
+    print(oos_result.shape, real_result.shape)
+    #energy_loss = 0.5 * self.energy_loss(real_result, oos_result)
     energy_loss = self.energy_loss(real_result, fake_result)
-    energy_loss += self.energy_loss(real_result, oos_result)
-    kld_loss = (self.divergence_loss(fake_parameters) + self.divergence_loss(real_parameters)) / 2
+    energy_loss -= (oos_result).mean()
+    kld_loss = (self.divergence_loss(oos_parameters) + self.divergence_loss(fake_parameters) + self.divergence_loss(real_parameters)) / 3
 
     self.current_losses["energy"] = float(energy_loss)
     self.current_losses["kullback leibler"] = float(kld_loss)
 
-    return 1000 * energy_loss + kld_loss
+    return energy_loss + 1e-4 * kld_loss
 
   def prepare(self):
     data = self.data[random.randrange(len(self.data))]
     _, reference, *condition = self.data_key(data)
     return (torch.rand_like(reference), reference, *condition)
 
-  def out_of_sample(self):
-    _, reference, *args = EnergyTraining.sample(self)
-    _, bad_reference, *_ = EnergyTraining.sample(self)
+  def bad_prepare(self):
+    _, reference, *args = self.prepare()
+    _, bad_reference, *_ = self.prepare()
+    noise = torch.rand(bad_reference.size(0), 1, 1, 1)
+    bad_reference = (1 - noise) * bad_reference + noise * torch.rand_like(bad_reference)
     result = (bad_reference, reference, *args)
     return result
+
+  def out_of_sample(self):
+    result = []
+    for idx in range(self.batch_size):
+      sample = self.bad_prepare()
+      result.append(sample)
+    data, *args = to_device(default_collate(result), self.device)
+    data = self.integrator.integrate(self.score, data, *args).detach()
+    detached = data.detach().cpu()
+
+    return to_device((data, *args), self.device)
 
   def run_energy(self, data):
     fake = self.sample()
@@ -319,4 +334,4 @@ class SetVAETraining(EnergyTraining):
     real_result, real_parameters = self.score(input_data, reference_data, *data_args)
     fake_result, fake_parameters = self.score(input_fake, reference_fake, *fake_args)
     oos_result, oos_parameters = self.score(input_oos, reference_oos, *oos_args)
-    return real_result, fake_result, oos_result, real_parameters, fake_parameters
+    return real_result, fake_result, oos_result, real_parameters, fake_parameters, oos_parameters
