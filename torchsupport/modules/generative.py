@@ -40,7 +40,7 @@ class UpsampleBlock(nn.Module):
 
 class StyleGANBlock(nn.Module):
   def __init__(self, in_size, out_size, ada_size,
-               size=None, upsample=2, activation=func.elu):
+               size=None, upsample=2, activation=func.elu, normalization=lambda x: x):
     super(StyleGANBlock, self).__init__()
     self.upsample = upsample
     self.register_parameter(
