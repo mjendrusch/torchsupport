@@ -175,13 +175,3 @@ class OptionWrapper():
   def dump_options(self, path):
     with open(path, "w") as json_file:
       json.dump(self.option_dict, json_file)
-
-  # TODO: For greater compatibility 
-  def __getitem__(self, key):
-    raise NotImplementedError
-  def __setitem__(self, key, value):
-    raise NotImplementedError
-  def __delitem__(self, key):
-    raise NotImplementedError
-  def __contains__(self, key):
-    raise NotImplementedError
