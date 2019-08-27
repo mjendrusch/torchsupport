@@ -35,7 +35,7 @@ def example_combi(pos, a=None, b=1, c='test'):
   returns:
   a list separated by colon (:)
   """
-  pass
+  return pos, a, b, c
 
 class ExampleClassEmpty():
   def __init__(self):
@@ -74,7 +74,10 @@ class ExampleClassCombi():
     :param c: default=test
     Constructors aren't known for their return value
     """
-    pass
+    self.pos = pos
+    self.a = a
+    self.b = b
+    self.c = c
 
 example_class_obj = ExampleClassEmpty()
 # endregion
@@ -129,5 +132,8 @@ def test_getdocs_harder():
 # endregion
 
 # region argparse.ClassesParser
+def test_classparser():
+  pass
 
 # endregion
+
