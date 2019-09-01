@@ -47,6 +47,9 @@ class RAdam(Optimizer):
                         true_weight_decay=true_weight_decay)
         super(RAdam, self).__init__(params, defaults)
 
+    def __setstate__(self, state):
+        super(RAdam, self).__setstate__(state)
+
     def step(self, closure=None):
         """Performs a single optimization step.
 
@@ -79,7 +82,7 @@ class RAdam(Optimizer):
                 exp_avg, exp_avg_sq = state['exp_avg'], state['exp_avg_sq']
                 beta1, beta2 = group['betas']
                 step = state['step']
-                rho_inf = state['rho_inf']
+                rho_inf = group['rho_inf']
 
                 step += 1
 
@@ -97,7 +100,7 @@ class RAdam(Optimizer):
                 if rho_step <= 4:
                     step_size = group['lr'] / bias_correction1
                     if group['true_weight_decay'] != 0:
-                        p.data.add_(-step_size * group['true_weight_decay'], p.data)
+                        p.data *= 1 - (step_size * group['true_weight_decay'])
                     p.data.add_(-step_size, exp_avg)
                 else:
                     r_factor = math.sqrt(
@@ -111,7 +114,7 @@ class RAdam(Optimizer):
                     step_size = group['lr'] * r_factor * math.sqrt(bias_correction2) / bias_correction1
 
                     if group['true_weight_decay'] != 0:
-                        p.data.add_(-step_size * group['true_weight_decay'], p.data)
+                        p.data *= 1 - (step_size * group['true_weight_decay'])
                     p.data.addcdiv_(-step_size, exp_avg, denom)
 
         return loss
