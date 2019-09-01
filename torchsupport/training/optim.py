@@ -47,9 +47,6 @@ class RAdam(Optimizer):
                         true_weight_decay=true_weight_decay)
         super(RAdam, self).__init__(params, defaults)
 
-    def __setstate__(self, state):
-        super(RAdam, self).__setstate__(state)
-
     def step(self, closure=None):
         """Performs a single optimization step.
 
