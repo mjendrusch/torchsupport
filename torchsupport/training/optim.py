@@ -1,3 +1,4 @@
+import math
 import torch
 from torch.optim import Optimizer
 
@@ -5,7 +6,8 @@ class RAdam(Optimizer):
     r"""Implements RAdam algorithm.
 
     Uses modifications proposed in `On the Variance of the Adaptive Learning Rate and Beyond`_.
-    Drops the AMSgrad functionality for now, TODO: Reimplement nicely
+    Drops the AMSgrad functionality for now
+    Provides AdamW style true weight decay
 
     Arguments:
         params (iterable): iterable of parameters to optimize or dicts defining
@@ -15,17 +17,21 @@ class RAdam(Optimizer):
             running averages of gradient and its square (default: (0.9, 0.999))
         eps (float, optional): term added to the denominator to improve
             numerical stability (default: 1e-8)
-        weight_decay (float, optional): weight decay (L2 penalty) (default: 0)
-            TODO: Make it actual weight decay
+        weight_decay (float, optional): false weight decay = L2 penalty (default: 0)
+        true_weight_decay (float, optional): weight decay for AdamW (default: 0) 
 
     .. _Adam\: A Method for Stochastic Optimization:
         https://arxiv.org/abs/1412.6980
     .. _On the Convergence of Adam and Beyond:
         https://openreview.net/forum?id=ryQu7f-RZ
+    .. _On the Variance of the Adaptive Learning Rate and beyond:
+        https://arxiv.org/abs/1908.03265
+    .. _Fixing Weight Decay Regularization in Adam:
+        https://arxiv.org/abs/1711.05101
     """
 
     def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8,
-                 weight_decay=0):
+                 weight_decay=0, true_weight_decay=0):
         if not 0.0 <= lr:
             raise ValueError("Invalid learning rate: {}".format(lr))
         if not 0.0 <= eps:
@@ -37,7 +43,8 @@ class RAdam(Optimizer):
         rho_inf = 2 / (1-betas[1]) - 1
         assert rho_inf > 4, 'RAdam expects that the rho_inf value is greater 4'
         defaults = dict(lr=lr, betas=betas, eps=eps,
-                        weight_decay=weight_decay, rho_inf=rho_inf)
+                        weight_decay=weight_decay, rho_inf=rho_inf,
+                        true_weight_decay=true_weight_decay)
         super(RAdam, self).__init__(params, defaults)
 
     def step(self, closure=None):
@@ -89,6 +96,8 @@ class RAdam(Optimizer):
 
                 if rho_step <= 4:
                     step_size = group['lr'] / bias_correction1
+                    if group['true_weight_decay'] != 0:
+                        p.data.add_(-step_size * group['true_weight_decay'], p.data)
                     p.data.add_(-step_size, exp_avg)
                 else:
                     r_factor = math.sqrt(
@@ -101,6 +110,8 @@ class RAdam(Optimizer):
 
                     step_size = group['lr'] * r_factor * math.sqrt(bias_correction2) / bias_correction1
 
+                    if group['true_weight_decay'] != 0:
+                        p.data.add_(-step_size * group['true_weight_decay'], p.data)
                     p.data.addcdiv_(-step_size, exp_avg, denom)
 
         return loss
