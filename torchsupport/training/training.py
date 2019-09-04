@@ -53,6 +53,7 @@ class SupervisedTraining(Training):
                schedule=None,
                max_epochs=50,
                batch_size=128,
+               accumulate=None,
                device="cpu",
                network_name="network",
                path_prefix=".",
@@ -62,6 +63,7 @@ class SupervisedTraining(Training):
     self.network_name = network_name
     self.writer = SummaryWriter(network_name)
     self.device = device
+    self.accumulate = accumulate
     self.optimizer = optimizer(net.parameters())
     if schedule is None:
       self.schedule = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, patience=10)
@@ -69,10 +71,10 @@ class SupervisedTraining(Training):
       self.schedule = schedule
     self.losses = losses
     self.train_data = DataLoader(
-      train_data, batch_size=batch_size, num_workers=8, shuffle=True
+      train_data, batch_size=batch_size, num_workers=8, shuffle=True, drop_last=True
     )
     self.validate_data = DataLoader(
-      validate_data, batch_size=batch_size, num_workers=8, shuffle=True
+      validate_data, batch_size=batch_size, num_workers=8, shuffle=True, drop_last=True
     )
     self.net = net.to(self.device)
     self.max_epochs = max_epochs
@@ -118,22 +120,22 @@ class SupervisedTraining(Training):
     return loss_val
 
   def step(self, data):
-    print("step", self.step_id)
-    self.optimizer.zero_grad()
+    if self.accumulate is None:
+      self.optimizer.zero_grad()
     outputs = self.run_networks(data)
     loss_val = self.loss(outputs)
     loss_val.backward()
-    self.optimizer.step()
+    torch.nn.utils.clip_grad_norm_(self.net.parameters(), 5.0)
+    if self.accumulate is None:
+      self.optimizer.step()
+    elif self.step_id % self.accumulate == 0:
+      self.optimizer.step()
+      self.optimizer.zero_grad()
     self.each_step()
 
   def validate(self, data):
     with torch.no_grad():
-      print("valid start:", self.step_id)
       self.net.eval()
-      #print("data start", self.step_id)
-      #vit = iter(self.validate_data)
-      #data = to_device(next(vit), self.device)
-      #print("data end", self.step_id)
       outputs = self.run_networks(data)
       self.valid_loss(outputs)
       self.each_validate()
@@ -141,7 +143,6 @@ class SupervisedTraining(Training):
         self, to_device(data, "cpu"), to_device(outputs, "cpu")
       )
       self.net.train()
-      print("valid end:", self.step_id)
 
   def schedule_step(self):
     self.schedule.step(sum(self.validation_losses))
