@@ -6,3 +6,8 @@ scratch
 .vscode
 XDG_CACHE_HOME
 *.pyi
+*.torch
+*.ipynb
+__pycache__
+*.tfevents.*
+examples/MNIST
