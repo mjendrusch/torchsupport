@@ -162,7 +162,7 @@ class AbstractEnergyTraining(Training):
     return scores
 
 def _make_differentiable(data, toggle=True):
-  if isinstance(data, torch.Tensor):
+  if isinstance(data, (torch.HalfTensor, torch.FloatTensor, torch.DoubleTensor)):
     data.requires_grad_(toggle)
   elif isinstance(data, (list, tuple)):
     for item in data:
@@ -236,12 +236,13 @@ def clip_grad_by_norm(gradient, max_norm=0.01):
   return gradient
 
 class Langevin(nn.Module):
-  def __init__(self, rate=100.0, noise=0.005, steps=10, max_norm=0.01):
+  def __init__(self, rate=100.0, noise=0.005, steps=10, max_norm=0.01, clamp=(0, 1)):
     super(Langevin, self).__init__()
     self.rate = rate
     self.noise = noise
     self.steps = steps
     self.max_norm = max_norm
+    self.clamp = clamp
 
   def integrate(self, score, data, *args):
     for idx in range(self.steps):
@@ -252,9 +253,47 @@ class Langevin(nn.Module):
       if self.max_norm:
         gradient = clip_grad_by_norm(gradient, self.max_norm)
       data = data - self.rate * gradient
-      data = data.clamp(0, 1)
+      if self.clamp is not None:
+        data = data.clamp(*self.clamp)
       # data = data - self.noise / 2 * gradient + self.noise * torch.randn_like(data)
     return data
+
+class MCMC():
+  def __init__(self, temperature=0.01, steps=10):
+    self.temperature = temperature
+    self.steps = steps
+
+  def metropolis(self, current, proposal):
+    log_alpha = - (proposal - current) / self.temperature
+    alpha = log_alpha.exp().view(-1)
+    uniform = torch.rand_like(alpha)
+    accept = uniform < alpha
+    accepted = accept.nonzero().view(-1)
+    return accepted
+
+  def mutate(self, data):
+    count = random.randint(1, 2)
+    result = data.clone()
+    for idx in range(count):
+      position = torch.randint(0, result.size(2), (result.size(0),))
+      change = torch.randint(0, result.size(1), (result.size(0),))
+      result[torch.arange(0, result.size(0)), :, position] = 0
+      result[torch.arange(0, result.size(0)), change, position] = 1
+    return result
+  
+  def integrate(self, score, data, *args):
+    result = data.clone()
+    current_energy = score(data, *args)
+    first_energy = current_energy.clone()
+    for idx in range(self.steps):
+      proposal = self.mutate(data)
+      energy = score(proposal, *args)
+      accepted = self.metropolis(current_energy, energy)
+      data[accepted] = proposal[accepted]
+      current_energy[accepted] = energy[accepted]
+    accepted = (current_energy < first_energy).view(-1).nonzero().view(-1)
+    result[accepted] = data[accepted]
+    return result
 
 class AnnealedLangevin(nn.Module):
   def __init__(self, noises, steps=100, epsilon=2e-5):
