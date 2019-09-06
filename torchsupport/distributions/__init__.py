@@ -1,3 +1,4 @@
+import torch
 import torch.distributions as dist
 
 def _harden_one_hot(self, inputs):
