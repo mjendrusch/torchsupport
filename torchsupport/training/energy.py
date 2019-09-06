@@ -329,7 +329,7 @@ class GeneticAlgorithmMCMC(MCMC):
   def mutate(self, score, data, *args):
     mutated = MCMC.mutate(self, score, data, *args)
     crossed_over = self.crossover(score, data, *args)
-    choice = torch.randint(0, 2, data.shape).to(torch.float)
+    choice = torch.randint(0, 2, (data.size(0), 1, 1)).to(torch.float)
     result = choice * mutated + (1 - choice) * crossed_over
     return result
 
@@ -337,10 +337,10 @@ class GradientProposalMCMC(MCMC):
   def mutate(self, score, data, *args):
     result = data.clone()
 
-    _make_differentiable(data)
+    _make_differentiable(result)
     _make_differentiable(args)
-    energy = score(data, *args)
-    gradient = ag.grad(energy, data, torch.ones(*energy.shape, device=data.device))[0]
+    energy = score(result, *args)
+    gradient = ag.grad(energy, result, torch.ones(*energy.shape, device=result.device))[0]
     
     # position choice
     position_gradient = -gradient.sum(dim=1)
@@ -350,7 +350,7 @@ class GradientProposalMCMC(MCMC):
     # change choice
     change_gradient = -gradient[
       torch.arange(0, gradient.size(0)),
-      torch.arange(0, gradient.size(1)),
+      :,
       position_proposal
     ]
     change_distribution = torch.distributions.Categorical(logits=change_gradient)
@@ -360,7 +360,7 @@ class GradientProposalMCMC(MCMC):
     result[torch.arange(0, result.size(0)), :, position_proposal] = 0
     result[torch.arange(0, result.size(0)), change_proposal, position_proposal] = 1
 
-    return result
+    return result.detach()
 
 class AnnealedLangevin(nn.Module):
   def __init__(self, noises, steps=100, epsilon=2e-5):
