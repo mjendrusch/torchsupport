@@ -258,9 +258,29 @@ class Langevin(nn.Module):
       # data = data - self.noise / 2 * gradient + self.noise * torch.randn_like(data)
     return data
 
+class DiscreteLangevin(Langevin):
+  def update(self, data):
+    out = data.permute(0, 2, 1).contiguous().view(-1, data.size(1))
+    dmax = out.argmax(dim=1)
+    result = torch.zeros_like(out)
+    result[torch.arange(0, out.size(0)), dmax] = 1
+    return result.view(data.size(0), data.size(2), -1).permute(0, 2, 1).contiguous()
+
+  def integrate(self, score, data, *args):
+    for idx in range(self.steps):
+      _make_differentiable(data)
+      _make_differentiable(args)
+      energy, *_ = score(data + self.noise * torch.randn_like(data), *args)
+      gradient = ag.grad(energy, data, torch.ones(*energy.shape, device=data.device))[0]
+      if self.max_norm:
+        gradient = clip_grad_by_norm(gradient, self.max_norm)
+      data = self.update(data - self.rate * gradient)
+    return data
+
 class MCMC():
-  def __init__(self, temperature=0.01, steps=10):
+  def __init__(self, temperature=0.01, constrain=True, steps=10):
     self.temperature = temperature
+    self.constrain = constrain
     self.steps = steps
 
   def metropolis(self, current, proposal):
@@ -271,7 +291,7 @@ class MCMC():
     accepted = accept.nonzero().view(-1)
     return accepted
 
-  def mutate(self, data):
+  def mutate(self, score, data, *args):
     count = random.randint(1, 2)
     result = data.clone()
     for idx in range(count):
@@ -286,13 +306,60 @@ class MCMC():
     current_energy = score(data, *args)
     first_energy = current_energy.clone()
     for idx in range(self.steps):
-      proposal = self.mutate(data)
+      proposal = self.mutate(score, data, *args)
       energy = score(proposal, *args)
       accepted = self.metropolis(current_energy, energy)
       data[accepted] = proposal[accepted]
       current_energy[accepted] = energy[accepted]
-    accepted = (current_energy < first_energy).view(-1).nonzero().view(-1)
-    result[accepted] = data[accepted]
+    if self.constrain:
+      accepted = (current_energy < first_energy).view(-1).nonzero().view(-1)
+      result[accepted] = data[accepted]
+    else:
+      result = data
+    return result
+
+class GeneticAlgorithmMCMC(MCMC):
+  def crossover(self, score, data, *args):
+    result = data.clone()
+    reorder = torch.randint(0, data.size(0), (data.size(0),))
+    choose = torch.randint(0, 2, (data.size(0), 1, data.size(2))).to(torch.float)
+    result = choose * result + (1 - choose) * result[reorder]
+    return result
+
+  def mutate(self, score, data, *args):
+    mutated = MCMC.mutate(self, score, data, *args)
+    crossed_over = self.crossover(score, data, *args)
+    choice = torch.randint(0, 2, data.shape).to(torch.float)
+    result = choice * mutated + (1 - choice) * crossed_over
+    return result
+
+class GradientProposalMCMC(MCMC):
+  def mutate(self, score, data, *args):
+    result = data.clone()
+
+    _make_differentiable(data)
+    _make_differentiable(args)
+    energy = score(data, *args)
+    gradient = ag.grad(energy, data, torch.ones(*energy.shape, device=data.device))[0]
+    
+    # position choice
+    position_gradient = -gradient.sum(dim=1)
+    position_distribution = torch.distributions.Categorical(logits=position_gradient)
+    position_proposal = position_distribution.sample()
+    
+    # change choice
+    change_gradient = -gradient[
+      torch.arange(0, gradient.size(0)),
+      torch.arange(0, gradient.size(1)),
+      position_proposal
+    ]
+    change_distribution = torch.distributions.Categorical(logits=change_gradient)
+    change_proposal = change_distribution.sample()
+
+    # mutate:
+    result[torch.arange(0, result.size(0)), :, position_proposal] = 0
+    result[torch.arange(0, result.size(0)), change_proposal, position_proposal] = 1
+
     return result
 
 class AnnealedLangevin(nn.Module):
