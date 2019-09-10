@@ -7,6 +7,9 @@ from torch.distributions import Normal, RelaxedOneHotCategorical
 
 from tensorboardX import SummaryWriter
 
+from torchsupport.training.state import (
+  NetState, NetNameListState, TrainingState
+)
 from torchsupport.training.training import Training
 import torchsupport.modules.losses.vae as vl
 from torchsupport.structured import DataParallel as SDP
@@ -15,6 +18,13 @@ from torchsupport.data.collate import DataLoader
 
 class AbstractGANTraining(Training):
   """Abstract base class for GAN training."""
+  checkpoint_parameters = Training.checkpoint_parameters + [
+    TrainingState(),
+    NetNameListState("generator_names"),
+    NetNameListState("discriminator_names"),
+    NetState("generator_optimizer"),
+    NetState("discriminator_optimizer")
+  ]
   def __init__(self, generators, discriminators, data,
                optimizer=torch.optim.Adam,
                generator_optimizer_kwargs=None,
@@ -343,6 +353,10 @@ def _gradient_norm(inputs, parameters):
 
 class ClassifierGANTraining():
   def __init__(self, classifier, optimizer=torch.optim.Adam, classifier_optimizer_kwargs=None):
+    self.checkpoint_parameters += [
+      NetState("classifier"),
+      NetState("classifier_optimizer")
+    ]
     if classifier_optimizer_kwargs is None:
       classifier_optimizer_kwargs = {}
     self.classifier = classifier.to(self.device)

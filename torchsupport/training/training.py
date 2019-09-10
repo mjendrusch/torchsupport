@@ -1,3 +1,5 @@
+import os
+import time
 import random
 from copy import copy
 import torch
@@ -8,14 +10,21 @@ from torchsupport.data.io import netwrite, to_device
 from torchsupport.data.episodic import SupportData
 from torchsupport.data.collate import DataLoader
 
+from torchsupport.training.state import (
+  TrainingState, NetState, State
+)
+
 class Training(object):
-  """Abstract training process class.
-  """
+  """Abstract training process class."""
+  checkpoint_parameters = []
+  rng_state = torch.random.get_rng_state()
+  last_tick = 0
+
   def __init__(self):
     pass
 
   def each_step(self):
-    pass
+    self.save_tick()
 
   def each_validate(self):
     pass
@@ -31,6 +40,38 @@ class Training(object):
 
   def validate(self):
     pass
+
+  def save_path(self):
+    raise NotImplementedError("Abstract.")
+
+  def write(self, path):
+    data = {}
+    data["_rng_state"] = self.rng_state
+    for param in self.checkpoint_parameters:
+      param.write_action(self, data)
+    torch.save(data, path)
+
+  def read(self, path):
+    data = torch.load(path)
+    for param in self.checkpoint_parameters:
+      param.read_action(self, data)
+    torch.random.set_rng_state(data["_rng_state"])
+
+  def save(self, path=None):
+    path = path or self.save_path()
+    self.write(path)
+
+  def save_tick(self, step=600):
+    this_tick = time.monotonic()
+    if this_tick - self.last_tick > step:
+      self.save()
+      self.last_tick = this_tick
+
+  def load(self, path=None):
+    path = path or self.save_path()
+    if os.path.isfile(path):
+      self.read(path)
+    return self
 
 class SupervisedTraining(Training):
   """Standard supervised training process.
@@ -48,6 +89,11 @@ class SupervisedTraining(Training):
     device (str): the device to run on.
     checkpoint_path (str): the path to save network checkpoints.
   """
+  checkpoint_parameters = Training.checkpoint_parameters + [
+    TrainingState(),
+    NetState("net"),
+    NetState("optimizer")
+  ]
   def __init__(self, net, train_data, validate_data, losses,
                optimizer=torch.optim.Adam,
                schedule=None,
@@ -84,6 +130,9 @@ class SupervisedTraining(Training):
     self.validation_losses = [0 for _ in range(len(self.losses))]
     self.training_losses = [0 for _ in range(len(self.losses))]
     self.best = None
+
+  def save_path(self):
+    return self.checkpoint_path + "-save.torch"
 
   def checkpoint(self):
     the_net = self.net
@@ -148,6 +197,7 @@ class SupervisedTraining(Training):
     self.schedule.step(sum(self.validation_losses))
 
   def each_step(self):
+    Training.each_step(self)
     for idx, loss in enumerate(self.training_losses):
       self.writer.add_scalar(f"training loss {idx}", loss, self.step_id)
     self.writer.add_scalar(f"training loss total", sum(self.training_losses), self.step_id)

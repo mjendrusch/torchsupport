@@ -10,6 +10,9 @@ from torch.utils.data import Dataset
 
 from tensorboardX import SummaryWriter
 
+from torchsupport.training.state import (
+  State, NetState, NetNameListState, TrainingState, PathState
+)
 from torchsupport.training.training import Training
 from torchsupport.data.io import netwrite, to_device
 from torchsupport.data.collate import DataLoader, default_collate
@@ -17,6 +20,10 @@ from torchsupport.modules.losses.vae import normal_kl_loss
 
 class AbstractEnergyTraining(Training):
   """Abstract base class for GAN training."""
+  checkpoint_parameters = Training.checkpoint_parameters + [
+    TrainingState(),
+    NetNameListState("names")
+  ]
   def __init__(self, scores, data,
                optimizer=torch.optim.Adam,
                optimizer_kwargs=None,
@@ -172,34 +179,6 @@ def _make_differentiable(data, toggle=True):
       _make_differentiable(data[key], toggle=toggle)
   else:
     pass
-
-#class SampleBuffer(Dataset):
-#  def __init__(self, owner, buffer_size=10000, buffer_probability=0.95):
-#    self.samples = [
-#      None#owner.prepare()
-#      for idx in range(buffer_size)
-#    ]
-#    self.owner = owner
-#    self.current = 0
-#    self.buffer_probability = buffer_probability
-#
-#  def update(self, results):
-#    for result in results:
-#      self.samples[self.current] = result
-#      self.current = (self.current + 1) % len(self)
-#
-#  def __getitem__(self, idx):
-#    if random.random() < self.buffer_probability:
-#      result = self.samples[(self.current + idx) % len(self)]
-#      if result is None:
-#        result = self.owner.prepare()
-#        self.samples[(self.current + idx) % len(self)] = result
-#    else:
-#      result = self.owner.prepare()
-#    return result
-#
-#  def __len__(self):
-#    return len(self.samples)
 
 class SampleBuffer(Dataset):
   def __init__(self, owner, buffer_size=10000, buffer_probability=0.95):
@@ -380,6 +359,9 @@ class AnnealedLangevin(nn.Module):
     return (data - data.min()) / (data.max() - data.min())
 
 class EnergyTraining(AbstractEnergyTraining):
+  checkpoint_parameters = AbstractEnergyTraining.checkpoint_parameters + [
+    PathState(["buffer", "samples"])
+  ]
   def __init__(self, score, *args, buffer_size=100, buffer_probability=0.9,
                sample_steps=10, decay=1, integrator=None, oos_penalty=True, **kwargs):
     self.score = ...
