@@ -2,6 +2,8 @@ import os
 import time
 import random
 from copy import copy
+
+import numpy as np
 import torch
 
 from tensorboardX import SummaryWriter
@@ -17,7 +19,11 @@ from torchsupport.training.state import (
 class Training(object):
   """Abstract training process class."""
   checkpoint_parameters = []
-  rng_state = torch.random.get_rng_state()
+  torch_rng_state = torch.random.get_rng_state()
+  np_rng_state = np.random.get_state()
+  random_rng_state = random.getstate()
+
+  save_interval = 600
   last_tick = 0
 
   def __init__(self):
@@ -46,22 +52,27 @@ class Training(object):
 
   def write(self, path):
     data = {}
-    data["_rng_state"] = self.rng_state
+    data["_torch_rng_state"] = torch.random.get_rng_state()
+    data["_np_rng_state"] = np.random.get_state()
+    data["_random_rng_state"] = random.getstate()
     for param in self.checkpoint_parameters:
       param.write_action(self, data)
     torch.save(data, path)
 
   def read(self, path):
     data = torch.load(path)
+    torch.random.set_rng_state(data["_torch_rng_state"])
+    np.random.set_state(data["_np_rng_state"])
+    random.setstate(data["_random_rng_state"])
     for param in self.checkpoint_parameters:
       param.read_action(self, data)
-    torch.random.set_rng_state(data["_rng_state"])
 
   def save(self, path=None):
     path = path or self.save_path()
     self.write(path)
 
-  def save_tick(self, step=600):
+  def save_tick(self, step=None):
+    step = step or self.save_interval
     this_tick = time.monotonic()
     if this_tick - self.last_tick > step:
       self.save()

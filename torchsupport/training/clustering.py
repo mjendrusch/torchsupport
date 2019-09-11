@@ -56,6 +56,9 @@ class ClusteringTraining(Training):
     self.epoch_id = 0
     self.step_id = 0
 
+  def save_path(self):
+    return f"{self.network_name}-save.torch"
+
   def checkpoint(self):
     the_net = self.net
     if isinstance(the_net, torch.nn.DataParallel):
@@ -101,7 +104,6 @@ class ClusteringTraining(Training):
     return embedding
 
   def cluster(self, embedding):
-    print(embedding.size())
     fit = self.clustering.fit(embedding.squeeze())
     labels = list(fit.labels_)
     try:

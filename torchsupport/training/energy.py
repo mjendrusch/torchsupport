@@ -82,6 +82,9 @@ class AbstractEnergyTraining(Training):
       **optimizer_kwargs
     )
 
+  def save_path(self):
+    return f"{self.checkpoint_path}-save.torch"
+
   def energy_loss(self, *args):
     """Abstract method. Computes the score function loss."""
     raise NotImplementedError("Abstract")
@@ -378,7 +381,6 @@ class EnergyTraining(AbstractEnergyTraining):
     self.buffer_loader = lambda x: DataLoader(
       x, batch_size=self.batch_size, shuffle=True, drop_last=True
     )
-    #self.buffer_iter = iter(self.buffer_loader)
 
   def data_key(self, data):
     result, *args = data

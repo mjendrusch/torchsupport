@@ -80,6 +80,9 @@ class AbstractVAETraining(Training):
       **optimizer_kwargs
     )
 
+  def save_path(self):
+    return f"{self.checkpoint_path}-save.torch"
+
   def divergence_loss(self, *args):
     """Abstract method. Computes the divergence loss."""
     raise NotImplementedError("Abstract")

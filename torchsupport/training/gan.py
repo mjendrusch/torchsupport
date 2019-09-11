@@ -108,6 +108,9 @@ class AbstractGANTraining(Training):
       **discriminator_optimizer_kwargs
     )
 
+  def save_path(self):
+    return f"{self.checkpoint_path}-save.torch"
+
   def generator_loss(self, *args):
     """Abstract method. Computes the generator loss."""
     raise NotImplementedError("Abstract")

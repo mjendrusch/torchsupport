@@ -28,7 +28,7 @@ class PathState(State):
 
 class NetState(State):
   def read_action(self, training, data):
-    getattr(training, self.name).load_state_dict(data["name"])
+    getattr(training, self.name).load_state_dict(data[self.name])
 
   def write_action(self, training, data):
     data[self.name] = getattr(training, self.name).state_dict()
@@ -36,12 +36,13 @@ class NetState(State):
 class NetNameListState(NetState):
   def read_action(self, training, data):
     for key in data[self.name]:
-      getattr(training, key).load_state_dict(data["name"])
+      getattr(training, key).load_state_dict(data[self.name][key])
 
   def write_action(self, training, data):
     net_dict = {}
     for key in getattr(training, self.name):
       net_dict[key] = getattr(training, key).state_dict()
+    data[self.name] = net_dict
 
 class TrainingState(State):
   training_parameters = ["epoch_id", "step_id"]
