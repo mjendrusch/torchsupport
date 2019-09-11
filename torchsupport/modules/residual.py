@@ -100,26 +100,26 @@ class ResNetBlockNd(ResNextBlockNd):
   def __init__(self, in_size, out_size, hidden_size, N=1,
                activation=func.elu, **kwargs):
     super(ResNetBlockNd, self).__init__(
-      self, in_size, out_size, hidden_size, N=N, activation=activation, **kwargs
+      self, in_size, out_size, hidden_size, cardinality=1, N=N, activation=activation, **kwargs
     )
 
 class ResNetBlock1d(ResNetBlockNd):
   def __init__(self, in_size, out_size, hidden_size,
-               cardinality=32, activation=func.elu, **kwargs):
+               activation=func.elu, **kwargs):
     super(ResNetBlock1d, self).__init__(
-      in_size, out_size, hidden_size, cardinality=cardinality, N=1, activation=activation, **kwargs
+      in_size, out_size, hidden_size, N=1, activation=activation, **kwargs
     )
 
 class ResNetBlock2d(ResNetBlockNd):
   def __init__(self, in_size, out_size, hidden_size,
                cardinality=32, activation=func.elu, **kwargs):
     super(ResNetBlock2d, self).__init__(
-      in_size, out_size, hidden_size, cardinality=cardinality, N=2, activation=activation, **kwargs
+      in_size, out_size, hidden_size, N=2, activation=activation, **kwargs
     )
 
 class ResNetBlock3d(ResNetBlockNd):
   def __init__(self, in_size, out_size, hidden_size,
                cardinality=32, activation=func.elu, **kwargs):
     super(ResNetBlock3d, self).__init__(
-      in_size, out_size, hidden_size, cardinality=cardinality, N=3, activation=activation, **kwargs
+      in_size, out_size, hidden_size, N=3, activation=activation, **kwargs
     )

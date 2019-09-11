@@ -7,14 +7,24 @@ from torch.distributions import Normal, RelaxedOneHotCategorical
 
 from tensorboardX import SummaryWriter
 
+from torchsupport.training.state import (
+  NetState, NetNameListState, TrainingState
+)
 from torchsupport.training.training import Training
 import torchsupport.modules.losses.vae as vl
 from torchsupport.structured import DataParallel as SDP
-from torchsupport.data.io import netwrite, to_device, detach
+from torchsupport.data.io import netwrite, to_device, detach, make_differentiable
 from torchsupport.data.collate import DataLoader
 
 class AbstractGANTraining(Training):
   """Abstract base class for GAN training."""
+  checkpoint_parameters = Training.checkpoint_parameters + [
+    TrainingState(),
+    NetNameListState("generator_names"),
+    NetNameListState("discriminator_names"),
+    NetState("generator_optimizer"),
+    NetState("discriminator_optimizer")
+  ]
   def __init__(self, generators, discriminators, data,
                optimizer=torch.optim.Adam,
                generator_optimizer_kwargs=None,
@@ -97,6 +107,9 @@ class AbstractGANTraining(Training):
       discriminator_netlist,
       **discriminator_optimizer_kwargs
     )
+
+  def save_path(self):
+    return f"{self.checkpoint_path}-save.torch"
 
   def generator_loss(self, *args):
     """Abstract method. Computes the generator loss."""
@@ -227,18 +240,6 @@ class AbstractGANTraining(Training):
 
     return generators, discriminators
 
-def _make_differentiable(data):
-  if isinstance(data, torch.Tensor):
-    data.requires_grad_(True)
-  elif isinstance(data, (list, tuple)):
-    for item in data:
-      _make_differentiable(item)
-  elif isinstance(data, dict):
-    for key in data:
-      _make_differentiable(data[key])
-  else:
-    pass
-
 class GANTraining(AbstractGANTraining):
   """Standard GAN training setup."""
   def __init__(self, generator, discriminator, data, **kwargs):
@@ -295,8 +296,8 @@ class GANTraining(AbstractGANTraining):
   def run_discriminator(self, data):
     with torch.no_grad():
       _, fake_batch = self.run_generator(data)
-    _make_differentiable(fake_batch)
-    _make_differentiable(data)
+    make_differentiable(fake_batch)
+    make_differentiable(data)
     fake_result = self.discriminator(fake_batch)
     real_result = self.discriminator(data)
     return fake_batch, data, fake_result, real_result
@@ -343,6 +344,10 @@ def _gradient_norm(inputs, parameters):
 
 class ClassifierGANTraining():
   def __init__(self, classifier, optimizer=torch.optim.Adam, classifier_optimizer_kwargs=None):
+    self.checkpoint_parameters += [
+      NetState("classifier"),
+      NetState("classifier_optimizer")
+    ]
     if classifier_optimizer_kwargs is None:
       classifier_optimizer_kwargs = {}
     self.classifier = classifier.to(self.device)

@@ -9,10 +9,10 @@ from tensorboardX import SummaryWriter
 
 from torchsupport.training.training import Training
 import torchsupport.modules.losses.vae as vl
-from torchsupport.data.io import netwrite
+from torchsupport.data.io import netwrite, make_differentiable
 from torchsupport.data.collate import DataLoader
 
-from torchsupport.training.gan import GANTraining, RothGANTraining, _make_differentiable
+from torchsupport.training.gan import GANTraining, RothGANTraining
 
 class NeuralConditionerTraining(RothGANTraining):
   def __init__(self, generator, discriminator, data, **kwargs):
@@ -69,8 +69,8 @@ class NeuralConditionerTraining(RothGANTraining):
   def run_discriminator(self, data):
     with torch.no_grad():
       fake = self.run_generator(data)
-    _make_differentiable(fake)
-    _make_differentiable(data)
+    make_differentiable(fake)
+    make_differentiable(data)
     _, fake_batch, _, _ = fake
     inputs, available, requested = data
     fake_result = self._run_discriminator_aux(

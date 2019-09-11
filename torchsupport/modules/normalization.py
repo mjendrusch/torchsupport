@@ -23,8 +23,25 @@ class AdaptiveInstanceNorm(nn.Module):
     std = in_view.std(dim=-1)
     scale = self.scale(style).view(style.size(0), -1, 1, 1)
     bias = self.bias(style).view(style.size(0), -1, 1, 1)
-    print(inputs.shape, mean.shape, std.shape, scale.shape, bias.shape)
-    return scale * (inputs - mean) / std + bias
+    return scale * (inputs - mean) / (std + 1e-6) + bias
+
+class AdaptiveInstanceNormPP(AdaptiveInstanceNorm):
+  def __init__(self, in_size, ada_size):
+    super(AdaptiveInstanceNormPP, self).__init__(in_size, ada_size)
+    self.mean_scale = nn.Linear(ada_size, in_size)
+
+  def forward(self, inputs, style):
+    in_view = inputs.view(inputs.size(0), inputs.size(1), 1, 1, -1)
+    mean = in_view.mean(dim=-1)
+    mean_mean = mean.mean(dim=1, keepdim=True)
+    std = in_view.std(dim=-1)
+    mean_std = mean.std(dim=1, keepdim=True)
+    scale = self.scale(style).view(style.size(0), -1, 1, 1)
+    mean_scale = self.mean_scale(style).view(style.size(0), -1, 1, 1)
+    bias = self.bias(style).view(style.size(0), -1, 1, 1)
+    result = scale * (inputs - mean) / (std + 1e-6) + bias
+    correction = mean_scale * (mean - mean_mean) / (mean_std + 1e-6)
+    return result + correction
 
 class AdaptiveBatchNorm(nn.Module):
   def __init__(self, in_size, ada_size):
