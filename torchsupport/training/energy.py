@@ -13,8 +13,9 @@ from tensorboardX import SummaryWriter
 from torchsupport.training.state import (
   State, NetState, NetNameListState, TrainingState, PathState
 )
+from torchsupport.training.samplers import Langevin, AnnealedLangevin
 from torchsupport.training.training import Training
-from torchsupport.data.io import netwrite, to_device
+from torchsupport.data.io import netwrite, to_device, make_differentiable
 from torchsupport.data.collate import DataLoader, default_collate
 from torchsupport.modules.losses.vae import normal_kl_loss
 
@@ -171,18 +172,6 @@ class AbstractEnergyTraining(Training):
 
     return scores
 
-def _make_differentiable(data, toggle=True):
-  if isinstance(data, (torch.HalfTensor, torch.FloatTensor, torch.DoubleTensor)):
-    data.requires_grad_(toggle)
-  elif isinstance(data, (list, tuple)):
-    for item in data:
-      _make_differentiable(item, toggle=toggle)
-  elif isinstance(data, dict):
-    for key in data:
-      _make_differentiable(data[key], toggle=toggle)
-  else:
-    pass
-
 class SampleBuffer(Dataset):
   def __init__(self, owner, buffer_size=10000, buffer_probability=0.95):
     self.samples = []
@@ -210,156 +199,6 @@ class SampleBuffer(Dataset):
 
   def __len__(self):
     return self.buffer_size
-
-def clip_grad_by_norm(gradient, max_norm=0.01):
-  norm = torch.norm(gradient)
-  if norm > max_norm:
-    gradient = gradient * (max_norm / norm)
-  return gradient
-
-class Langevin(nn.Module):
-  def __init__(self, rate=100.0, noise=0.005, steps=10, max_norm=0.01, clamp=(0, 1)):
-    super(Langevin, self).__init__()
-    self.rate = rate
-    self.noise = noise
-    self.steps = steps
-    self.max_norm = max_norm
-    self.clamp = clamp
-
-  def integrate(self, score, data, *args):
-    for idx in range(self.steps):
-      _make_differentiable(data)
-      _make_differentiable(args)
-      energy, *_ = score(data + self.noise * torch.randn_like(data), *args)
-      gradient = ag.grad(energy, data, torch.ones(*energy.shape, device=data.device))[0]
-      if self.max_norm:
-        gradient = clip_grad_by_norm(gradient, self.max_norm)
-      data = data - self.rate * gradient
-      if self.clamp is not None:
-        data = data.clamp(*self.clamp)
-      # data = data - self.noise / 2 * gradient + self.noise * torch.randn_like(data)
-    return data
-
-class DiscreteLangevin(Langevin):
-  def update(self, data):
-    out = data.permute(0, 2, 1).contiguous().view(-1, data.size(1))
-    dmax = out.argmax(dim=1)
-    result = torch.zeros_like(out)
-    result[torch.arange(0, out.size(0)), dmax] = 1
-    return result.view(data.size(0), data.size(2), -1).permute(0, 2, 1).contiguous()
-
-  def integrate(self, score, data, *args):
-    for idx in range(self.steps):
-      _make_differentiable(data)
-      _make_differentiable(args)
-      energy, *_ = score(data + self.noise * torch.randn_like(data), *args)
-      gradient = ag.grad(energy, data, torch.ones(*energy.shape, device=data.device))[0]
-      if self.max_norm:
-        gradient = clip_grad_by_norm(gradient, self.max_norm)
-      data = self.update(data - self.rate * gradient)
-    return data
-
-class MCMC():
-  def __init__(self, temperature=0.01, constrain=True, steps=10):
-    self.temperature = temperature
-    self.constrain = constrain
-    self.steps = steps
-
-  def metropolis(self, current, proposal):
-    log_alpha = - (proposal - current) / self.temperature
-    alpha = log_alpha.exp().view(-1)
-    uniform = torch.rand_like(alpha)
-    accept = uniform < alpha
-    accepted = accept.nonzero().view(-1)
-    return accepted
-
-  def mutate(self, score, data, *args):
-    count = random.randint(1, 2)
-    result = data.clone()
-    for idx in range(count):
-      position = torch.randint(0, result.size(2), (result.size(0),))
-      change = torch.randint(0, result.size(1), (result.size(0),))
-      result[torch.arange(0, result.size(0)), :, position] = 0
-      result[torch.arange(0, result.size(0)), change, position] = 1
-    return result
-  
-  def integrate(self, score, data, *args):
-    result = data.clone()
-    current_energy = score(data, *args)
-    first_energy = current_energy.clone()
-    for idx in range(self.steps):
-      proposal = self.mutate(score, data, *args)
-      energy = score(proposal, *args)
-      accepted = self.metropolis(current_energy, energy)
-      data[accepted] = proposal[accepted]
-      current_energy[accepted] = energy[accepted]
-    if self.constrain:
-      accepted = (current_energy < first_energy).view(-1).nonzero().view(-1)
-      result[accepted] = data[accepted]
-    else:
-      result = data
-    return result
-
-class GeneticAlgorithmMCMC(MCMC):
-  def crossover(self, score, data, *args):
-    result = data.clone()
-    reorder = torch.randint(0, data.size(0), (data.size(0),))
-    choose = torch.randint(0, 2, (data.size(0), 1, data.size(2))).to(torch.float)
-    result = choose * result + (1 - choose) * result[reorder]
-    return result
-
-  def mutate(self, score, data, *args):
-    mutated = MCMC.mutate(self, score, data, *args)
-    crossed_over = self.crossover(score, data, *args)
-    choice = torch.randint(0, 2, (data.size(0), 1, 1)).to(torch.float)
-    result = choice * mutated + (1 - choice) * crossed_over
-    return result
-
-class GradientProposalMCMC(MCMC):
-  def mutate(self, score, data, *args):
-    result = data.clone()
-
-    _make_differentiable(result)
-    _make_differentiable(args)
-    energy = score(result, *args)
-    gradient = ag.grad(energy, result, torch.ones(*energy.shape, device=result.device))[0]
-    
-    # position choice
-    position_gradient = -gradient.sum(dim=1)
-    position_distribution = torch.distributions.Categorical(logits=position_gradient)
-    position_proposal = position_distribution.sample()
-    
-    # change choice
-    change_gradient = -gradient[
-      torch.arange(0, gradient.size(0)),
-      :,
-      position_proposal
-    ]
-    change_distribution = torch.distributions.Categorical(logits=change_gradient)
-    change_proposal = change_distribution.sample()
-
-    # mutate:
-    result[torch.arange(0, result.size(0)), :, position_proposal] = 0
-    result[torch.arange(0, result.size(0)), change_proposal, position_proposal] = 1
-
-    return result.detach()
-
-class AnnealedLangevin(nn.Module):
-  def __init__(self, noises, steps=100, epsilon=2e-5):
-    super(AnnealedLangevin, self).__init__()
-    self.noises = noises
-    self.steps = steps
-    self.epsilon = epsilon
-
-  def integrate(self, score, data, *args):
-    for noise in self.noises:
-      step_size = self.epsilon * (noise / self.noises[-1]) ** 2
-      noise = torch.ones(data.size(0), data.size(1), 1, 1, 1).to(data.device) * noise
-      for step in range(self.steps):
-        gradient = score(data, noise, *args)
-        update = step_size * gradient + np.sqrt(2 * step_size) * torch.randn_like(data)
-        data = data + update
-    return (data - data.min()) / (data.max() - data.min())
 
 class EnergyTraining(AbstractEnergyTraining):
   checkpoint_parameters = AbstractEnergyTraining.checkpoint_parameters + [
@@ -395,7 +234,7 @@ class EnergyTraining(AbstractEnergyTraining):
     data = self.integrator.integrate(self.score, data, *args).detach()
     detached = data.detach().cpu()
     update = (to_device((detached[idx], *[arg[idx] for arg in args]), "cpu") for idx in range(data.size(0)))
-    _make_differentiable(update, toggle=False)
+    make_differentiable(update, toggle=False)
     self.buffer.update(update)
 
     return to_device((detached, *args), self.device)
@@ -416,8 +255,8 @@ class EnergyTraining(AbstractEnergyTraining):
       detached, *args = self.data_key(to_device(fake, "cpu"))
       self.each_generate(detached.detach(), *args)
 
-    _make_differentiable(fake)
-    _make_differentiable(data)
+    make_differentiable(fake)
+    make_differentiable(data)
     input_data, *data_args = self.data_key(data)
     input_fake, *fake_args = self.data_key(fake)
     real_result = self.score(input_data, *data_args)
@@ -472,10 +311,10 @@ class SetVAETraining(EnergyTraining):
       detached, *args = self.data_key(fake)
       self.each_generate(detached, *args)
 
-    _make_differentiable(fake)
-    _make_differentiable(data)
+    make_differentiable(fake)
+    make_differentiable(data)
     if self.oos_penalty:
-      _make_differentiable(oos)
+      make_differentiable(oos)
     input_data, reference_data, *data_args = self.data_key(data)
     input_fake, reference_fake, *fake_args = self.data_key(fake)
     if self.oos_penalty:

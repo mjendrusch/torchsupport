@@ -16,7 +16,8 @@ from torchvision.transforms import ToTensor
 from torchsupport.data.io import imread
 from torchsupport.modules.basic import MLP
 from torchsupport.modules.residual import ResNetBlock2d
-from torchsupport.training.energy import SetVAETraining, Langevin, CyclicSetVAETraining
+from torchsupport.training.samplers import Langevin
+from torchsupport.training.energy import SetVAETraining, CyclicSetVAETraining
 
 def normalize(image):
   return (image - image.min()) / (image.max() - image.min())
