@@ -80,17 +80,27 @@ class RAdam(Optimizer):
                     state['exp_avg'] = torch.zeros_like(p.data)
                     # Exponential moving average of squared gradient values
                     state['exp_avg_sq'] = torch.zeros_like(p.data)
+                    # Cheap exponentiation
+                    state['beta_1_exp'] = 1
+                    state['beta_2_exp'] = 1
 
+                # Name caching
                 exp_avg, exp_avg_sq = state['exp_avg'], state['exp_avg_sq']
                 beta1, beta2 = group['betas']
                 step = state['step']
                 rho_inf = group['rho_inf']
 
                 step += 1
+                # Cheap exponentiation
+                state['beta_1_exp'] *= beta1
+                state['beta_2_exp'] *= beta2
+                # Name caching
+                beta1exp = state['beta_1_exp']
+                beta2exp = state['beta_2_exp']
 
-                bias_correction1 = 1 - beta1 ** step
-                bias_correction2 = 1 - beta2 ** step
-                rho_step = rho_inf - 2 * step * beta2**step / (1 - beta2**step)
+                bias_correction1 = 1 - beta1exp
+                bias_correction2 = 1 - beta2exp
+                rho_step = rho_inf - 2 * step * beta2exp / (1 - beta2exp)
 
                 if group['weight_decay'] != 0:
                     grad.add_(group['weight_decay'], p.data)
