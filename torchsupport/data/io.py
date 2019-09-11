@@ -132,5 +132,17 @@ def detach(data):
       key : detach(data[key])
       for key in data
     }
-  raise ArgumentError("cannot be detached.")
+  raise ValueError("cannot be detached.")
+
+def make_differentiable(data, toggle=True):
+  if isinstance(data, (torch.HalfTensor, torch.FloatTensor, torch.DoubleTensor)):
+    data.requires_grad_(toggle)
+  elif isinstance(data, (list, tuple)):
+    for item in data:
+      make_differentiable(item, toggle=toggle)
+  elif isinstance(data, dict):
+    for key in data:
+      make_differentiable(data[key], toggle=toggle)
+  else:
+    pass
 
