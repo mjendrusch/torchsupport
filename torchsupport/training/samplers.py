@@ -28,14 +28,36 @@ class Langevin(nn.Module):
     for idx in range(self.steps):
       make_differentiable(data)
       make_differentiable(args)
-      energy, *_ = score(data + self.noise * torch.randn_like(data), *args)
-      gradient = ag.grad(energy, data, torch.ones(*energy.shape, device=data.device))[0]
+      energy = score(data + self.noise * torch.randn_like(data), *args)
+      if isinstance(energy, (list, tuple)):
+        energy, *_ = energy
+      gradient = ag.grad(energy, data, torch.ones_like(energy))[0]
       if self.max_norm:
         gradient = clip_grad_by_norm(gradient, self.max_norm)
       data = data - self.rate * gradient
       if self.clamp is not None:
         data = data.clamp(*self.clamp)
-      # data = data - self.noise / 2 * gradient + self.noise * torch.randn_like(data)
+    return data
+
+class TrueLangevin(Langevin):
+  def __init__(self, noise=0.015, gradient_factor=1, take_noise=True, steps=100, clamp=(0, 1)):
+    super().__init__(rate=None, noise=noise, steps=steps, max_norm=None, clamp=clamp)
+    self.take_noise = take_noise
+    self.gradient_factor = gradient_factor
+
+  def integrate(self, score, data, *args):
+    for idx in range(self.steps):
+      make_differentiable(data)
+      make_differentiable(args)
+      energy = score(data, *args)
+      if isinstance(energy, (list, tuple)):
+        energy, *_ = energy
+      gradient = self.gradient_factor * ag.grad(energy, data, torch.ones_like(energy))[0]
+      noise = self.noise * torch.randn_like(data) if self.take_noise else 0.0
+      data = data - self.noise ** 2 / 2 * gradient + noise
+      if self.clamp is not None:
+        data = data.clamp(*self.clamp)
+    print(gradient.view(energy.size(0), -1).mean(dim=1)[:5])
     return data
 
 class DiscreteLangevin(Langevin):
