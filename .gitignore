@@ -6,6 +6,8 @@ scratch
 .vscode
 XDG_CACHE_HOME
 *.pyi
+.pytest_cache
+.idea
 *.torch
 *.ipynb
 __pycache__
