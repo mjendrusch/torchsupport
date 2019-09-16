@@ -115,9 +115,17 @@ class AbstractGANTraining(Training):
     """Abstract method. Computes the generator loss."""
     raise NotImplementedError("Abstract")
 
+  def generator_step_loss(self, *args):
+    """Computes the losses of all generators."""
+    return self.generator_loss(*args)
+
   def discriminator_loss(self, *args):
     """Abstract method. Computes the discriminator loss."""
     raise NotImplementedError("Abstract")
+
+  def discriminator_step_loss(self, *args):
+    """Computes the losses of all discriminators."""
+    return self.discriminator_loss(*args)
 
   def sample(self, *args, **kwargs):
     """Abstract method. Samples from the latent distribution."""
@@ -261,7 +269,7 @@ class GANTraining(AbstractGANTraining):
       data, **kwargs
     )
 
-  def sample(self):
+  def sample(self, data=None):
     the_generator = self.generator
     if isinstance(the_generator, nn.DataParallel):
       the_generator = the_generator.module
@@ -289,7 +297,7 @@ class GANTraining(AbstractGANTraining):
     return generated_loss + real_loss, None
 
   def run_generator(self, data):
-    sample = self.sample()
+    sample = self.sample(data)
     generated = self.generator(sample)
     return data, generated
 
