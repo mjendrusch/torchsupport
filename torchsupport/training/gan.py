@@ -34,6 +34,7 @@ class AbstractGANTraining(Training):
                max_epochs=50,
                batch_size=128,
                device="cpu",
+               path_prefix=".",
                network_name="network",
                verbose=False,
                report_steps=10):
@@ -60,7 +61,7 @@ class AbstractGANTraining(Training):
 
     self.verbose = verbose
     self.report_steps = report_steps
-    self.checkpoint_path = network_name
+    self.checkpoint_path = f"{path_prefix}/{network_name}"
 
     self.n_critic = n_critic
     self.n_actor = n_actor

@@ -28,6 +28,7 @@ class ClusteringTraining(Training):
                max_epochs=50,
                batch_size=128,
                device="cpu",
+               path_prefix=".",
                network_name="network"):
     super(ClusteringTraining, self).__init__()
     self.net = net.to(device)
@@ -39,6 +40,7 @@ class ClusteringTraining(Training):
     self.batch_size = batch_size
     self.device = device
 
+    self.checkpoint_path = f"{path_prefix}/{network_name}"
     self.order_less = order_less
 
     if not order_less:
@@ -57,7 +59,7 @@ class ClusteringTraining(Training):
     self.step_id = 0
 
   def save_path(self):
-    return f"{self.network_name}-save.torch"
+    return f"{self.checkpoint_path}-save.torch"
 
   def checkpoint(self):
     the_net = self.net
@@ -65,7 +67,7 @@ class ClusteringTraining(Training):
       the_net = the_net.module
     netwrite(
       the_net,
-      f"{self.network_name}-encoder-epoch-{self.epoch_id}-step-{self.step_id}.torch"
+      f"{self.checkpoint_path}-encoder-epoch-{self.epoch_id}-step-{self.step_id}.torch"
     )
     self.each_checkpoint()
 
@@ -218,6 +220,7 @@ class ClusterAETraining(ClusteringTraining):
                max_epochs=50,
                batch_size=128,
                device="cpu",
+               path_prefix=".",
                network_name="network"):
     super(ClusterAETraining, self).__init__(
       encoder, data,
@@ -227,6 +230,7 @@ class ClusterAETraining(ClusteringTraining):
       max_epochs=max_epochs,
       batch_size=batch_size,
       device=device,
+      path_prefix=path_prefix,
       network_name=network_name
     )
     self.decoder = decoder.to(device)
@@ -362,6 +366,7 @@ class DEPICTTraining(ClusteringTraining):
                max_epochs=50,
                batch_size=128,
                device="cpu",
+               path_prefix=".",
                network_name="network"):
     super(DEPICTTraining, self).__init__(
       encoder, data,
@@ -371,6 +376,7 @@ class DEPICTTraining(ClusteringTraining):
       max_epochs=max_epochs,
       batch_size=batch_size,
       device=device,
+      path_prefix=path_prefix,
       network_name=network_name
     )
     self.decoder = decoder.to(device)
@@ -498,6 +504,7 @@ class HierarchicalClusteringTraining(ClusteringTraining):
                max_epochs=50,
                batch_size=128,
                device="cpu",
+               path_prefix=".",
                network_name="network",
                depth=[5, 10, 50]):
     super(HierarchicalClusteringTraining, self).__init__(
@@ -508,6 +515,7 @@ class HierarchicalClusteringTraining(ClusteringTraining):
       max_epochs=max_epochs,
       batch_size=batch_size,
       device=device,
+      path_prefix=path_prefix,
       network_name=network_name
     )
 
@@ -582,6 +590,7 @@ class VAEClusteringTraining(HierarchicalClusteringTraining):
                max_epochs=50,
                batch_size=128,
                device="cpu",
+               path_prefix=".",
                network_name="network",
                depth=[5, 10, 50]):
     super(VAEClusteringTraining, self).__init__(
@@ -592,6 +601,7 @@ class VAEClusteringTraining(HierarchicalClusteringTraining):
       max_epochs=max_epochs,
       batch_size=batch_size,
       device=device,
+      path_prefix=".",
       network_name=network_name
     )
 
@@ -688,6 +698,7 @@ class RegularizedClusteringTraining(HierarchicalClusteringTraining):
                max_epochs=50,
                batch_size=128,
                device="cpu",
+               path_prefix=".",
                network_name="network",
                depth=[5, 10, 50]):
     super(RegularizedClusteringTraining, self).__init__(
@@ -698,6 +709,7 @@ class RegularizedClusteringTraining(HierarchicalClusteringTraining):
       max_epochs=max_epochs,
       batch_size=batch_size,
       device=device,
+      path_prefix=path_prefix,
       network_name=network_name
     )
 

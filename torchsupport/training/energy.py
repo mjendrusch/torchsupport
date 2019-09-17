@@ -31,6 +31,7 @@ class AbstractEnergyTraining(Training):
                max_epochs=50,
                batch_size=128,
                device="cpu",
+               path_prefix=".",
                network_name="network",
                verbose=False,
                report_steps=10):
@@ -52,7 +53,7 @@ class AbstractEnergyTraining(Training):
 
     self.verbose = verbose
     self.report_steps = report_steps
-    self.checkpoint_path = network_name
+    self.checkpoint_path = f"{path_prefix}/{network_name}"
 
     netlist = []
     self.names = []
@@ -190,7 +191,7 @@ class SampleBuffer(Dataset):
       self.current = (self.current + 1) % self.buffer_size
 
   def __getitem__(self, idx):
-    initialized = len(self.samples) > (1 - self.buffer_probability) * self.buffer_size
+    initialized = len(self.samples) > self.owner.batch_size
     if random.random() < self.buffer_probability and initialized:
       result = self.samples[idx % len(self.samples)]
     else:

@@ -28,6 +28,7 @@ class AbstractVAETraining(Training):
                max_epochs=50,
                batch_size=128,
                device="cpu",
+               path_prefix=".",
                network_name="network",
                verbose=False):
     """Generic training setup for variational autoencoders.
@@ -47,7 +48,7 @@ class AbstractVAETraining(Training):
     super(AbstractVAETraining, self).__init__()
 
     self.verbose = verbose
-    self.checkpoint_path = network_name
+    self.checkpoint_path = f"{path_prefix}/{network_name}"
 
     self.data = data
     self.valid = valid
