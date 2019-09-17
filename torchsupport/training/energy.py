@@ -34,7 +34,8 @@ class AbstractEnergyTraining(Training):
                path_prefix=".",
                network_name="network",
                verbose=False,
-               report_steps=10):
+               report_interval=10,
+               checkpoint_interval=1000):
     """Generic training setup for energy/score based models.
 
     Args:
@@ -52,7 +53,8 @@ class AbstractEnergyTraining(Training):
     super(AbstractEnergyTraining, self).__init__()
 
     self.verbose = verbose
-    self.report_steps = report_steps
+    self.report_interval = report_interval
+    self.checkpoint_interval = checkpoint_interval
     self.checkpoint_path = f"{path_prefix}/{network_name}"
 
     netlist = []
@@ -163,8 +165,9 @@ class AbstractEnergyTraining(Training):
 
       for data in self.train_data:
         self.step(data)
+        if self.step_id % self.checkpoint_interval == 0:
+          self.checkpoint()
         self.step_id += 1
-      self.checkpoint()
 
     scores = [
       getattr(self, name)
@@ -252,7 +255,7 @@ class EnergyTraining(AbstractEnergyTraining):
   def run_energy(self, data):
     fake = self.sample()
 
-    if self.step_id % 10 == 0:
+    if self.step_id % self.report_interval == 0:
       detached, *args = self.data_key(to_device(fake, "cpu"))
       self.each_generate(detached.detach(), *args)
 
@@ -308,7 +311,7 @@ class SetVAETraining(EnergyTraining):
     if self.oos_penalty:
       oos = self.out_of_sample()
 
-    if self.step_id % 10 == 0:
+    if self.step_id % self.report_interval == 0:
       detached, *args = self.data_key(fake)
       self.each_generate(detached, *args)
 
@@ -395,7 +398,7 @@ class DenoisingScoreTraining(EnergyTraining):
 
   def each_step(self):
     super(DenoisingScoreTraining, self).each_step()
-    if self.step_id % self.report_steps == 0 and self.step_id != 0:
+    if self.step_id % self.report_interval == 0 and self.step_id != 0:
       data, *args = self.sample()
       self.each_generate(data, *args)
 

@@ -30,6 +30,8 @@ class AbstractVAETraining(Training):
                device="cpu",
                path_prefix=".",
                network_name="network",
+               report_interval=10,
+               checkpoint_interval=1000,
                verbose=False):
     """Generic training setup for variational autoencoders.
 
@@ -49,6 +51,8 @@ class AbstractVAETraining(Training):
 
     self.verbose = verbose
     self.checkpoint_path = f"{path_prefix}/{network_name}"
+    self.report_interval = report_interval
+    self.checkpoint_interval = checkpoint_interval
 
     self.data = data
     self.valid = valid
@@ -168,6 +172,11 @@ class AbstractVAETraining(Training):
       )
     self.each_checkpoint()
 
+  def validate(self, data):
+    loss = self.valid_step(data)
+    self.writer.add_scalar("valid loss", loss, self.step_id)
+    self.each_validate()
+
   def train(self):
     """Trains a VAE until the maximum number of epochs is reached."""
     for epoch_id in range(self.max_epochs):
@@ -177,20 +186,25 @@ class AbstractVAETraining(Training):
         self.data, batch_size=self.batch_size, num_workers=8,
         shuffle=True
       )
-      for data in self.train_data:
-        self.step(data)
-        self.step_id += 1
-      self.checkpoint()
       if self.valid is not None:
         self.valid_data = DataLoader(
           self.valid, batch_size=self.batch_size, num_workers=8,
           shuffle=True
         )
-        loss = 0.0
-        for data in self.valid_data:
-          loss += self.valid_step(data)
-        loss /= len(self.valid)
-        self.writer.add_scalar("valid loss", loss, self.step_id)
+      for data in self.train_data:
+        self.step(data)
+        if self.step_id % self.checkpoint_interval == 0:
+          self.checkpoint()
+        if self.valid is not None and self.step_id % self.report_interval == 0:
+          vdata = None
+          try:
+            vdata = next(valid_iter)
+          except StopIteration:
+            valid_iter = iter(self.valid_data)
+            vdata = next(valid_iter)
+          vdata = to_device(vdata, self.device)
+          self.validate(vdata)
+        self.step_id += 1
 
     netlist = [
       getattr(self, name)
@@ -309,11 +323,12 @@ class LaggingInference(ABC):
           self.aggressive_update(data)
         else:
           self.step(data)
+        if self.step_id % self.checkpoint_interval == 0:
+          self.checkpoint()
         self.step_id += 1
       valid_data = DataLoader(self.valid, batch_size=self.batch_size, shuffle=True)
       new_mi = self.compute_mi(next(iter(valid_data)))
       aggressive = new_mi > old_mi
-      self.checkpoint()
 
     netlist = [
       getattr(self, name)

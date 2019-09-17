@@ -37,7 +37,8 @@ class AbstractGANTraining(Training):
                path_prefix=".",
                network_name="network",
                verbose=False,
-               report_steps=10):
+               report_interval=10,
+               checkpoint_interval=1000):
     """Generic training setup for generative adversarial networks.
 
     Args:
@@ -60,7 +61,8 @@ class AbstractGANTraining(Training):
     super(AbstractGANTraining, self).__init__()
 
     self.verbose = verbose
-    self.report_steps = report_steps
+    self.report_interval = report_interval
+    self.checkpoint_interval = checkpoint_interval
     self.checkpoint_path = f"{path_prefix}/{network_name}"
 
     self.n_critic = n_critic
@@ -176,7 +178,7 @@ class AbstractGANTraining(Training):
     loss_val = self.generator_step_loss(*args)
 
     if self.verbose:
-      if self.step_id % self.report_steps == 0:
+      if self.step_id % self.report_interval == 0:
         self.each_generate(*args)
       for loss_name in self.current_losses:
         loss_float = self.current_losses[loss_name]
@@ -234,8 +236,9 @@ class AbstractGANTraining(Training):
       data = iter(self.train_data)
       for _ in range(steps_per_episode):
         self.step(data)
+        if self.step_id % self.checkpoint_interval == 0:
+          self.checkpoint()
         self.step_id += 1
-      self.checkpoint()
 
     generators = [
       getattr(self, name)

@@ -114,6 +114,8 @@ class SupervisedTraining(Training):
                device="cpu",
                network_name="network",
                path_prefix=".",
+               report_interval=10,
+               checkpoint_interval=1000,
                valid_callback=lambda x: None):
     super(SupervisedTraining, self).__init__()
     self.valid_callback = valid_callback
@@ -136,6 +138,8 @@ class SupervisedTraining(Training):
     self.net = net.to(self.device)
     self.max_epochs = max_epochs
     self.checkpoint_path = f"{path_prefix}/{network_name}-checkpoint"
+    self.report_interval = report_interval
+    self.checkpoint_interval = checkpoint_interval
     self.step_id = 0
     self.epoch_id = 0
     self.validation_losses = [0 for _ in range(len(self.losses))]
@@ -217,9 +221,6 @@ class SupervisedTraining(Training):
     for idx, loss in enumerate(self.validation_losses):
       self.writer.add_scalar(f"validation loss {idx}", loss, self.step_id)
     self.writer.add_scalar(f"validation loss total", sum(self.validation_losses), self.step_id)
-    if self.step_id % 50 == 0:#self.best is None or sum(self.validation_losses) < self.best:
-      self.best = sum(self.validation_losses)
-      self.checkpoint()
 
   def train(self):
     for epoch_id in range(self.max_epochs):
@@ -228,7 +229,7 @@ class SupervisedTraining(Training):
       for data in self.train_data:
         data = to_device(data, self.device)
         self.step(data)
-        if self.step_id % 10 == 0:
+        if self.step_id % self.report_interval == 0:
           vdata = None
           try:
             vdata = next(valid_iter)
@@ -237,6 +238,8 @@ class SupervisedTraining(Training):
             vdata = next(valid_iter)
           vdata = to_device(vdata, self.device)
           self.validate(vdata)
+        if self.step_id % self.checkpoint_interval == 0:
+          self.checkpoint()
         self.step_id += 1
       self.schedule_step()
       self.each_epoch()
@@ -259,6 +262,8 @@ class FewShotTraining(SupervisedTraining):
                device="cpu",
                network_name="network",
                path_prefix=".",
+               report_interval=10,
+               checkpoint_interval=1000,
                valid_callback=lambda x: None):
     super(FewShotTraining, self).__init__(
       net, train_data, validate_data, losses,
@@ -269,6 +274,8 @@ class FewShotTraining(SupervisedTraining):
       device=device,
       network_name=network_name,
       path_prefix=path_prefix,
+      report_interval=report_interval,
+      checkpoint_interval=checkpoint_interval,
       valid_callback=valid_callback
     )
 

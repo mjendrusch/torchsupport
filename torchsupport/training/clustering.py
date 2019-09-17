@@ -28,6 +28,8 @@ class ClusteringTraining(Training):
                max_epochs=50,
                batch_size=128,
                device="cpu",
+               report_interval=10,
+               checkpoint_interval=1000,
                path_prefix=".",
                network_name="network"):
     super(ClusteringTraining, self).__init__()
@@ -39,6 +41,9 @@ class ClusteringTraining(Training):
     self.max_epochs = max_epochs
     self.batch_size = batch_size
     self.device = device
+
+    self.report_interval = report_interval
+    self.checkpoint_interval = checkpoint_interval
 
     self.checkpoint_path = f"{path_prefix}/{network_name}"
     self.order_less = order_less
@@ -202,9 +207,9 @@ class ClusteringTraining(Training):
       )
       for data, label in self.train_data:
         self.step(data, label, centers)
-        self.step_id += 1
-        if self.step_id % 50 == 0:
+        if self.step_id % self.checkpoint_interval == 0:
           self.checkpoint()
+        self.step_id += 1
 
     return self.net
 
@@ -220,6 +225,8 @@ class ClusterAETraining(ClusteringTraining):
                max_epochs=50,
                batch_size=128,
                device="cpu",
+               report_interval=10,
+               checkpoint_interval=1000,
                path_prefix=".",
                network_name="network"):
     super(ClusterAETraining, self).__init__(
@@ -231,7 +238,9 @@ class ClusterAETraining(ClusteringTraining):
       batch_size=batch_size,
       device=device,
       path_prefix=path_prefix,
-      network_name=network_name
+      network_name=network_name,
+      report_interval=report_interval,
+      checkpoint_interval=checkpoint_interval
     )
     self.decoder = decoder.to(device)
 
@@ -349,9 +358,9 @@ class ClusterAETraining(ClusteringTraining):
       for internal_epoch in range(1):
         for data, *_ in islice(self.train_data, 100):
           self.step(data)
-          self.step_id += 1
-          if self.step_id % 50 == 0:
+          if self.step_id % self.checkpoint_interval == 0:
             self.checkpoint()
+          self.step_id += 1
 
       self.each_cluster()
       self.alpha *= float(np.power(2.0, (-(np.log(epoch_id + 1) ** 2))))
@@ -366,6 +375,8 @@ class DEPICTTraining(ClusteringTraining):
                max_epochs=50,
                batch_size=128,
                device="cpu",
+               report_interval=10,
+               checkpoint_interval=1000,
                path_prefix=".",
                network_name="network"):
     super(DEPICTTraining, self).__init__(
@@ -377,7 +388,9 @@ class DEPICTTraining(ClusteringTraining):
       batch_size=batch_size,
       device=device,
       path_prefix=path_prefix,
-      network_name=network_name
+      network_name=network_name,
+      report_interval=report_interval,
+      checkpoint_interval=checkpoint_interval
     )
     self.decoder = decoder.to(device)
     self.classifier = classifier.to(device)
@@ -506,6 +519,8 @@ class HierarchicalClusteringTraining(ClusteringTraining):
                device="cpu",
                path_prefix=".",
                network_name="network",
+               report_interval=10,
+               checkpoint_interval=1000,
                depth=[5, 10, 50]):
     super(HierarchicalClusteringTraining, self).__init__(
       net, data,
@@ -516,7 +531,9 @@ class HierarchicalClusteringTraining(ClusteringTraining):
       batch_size=batch_size,
       device=device,
       path_prefix=path_prefix,
-      network_name=network_name
+      network_name=network_name,
+      report_interval=report_interval,
+      checkpoint_interval=checkpoint_interval,
     )
 
     self.depth = depth
@@ -578,8 +595,9 @@ class HierarchicalClusteringTraining(ClusteringTraining):
       for inner_epoch in range(1):
         for data, label in self.train_data:
           self.step(data, label, center_hierarchy)
+          if self.step_id % self.checkpoint_interval == 0:
+            self.checkpoint()
           self.step_id += 1
-        self.checkpoint()
 
     return self.net
 
@@ -592,6 +610,8 @@ class VAEClusteringTraining(HierarchicalClusteringTraining):
                device="cpu",
                path_prefix=".",
                network_name="network",
+               report_interval=10,
+               checkpoint_interval=1000,
                depth=[5, 10, 50]):
     super(VAEClusteringTraining, self).__init__(
       encoder, data,
@@ -602,7 +622,9 @@ class VAEClusteringTraining(HierarchicalClusteringTraining):
       batch_size=batch_size,
       device=device,
       path_prefix=".",
-      network_name=network_name
+      network_name=network_name,
+      report_interval=10,
+      checkpoint_interval=1000
     )
 
     self.decoder = decoder.to(device)
@@ -700,6 +722,8 @@ class RegularizedClusteringTraining(HierarchicalClusteringTraining):
                device="cpu",
                path_prefix=".",
                network_name="network",
+               report_interval=10,
+               checkpoint_interval=1000,
                depth=[5, 10, 50]):
     super(RegularizedClusteringTraining, self).__init__(
       encoder, data,
@@ -710,7 +734,9 @@ class RegularizedClusteringTraining(HierarchicalClusteringTraining):
       batch_size=batch_size,
       device=device,
       path_prefix=path_prefix,
-      network_name=network_name
+      network_name=network_name,
+      report_interval=10,
+      checkpoint_interval=1000
     )
 
     self.decoder = decoder.to(device)
