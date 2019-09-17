@@ -6,9 +6,21 @@ from torchsupport.training.gan import (
 )
 
 class PairedGANTraining(RothGANTraining):
+  def __init__(self, generator, discriminator, data, gamma=100, **kwargs):
+    super().__init__(generator, discriminator, data, **kwargs)
+    self.gamma = gamma
+
+  def mixing_key(self, data):
+    return data[1]
+
   def sample(self, data):
     noise = super().sample(data)
     return noise, data[0]
+
+  def generator_step_loss(self, data, generated):
+    gan_loss = super().generator_step_loss(data, generated)
+    l1_loss = (data[1] - generated[1]).view(data[1].size(0), -1).norm(p=1, dim=1)
+    return gan_loss + self.gamma * l1_loss.mean()
 
 class CycleGANTraining(RothGANTraining):
   def __init__(self, generators, discriminators, data, gamma=10, **kwargs):
@@ -18,6 +30,7 @@ class CycleGANTraining(RothGANTraining):
     self.rv_discriminator = ...
     self.discriminator = ...
     AbstractGANTraining.__init__(
+      self,
       {"fw": generators[0], "rv": generators[1]},
       {"fw_discriminator": discriminators[0], "rv_discriminator": discriminators[1]},
       data, **kwargs
@@ -30,7 +43,7 @@ class CycleGANTraining(RothGANTraining):
     self.discriminator = disc
 
   def cycle_loss(self, data, cycled):
-    l1 = (data - cycled).view(data.size(0), -1).norm(p=1)
+    l1 = (data - cycled).view(data.size(0), -1).norm(p=1, dim=1)
     return l1.mean()
 
   def generator_step_loss(self, data, translated, cycled):
@@ -85,7 +98,8 @@ class CycleGANTraining(RothGANTraining):
   def run_discriminator(self, data):
     with torch.no_grad():
       _, (fake_fw, fake_rv), _ = self.run_generator(data)
-    make_differentiable((fake_fw, fake_rv))
+    make_differentiable(fake_fw)
+    make_differentiable(fake_rv)
     make_differentiable(data)
     real_result_fw = self.fw_discriminator(data[1])
     fake_result_fw = self.fw_discriminator(fake_fw)
@@ -95,8 +109,9 @@ class CycleGANTraining(RothGANTraining):
     real_result = (real_result_fw, real_result_rv)
     fake_result = (fake_result_fw, fake_result_rv)
     fake_batch = fake_fw, fake_rv
+    real_batch = (data[1], data[0])
 
-    return fake_batch, data, fake_result, real_result
+    return fake_batch, real_batch, fake_result, real_result
 
 class AugmentedCycleGANTraining(CycleGANTraining):
   def __init__(self, generators, discriminators, encoders, data, gamma=10, **kwargs):
@@ -110,6 +125,7 @@ class AugmentedCycleGANTraining(CycleGANTraining):
     self.z_rv_discriminator = ...
     self.discriminator = ...
     AbstractGANTraining.__init__(
+      self,
       {
         "fw": generators[0],
         "rv": generators[1],
@@ -205,9 +221,14 @@ class AugmentedCycleGANTraining(CycleGANTraining):
 
   def run_discriminator(self, data):
     with torch.no_grad():
-      _, (fake_fw, fake_rv), _, (real_z_fw, real_z_rv), (fake_z_fw, fake_z_rv)  = \
+      _, (fake_fw, fake_rv), _, (real_z_fw, real_z_rv), (fake_z_fw, fake_z_rv), _  = \
         self.run_generator(data)
-    make_differentiable((fake_fw, fake_rv))
+    make_differentiable(fake_fw)
+    make_differentiable(fake_rv)
+    make_differentiable(real_z_fw)
+    make_differentiable(real_z_rv)
+    make_differentiable(fake_z_fw)
+    make_differentiable(fake_z_rv)
     make_differentiable(data)
     real_result_fw = self.fw_discriminator(data[1])
     fake_result_fw = self.fw_discriminator(fake_fw)
@@ -220,6 +241,7 @@ class AugmentedCycleGANTraining(CycleGANTraining):
 
     real_result = (real_result_fw, real_result_rv, real_result_z_fw, real_result_z_rv)
     fake_result = (fake_result_fw, fake_result_rv, fake_result_z_fw, fake_result_z_rv)
-    fake_batch = fake_fw, fake_rv
+    fake_batch = fake_fw, fake_rv, fake_z_fw, fake_z_rv
+    real_batch = (data[1], data[0], real_z_fw, real_z_rv)
 
-    return fake_batch, data, fake_result, real_result
+    return fake_batch, real_batch, fake_result, real_result

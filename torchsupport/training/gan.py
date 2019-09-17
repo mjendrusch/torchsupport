@@ -152,7 +152,7 @@ class AbstractGANTraining(Training):
     self.discriminator_optimizer.zero_grad()
     data = to_device(data, self.device)
     args = self.run_discriminator(data)
-    loss_val, *grad_out = self.discriminator_loss(*args)
+    loss_val, *grad_out = self.discriminator_step_loss(*args)
 
     if self.verbose:
       for loss_name in self.current_losses:
@@ -172,7 +172,7 @@ class AbstractGANTraining(Training):
     self.generator_optimizer.zero_grad()
     data = to_device(data, self.device)
     args = self.run_generator(data)
-    loss_val = self.generator_loss(*args)
+    loss_val = self.generator_step_loss(*args)
 
     if self.verbose:
       if self.step_id % self.report_steps == 0:
