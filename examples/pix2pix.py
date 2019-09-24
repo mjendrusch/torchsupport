@@ -8,6 +8,7 @@ from torch.utils.data import Dataset
 from torchvision.datasets import ImageFolder
 
 from torchsupport.modules.basic import MLP
+from torchsupport.training.gan import NormalizedDiversityGANTraining
 from torchsupport.training.translation import CycleGANTraining, PairedGANTraining
 
 class MiniEdges2Shoes(Dataset):
@@ -69,23 +70,34 @@ class Discriminator(nn.Module):
     super().__init__()
     self.preprocess = nn.Conv2d(6, 32, 1)
     self.blocks = nn.ModuleList([
-      nn.Conv2d(32, 32, 3, padding=1)
+      nn.Sequential(
+        nn.Conv2d((idx + 1) * 32, (idx + 1) * 32, 3, padding=1),
+        nn.ReLU(),
+        nn.BatchNorm2d((idx + 1) * 32),
+        nn.Conv2d((idx + 1) * 32, (idx + 2) * 32, 3, padding=1),
+        nn.ReLU(),
+        nn.BatchNorm2d((idx + 2) * 32),
+      )
       for idx in range(4)
     ])
-    self.postprocess = nn.Linear(32, 1)
+    self.postprocess = nn.Linear(5 * 32, 1)
 
   def forward(self, data):
     condition, inputs = data
     combined = torch.cat((inputs, condition), dim=1)
     out = func.relu(self.preprocess(combined))
     for block in self.blocks:
-      out = func.relu(block(out))
+      out = block(out)
       out = func.max_pool2d(out, 2)
     out = func.adaptive_avg_pool2d(out, 1).view(out.size(0), -1)
     return self.postprocess(out)
 
-class E2SGANTraining(PairedGANTraining):
-  def each_generate(self, data, translated):
+class E2SGANTraining(NormalizedDiversityGANTraining, PairedGANTraining):
+  def __init__(self, *args, weight=1.0, alpha=0.8, **kwargs):
+    PairedGANTraining.__init__(self, *args, **kwargs)
+    NormalizedDiversityGANTraining.__init__(self, alpha=alpha, diversity_weight=weight)
+
+  def each_generate(self, data, translated, sample):
     data_points = torch.cat([x for x in data[0][:5]], dim=2).detach()
     translated_points = torch.cat([x for x in translated[1][:5]], dim=2).detach()
     real_points = torch.cat([x for x in data[1][:5]], dim=2).detach()
@@ -103,6 +115,8 @@ if __name__ == "__main__":
     device="cpu",
     batch_size=64,
     max_epochs=1000,
+    n_critic=1,
+    gamma=10,
     verbose=True
   )
 
