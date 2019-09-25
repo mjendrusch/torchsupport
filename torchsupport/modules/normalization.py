@@ -58,3 +58,18 @@ class AdaptiveBatchNorm(nn.Module):
     bias = self.bias(style).view(style.size(0), -1, 1, 1)
     bias = bias - bias.mean(dim=1, keepdim=True)
     return scale * (inputs - mean) / (std + 1e-6) + bias
+
+class AdaptiveLayerNorm(nn.Module):
+  def __init__(self, in_size, ada_size):
+    super(AdaptiveLayerNorm, self).__init__()
+    self.scale = nn.Linear(ada_size, in_size)
+    self.bias = nn.Linear(ada_size, in_size)
+  
+  def forward(self, inputs, style):
+    mean = inputs.mean(dim=1, keepdim=True)
+    std = inputs.std(dim=1, keepdim=True)
+    scale = self.scale(style).view(style.size(0), -1, 1, 1)
+    scale = scale - scale.mean(dim=1, keepdim=True) + 1
+    bias = self.bias(style).view(style.size(0), -1, 1, 1)
+    bias = bias - bias.mean(dim=1, keepdim=True)
+    return scale * (inputs - mean) / (std + 1e-6) + bias

@@ -17,10 +17,15 @@ class PairedGANTraining(RothGANTraining):
     noise = super().sample(data)
     return noise, data[0]
 
-  def generator_step_loss(self, data, generated):
-    gan_loss = super().generator_step_loss(data, generated)
-    l1_loss = (data[1] - generated[1]).view(data[1].size(0), -1).norm(p=1, dim=1)
-    return gan_loss + self.gamma * l1_loss.mean()
+  def reconstruction_loss(self, data, generated, sample):
+    diff = abs(data[1] - generated[1]).view(data[1].size(0), -1)
+    l1_loss = diff.mean()
+    return l1_loss
+
+  def generator_step_loss(self, data, generated, sample):
+    gan_loss = super().generator_step_loss(data, generated, sample)
+    reconstruction_loss = self.reconstruction_loss(data, generated, sample)
+    return gan_loss + self.gamma * reconstruction_loss
 
 class CycleGANTraining(RothGANTraining):
   def __init__(self, generators, discriminators, data, gamma=10, **kwargs):

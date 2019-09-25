@@ -1,3 +1,4 @@
+import random
 
 import numpy as np
 import torch
@@ -15,6 +16,7 @@ import torchsupport.modules.losses.vae as vl
 from torchsupport.structured import DataParallel as SDP
 from torchsupport.data.io import netwrite, to_device, detach, make_differentiable
 from torchsupport.data.collate import DataLoader
+from torchsupport.modules.losses.generative import normalized_diversity_loss
 
 class AbstractGANTraining(Training):
   """Abstract base class for GAN training."""
@@ -279,7 +281,7 @@ class GANTraining(AbstractGANTraining):
       the_generator = the_generator.module
     return to_device(the_generator.sample(self.batch_size), self.device)
 
-  def generator_loss(self, data, generated):
+  def generator_loss(self, data, generated, sample):
     disc = self.discriminator(generated)
     loss_val = func.binary_cross_entropy_with_logits(
       disc, torch.zeros(disc.size(0), 1).to(self.device)
@@ -303,11 +305,11 @@ class GANTraining(AbstractGANTraining):
   def run_generator(self, data):
     sample = self.sample(data)
     generated = self.generator(sample)
-    return data, generated
+    return data, generated, sample
 
   def run_discriminator(self, data):
     with torch.no_grad():
-      _, fake_batch = self.run_generator(data)
+      _, fake_batch, _ = self.run_generator(data)
     make_differentiable(fake_batch)
     make_differentiable(data)
     fake_result = self.discriminator(fake_batch)
@@ -351,7 +353,7 @@ def _gradient_norm(inputs, parameters):
   grad_sum = 0.0
   for gradient in gradients:
     grad_sum += (gradient ** 2).view(gradient.size(0), -1).sum(dim=1)
-  grad_sum = torch.sqrt(grad_sum)
+  grad_sum = torch.sqrt(grad_sum + 1e-16)
   return grad_sum, out
 
 class ClassifierGANTraining():
@@ -376,7 +378,7 @@ class ClassifierGANTraining():
 
     return loss_val
 
-  def generator_loss(self, data, generated):
+  def generator_loss(self, data, generated, sample):
     loss_val = super().generator_loss(data, generated)
     gen, *label = generated
     dat, *dat_label = data
@@ -392,6 +394,97 @@ class ClassifierGANTraining():
     self.classifier_optimizer.zero_grad()
     super().generator_step(data)
     self.classifier_optimizer.step()
+
+class CollapseGANTraining():
+  def __init__(self, diversity_weight):
+    self.diversity_weight = diversity_weight
+
+  def latent_distance(self, x, y):
+    raise NotImplementedError("Abstract.")
+
+  def result_distance(self, x, y):
+    raise NotImplementedError("Abstract.")
+  
+  def unpack_result(self, x):
+    return x[1]
+
+  def unpack_sample(self, x):
+    return x[1]
+
+  def diversity_loss(self, data, generated, sample):
+    return 0.0
+
+  def generator_step_loss(self, data, generated, sample):
+    gan_loss = super().generator_step_loss(data, generated, sample)
+    diversity_loss = self.diversity_loss(data, generated, sample)
+    return gan_loss + self.diversity_weight * diversity_loss
+
+class NormalizedDiversityGANTraining(CollapseGANTraining):
+  def __init__(self, diversity_weight=1.0, alpha=0.8):
+    super().__init__(diversity_weight)
+    self.alpha = alpha
+
+  def latent_distance(self, x, y):
+    diff = x - y
+    return diff.view(diff.size(0), diff.size(1), -1).norm(p=2, dim=-1)
+
+  def result_distance(self, x, y):
+    diff = x - y
+    return diff.view(diff.size(0), diff.size(1), -1).norm(p=2, dim=-1)
+
+  def diversity_loss(self, data, generated, sample):
+    loss = normalized_diversity_loss(
+      self.unpack_sample(sample), self.unpack_result(generated),
+      self.latent_distance, self.result_distance,
+      alpha=self.alpha
+    )
+    self.current_losses["diversity"] = float(loss)
+    return loss
+
+class ModeSeekingGANTraining(CollapseGANTraining):
+  def result_distance(self, x, y):
+    return (x - y).norm(p=1)
+  
+  def latent_distance(self, x, y):
+    return (x - y).norm(p=1)
+
+  def unpack_result(self, x):
+    return x
+
+  def unpack_sample(self, x):
+    return x
+
+  def diversity_loss(self, data, generated, sample):
+    res = self.unpack_result(generated)
+    smp = self.unpack_sample(sample)
+    mode_loss = self.result_distance(*res) / self.latent_distance(*smp)
+    self.current_losses["diversity"] = float(mode_loss)
+    return -mode_loss
+
+  def generator_step_loss(self, data, generated, samples):
+    gan_loss = 0.5 * self.generator_loss(data, generated[0], samples[0])
+    gan_loss += 0.5 * self.generator_loss(data, generated[1], samples[1])
+
+    mode_loss = self.diversity_loss(data, generated, samples)
+
+    return self.diversity_weight * mode_loss + gan_loss
+
+  def run_discriminator(self, data):
+    with torch.no_grad():
+      _, fake_batches, _ = self.run_generator(data)
+    make_differentiable(fake_batches)
+    make_differentiable(data)
+    fake_result = self.discriminator(fake_batches[0])
+    real_result = self.discriminator(data)
+    return fake_batches[0], data, fake_result, real_result
+
+  def run_generator(self, data):
+    samples = []
+    generated = []
+    for idx in range(2):
+      samples.append(self.sample(data))
+      generated.append(self.generator(samples[-1]))
+    return data, generated, samples
 
 class WGANTraining(GANTraining):
   """Wasserstein-GAN (Arjovsky et al. 2017) training setup
@@ -461,8 +554,8 @@ class RothGANTraining(GANTraining):
     return data
 
   def regularization(self, fake, real, generated_result, real_result):
-    fake_prob = torch.sigmoid(generated_result)
-    real_prob = torch.sigmoid(real_result)
+    fake_prob = torch.sigmoid(generated_result).clamp(0, 1)
+    real_prob = torch.sigmoid(real_result).clamp(0, 1)
     real_norm, real_out = _gradient_norm(real_result, self.mixing_key(real))
     fake_norm, fake_out = _gradient_norm(generated_result, self.mixing_key(fake))
 
