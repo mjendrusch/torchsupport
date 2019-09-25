@@ -15,7 +15,7 @@ from torchvision.transforms import ToTensor
 
 from torchsupport.data.io import imread
 from torchsupport.modules.basic import MLP
-from torchsupport.modules.residual import ResNetBlock2d
+from torchsupport.modules.residual import FixUpFactory
 from torchsupport.training.samplers import Langevin
 from torchsupport.training.energy import SetVAETraining, CyclicSetVAETraining
 
@@ -69,37 +69,18 @@ class YeastSet(Dataset):
   def __len__(self):
     return 100 * len(self.files)
 
-class FixUpRes(nn.Module):
-  def __init__(self, in_size=128, out_size=128, branches=1):
-    super(FixUpRes, self).__init__()
-    self.conv_0 = spectral_norm(nn.Conv2d(in_size, in_size // 2, 3, padding=1, bias=False))
-    self.conv_1 = spectral_norm(nn.Conv2d(in_size // 2, out_size, 3, padding=1, bias=False))
-    self.project = spectral_norm(nn.Conv2d(in_size, out_size, 1, bias=False))
-    self.register_parameter("b_0", nn.Parameter(0.0 * torch.randn(1)[0]))
-    self.register_parameter("b_1", nn.Parameter(0.0 * torch.randn(1)[0]))
-    self.register_parameter("b_2", nn.Parameter(0.0 * torch.randn(1)[0]))
-    self.register_parameter("b_3", nn.Parameter(0.0 * torch.randn(1)[0]))
-    self.register_parameter("m_0", nn.Parameter(torch.ones(1)[0]))
-    with torch.no_grad():
-      self.conv_0.weight /= torch.sqrt(torch.tensor(branches, dtype=torch.float))
-      self.conv_1.weight = 1e-10 * torch.randn_like(self.conv_1.weight)
-
-  def forward(self, inputs):
-    out = self.conv_0(inputs + self.b_0) + self.b_1
-    out = func.relu(out)
-    out = self.conv_1(out + self.b_2) * self.m_0 + self.b_3
-    return func.relu(out + self.project(inputs))
-
 class SingleEncoder(nn.Module):
   def __init__(self, latents=128):
     super(SingleEncoder, self).__init__()
+    FixUp = FixUpFactory(N=2, eps=1e-10, normalization=spectral_norm)
     self.input = nn.Conv2d(3, 128, 3, padding=1)
     self.blocks = nn.ModuleList([
-      #FixUpRes(32 * 2 ** (idx // 2), 32 * 2 ** ((idx + 1) // 2), 9)
-      spectral_norm(nn.Conv2d(128, 128, 3, padding=1))
-      for idx in range(9)
+      FixUp(
+        32 * 2 ** (idx // 2), 32 * 2 ** ((idx + 1) // 2),
+        activation=func.leaky_relu, padding=1
+      )
+      for idx in range(8)
     ])
-    #self.out = spectral_norm(nn.Linear(32 * 2 ** (9 // 2), latents))
     self.out = MLP(
       128, latents, hidden_size=64,
       depth=3, batch_norm=False,
@@ -110,10 +91,10 @@ class SingleEncoder(nn.Module):
   def forward(self, inputs):
     out = func.leaky_relu(self.input(inputs))
     for idx, block in enumerate(self.blocks):
-      out = func.leaky_relu(block(out))
+      out = block(out)
       if idx % 2 == 0:
-        out = func.avg_pool2d(out, 2)
-    out = func.adaptive_avg_pool2d(out, 1).view(-1, 128)#, 32 * 2 ** (9 // 2))
+        out = func.avg_pool2d(out, 2, ceil_mode=True)
+    out = out.view(out.size(0), out.size(1), -1).mean(dim=-1).view(-1, 128)
     return self.out(out)
 
 class Encoder(nn.Module):
@@ -122,7 +103,12 @@ class Encoder(nn.Module):
     self.size = size
     self.single = single
     self.weight = spectral_norm(nn.Linear(128, 1))
-    self.combine = MLP(128, 128, 64, depth=3, batch_norm=False, normalization=spectral_norm, activation=func.leaky_relu)
+    self.combine = MLP(
+      128, 128, 64,
+      depth=3, batch_norm=False,
+      normalization=spectral_norm,
+      activation=func.leaky_relu
+    )
     self.mean = spectral_norm(nn.Linear(128, latents))
     self.logvar = spectral_norm(nn.Linear(128, latents))
 
@@ -175,11 +161,11 @@ if __name__ == "__main__":
   data = YeastSet(sys.argv[1])
 
   energy = nn.DataParallel(Energy())
-  integrator = Langevin(rate=100, steps=40, max_norm=None)
+  integrator = Langevin(rate=10, steps=50, clamp=(0, 1), max_norm=None)
   
   training = YeastSetTraining(
     energy, data,
-    network_name="set-yeast-plain-ae",
+    network_name="set-yeast-vae",
     device="cuda:0",
     oos_penalty=False,
     integrator=integrator,

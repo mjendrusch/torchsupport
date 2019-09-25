@@ -36,16 +36,18 @@ class IntermediateExtractor(nn.Module):
 
 class FixUpBlockNd(nn.Module):
   def __init__(self, in_size, out_size, N=1, index=0,
-               activation=func.relu, **kwargs):
+               activation=func.relu, eps=0,
+               normalization=None, **kwargs):
     super(FixUpBlockNd, self).__init__()
 
     conv = getattr(nn, f"Conv{N}d")
     
+    self.normalization = normalization or (lambda x: x)
     self.convs = nn.ModuleList([
       conv(in_size, out_size, 3, **kwargs),
       conv(out_size, out_size, 3, **kwargs),
     ])
-    self.project = lambda x: x if in_size == out_size else conv(in_size, out_size, 1)
+    self.project = (lambda x: x) if in_size == out_size else conv(in_size, out_size, 1)
 
     self.scale = nn.Parameter(torch.tensor(1.0, dtype=torch.float))
     self.biases = nn.ParameterList([
@@ -55,7 +57,11 @@ class FixUpBlockNd(nn.Module):
 
     with torch.no_grad():
       self.convs[0].weight.data = self.convs[0].weight.data * (index + 1) ** (-0.5)
-      self.convs[1].weight.data.zero_()
+      self.convs[1].weight.data.normal_()
+      self.convs[1].weight.data = self.convs[1].weight.data * eps
+
+    self.convs[0] = self.normalization(self.convs[0])
+    self.convs[1] = self.normalization(self.convs[1])
     
     self.activation = activation
 
@@ -67,33 +73,42 @@ class FixUpBlockNd(nn.Module):
     return out + self.project(inputs)
 
 class FixUpBlock1d(FixUpBlockNd):
-  def __init__(self, in_size, out_size, index=0,
-               activation=func.relu, **kwargs):
+  def __init__(self, in_size, out_size, index=0, normalization=None,
+               activation=func.relu, eps=0.0, **kwargs):
     super().__init__(
-      in_size, out_size, N=1, index=index, activation=activation, **kwargs
+      in_size, out_size, N=1, index=index,
+      activation=activation, eps=eps,
+      normalization=normalization, **kwargs
     )
 
 class FixUpBlock2d(FixUpBlockNd):
-  def __init__(self, in_size, out_size, index=0,
-               activation=func.relu, **kwargs):
+  def __init__(self, in_size, out_size, index=0, normalization=None,
+               activation=func.relu, eps=0.0, **kwargs):
     super().__init__(
-      in_size, out_size, N=2, index=index, activation=activation, **kwargs
+      in_size, out_size, N=2, index=index,
+      activation=activation, eps=eps,
+      normalization=normalization, **kwargs
     )
 
 class FixUpBlock3d(FixUpBlockNd):
-  def __init__(self, in_size, out_size, index=0,
-               activation=func.relu, **kwargs):
+  def __init__(self, in_size, out_size, index=0, normalization=None,
+               activation=func.relu, eps=0.0, **kwargs):
     super().__init__(
-      in_size, out_size, N=3, index=index, activation=activation, **kwargs
+      in_size, out_size, N=3, index=index,
+      activation=activation, eps=eps,
+      normalization=normalization, **kwargs
     )
 
 class FixUpFactory:
-  def __init__(self, N=1):
+  def __init__(self, N=1, eps=0.0, normalization=None):
     self.fixup = getattr(sys.modules[__name__], f"FixUpBlock{N}d")
+    self.normalization = normalization or (lambda x: x)
     self.index = 0
+    self.eps = eps
 
   def __call__(self, *args, **kwargs):
-    result = self.fixup(*args, index=self.index, **kwargs)
+    result = self.fixup(*args, eps=self.eps, index=self.index,
+                        normalization=self.normalization, **kwargs)
     self.index += 1
     return result
 
