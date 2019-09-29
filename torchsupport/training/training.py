@@ -13,7 +13,7 @@ from torchsupport.data.episodic import SupportData
 from torchsupport.data.collate import DataLoader
 
 from torchsupport.training.state import (
-  TrainingState, NetState, State
+  TrainingState, NetState, State, SaveStateError
 )
 
 class Training(object):
@@ -75,8 +75,17 @@ class Training(object):
     step = step or self.save_interval
     this_tick = time.monotonic()
     if this_tick - self.last_tick > step:
-      self.save()
-      self.last_tick = this_tick
+      try:
+        self.save()
+        self.last_tick = this_tick
+      except SaveStateError:
+        torch_rng_state = torch.random.get_rng_state()
+        np_rng_state = np.random.get_state()
+        random_rng_state = random.getstate()
+        self.load()
+        torch.random.set_rng_state(torch_rng_state)
+        np.random.set_state(np_rng_state)
+        random.setstate(random_rng_state)
 
   def load(self, path=None):
     path = path or self.save_path()
