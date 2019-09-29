@@ -44,10 +44,10 @@ class FixUpBlockNd(nn.Module):
     
     self.normalization = normalization or (lambda x: x)
     self.convs = nn.ModuleList([
-      conv(in_size, out_size, 3, **kwargs),
-      conv(out_size, out_size, 3, **kwargs),
+      normalization(conv(in_size, out_size, 3, bias=False, **kwargs)),
+      normalization(conv(out_size, out_size, 3, bias=False, **kwargs)),
     ])
-    self.project = (lambda x: x) if in_size == out_size else conv(in_size, out_size, 1)
+    self.project = (lambda x: x) if in_size == out_size else normalization(conv(in_size, out_size, 1, bias=False))
 
     self.scale = nn.Parameter(torch.tensor(1.0, dtype=torch.float))
     self.biases = nn.ParameterList([
@@ -59,10 +59,6 @@ class FixUpBlockNd(nn.Module):
       self.convs[0].weight.data = self.convs[0].weight.data * (index + 1) ** (-0.5)
       self.convs[1].weight.data.normal_()
       self.convs[1].weight.data = self.convs[1].weight.data * eps
-
-    self.convs[0] = self.normalization(self.convs[0])
-    self.convs[1] = self.normalization(self.convs[1])
-    
     self.activation = activation
 
   def forward(self, inputs):
