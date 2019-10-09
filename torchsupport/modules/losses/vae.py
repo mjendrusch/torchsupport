@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as func
 from torch.distributions import Normal, Categorical
 from torch.distributions import kl_divergence
+from torchsupport.ops.distance import multi_rbf_distance_matrix
 
 def normal_kl_loss(mean, logvar, r_mean=None, r_logvar=None):
   if r_mean is None or r_logvar is None:
@@ -193,3 +194,15 @@ def mdn_loss(prior_parameters, sample):
   minimum_component = torch.norm(sample.unsqueeze(1) - mu, 2, dim=2).argmin(dim=1)
   result = -pi + 0.5 * torch.norm(sample - mu[:, minimum_component], 2, dim=1)
   return result
+
+
+def maximum_mean_discrepancy_loss(x, y, kernel=multi_rbf_distance_matrix):
+  """
+  Maximum mean discrepancy loss
+
+  Used for adapting trVAE from http://arxiv.org/abs/1910.01791
+  """
+  x_dist = kernel(x, x)
+  y_dist = kernel(y, y)
+  xy_dist = kernel(x, y)
+  return torch.mean(x_dist) + torch.mean(y_dist) - 2 * torch.mean(xy_dist)
