@@ -1,3 +1,8 @@
+import torch
+
+class SaveStateError(Exception):
+  pass
+
 class State:
   def __init__(self, name):
     self.name = name
@@ -31,7 +36,12 @@ class NetState(State):
     getattr(training, self.name).load_state_dict(data[self.name])
 
   def write_action(self, training, data):
-    data[self.name] = getattr(training, self.name).state_dict()
+    network = getattr(training, self.name)
+    if isinstance(network, torch.nn.Module):
+      for param in network.parameters():
+        if torch.isnan(param).any():
+          raise SaveStateError("Encountered NaN weights!")
+    data[self.name] = network.state_dict()
 
 class NetNameListState(NetState):
   def read_action(self, training, data):
@@ -41,7 +51,12 @@ class NetNameListState(NetState):
   def write_action(self, training, data):
     net_dict = {}
     for key in getattr(training, self.name):
-      net_dict[key] = getattr(training, key).state_dict()
+      network = getattr(training, key)
+      if isinstance(network, torch.nn.Module):
+        for param in network.parameters():
+          if torch.isnan(param).any():
+            raise SaveStateError("Encountered NaN weights!")
+      net_dict[key] = network.state_dict()
     data[self.name] = net_dict
 
 class TrainingState(State):

@@ -232,10 +232,9 @@ class ConstantStructure(AbstractStructure):
     self.lengths = [self.connections.size(0)]
 
   def move_to(self, device):
-    return ConstantStructure(
-      self.source, self.target,
-      self.connections.to(device)
-    )
+    result = self
+    result.connections = result.connections.to(device)
+    return result
 
   def chunk(self, targets):
     connections = []
@@ -297,6 +296,7 @@ class ConstantStructure(AbstractStructure):
       torch.cat(connections, dim=0)
     )
     result.lengths = lengths
+    print("coll lengths", lengths, len(structures), list(map(lambda x: x.lengths, structures)))
     return result
 
   def message(self, source, target):

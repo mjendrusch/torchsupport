@@ -373,8 +373,8 @@ class ClassifierGANTraining():
 
   def classifier_loss(self, result, label):
     loss_val = 0.0
-    for res, lbl in zip(result, label):
-      loss_val += func.cross_entropy(res, lbl)
+    for res, lbl in zip(result, label[0]):
+      loss_val += func.cross_entropy(res, lbl.argmax(dim=1).view(-1))
 
     return loss_val
 
