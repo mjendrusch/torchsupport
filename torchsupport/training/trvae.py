@@ -40,7 +40,7 @@ class TransformingVAETraining(VAETraining):
     ce = self.reconstruction_loss(rec, target)
     kld = self.divergence_loss(mean, logvar)
     ddl = self.domain_divergence_loss(cond_latent, domain)
-    loss_val = ce + kld + self.domain_scale * ddl
+    loss_val = ce + kld - self.domain_scale * ddl
     self.current_losses['cross-entropy'] = float(ce)
     self.current_losses['kullback-leibler'] = float(kld)
     self.current_losses['domain-divergence'] = float(ddl)
