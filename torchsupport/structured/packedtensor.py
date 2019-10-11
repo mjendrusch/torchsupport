@@ -31,7 +31,7 @@ class PackedTensor(DeviceMovable, Collatable, Chunkable):
     ]
     if not tensors[0].split:
       return torch.cat(data, dim=0)
-    return PackedTensor(data, lengths=lengths)
+    return PackedTensor(data, lengths=lengths, box=tensors[0].box)
 
   def move_to(self, device):
     the_copy = copy(self)
