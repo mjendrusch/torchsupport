@@ -45,7 +45,8 @@ class PackedTensor(DeviceMovable, Collatable, Chunkable):
     offset = 0
     step = len(self.lengths) // len(targets)
     for chunk in chunks:
-      the_tensor = PackedTensor(chunk)
+      the_tensor = PackedTensor(chunk, split=self.split, box=self.box)
       the_tensor.lengths = self.lengths[offset:offset + step]
-      result.append(the_tensor if self.box else the_tensor.tensor)
+      the_tensor = the_tensor if self.box else the_tensor.tensor
+      result.append(the_tensor)
     return result
