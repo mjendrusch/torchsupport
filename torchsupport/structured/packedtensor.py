@@ -7,9 +7,10 @@ from torchsupport.structured.chunkable import (
 )
 
 class PackedTensor(DeviceMovable, Collatable, Chunkable):
-  def __init__(self, tensors, lengths=None, split=True):
+  def __init__(self, tensors, lengths=None, split=True, box=False):
     self.tensor = tensors
     self.split = split
+    self.box = box
     self.lengths = [len(tensors)]
     if isinstance(self.tensor, (list, tuple)):
       self.lengths = list(map(lambda x: x.size(0), tensors))
@@ -46,5 +47,5 @@ class PackedTensor(DeviceMovable, Collatable, Chunkable):
     for chunk in chunks:
       the_tensor = PackedTensor(chunk)
       the_tensor.lengths = self.lengths[offset:offset + step]
-      result.append(the_tensor.tensor)
+      result.append(the_tensor if self.box else the_tensor.tensor)
     return result
