@@ -3,6 +3,8 @@ import torch
 import numpy as np
 import time
 
+from torchsupport.data.tensor_provider import TensorProvider
+
 import os
 
 def imread(path, type='float32'):
@@ -143,5 +145,8 @@ def make_differentiable(data, toggle=True):
   elif isinstance(data, dict):
     for key in data:
       make_differentiable(data[key], toggle=toggle)
+  elif isinstance(data, TensorProvider):
+    for tensor in data.tensors():
+      make_differentiable(tensor, toggle=toggle)
   else:
     pass

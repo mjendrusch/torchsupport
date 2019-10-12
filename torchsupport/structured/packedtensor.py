@@ -2,11 +2,12 @@ from copy import copy
 import torch
 from torchsupport.data.collate import Collatable
 from torchsupport.data.io import DeviceMovable
+from torchsupport.data.tensor_provider import TensorProvider
 from torchsupport.structured.chunkable import (
   Chunkable, chunk_sizes, chunk_tensor
 )
 
-class PackedTensor(DeviceMovable, Collatable, Chunkable):
+class PackedTensor(DeviceMovable, Collatable, Chunkable, TensorProvider):
   def __init__(self, tensors, lengths=None, split=True, box=False):
     self.tensor = tensors
     self.split = split
@@ -37,6 +38,9 @@ class PackedTensor(DeviceMovable, Collatable, Chunkable):
     the_copy = copy(self)
     the_copy.tensor = self.tensor.to(device)
     return self
+
+  def tensors(self):
+    return [self.tensor]
 
   def chunk(self, targets):
     sizes = chunk_sizes(self.lengths, len(targets))
