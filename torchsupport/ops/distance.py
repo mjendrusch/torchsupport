@@ -39,7 +39,8 @@ def rbf_distance_matrix(x, y, gamma=1.):
 def multi_rbf_distance_matrix(x, y):
   # TODO: remove the ugly hardcode from trVAE paper
   sigmas = torch.tensor([1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1, 5, 10, 15, 20, 25,
-                         30, 35, 100, 1e3, 1e4, 1e5, 1e6])
+                         30, 35, 100, 1e3, 1e4, 1e5, 1e6], 
+                         device=x.device, requires_grad=false)
   beta = 1 / (2 * sigmas)
 
   distances = sum_of_squared_distance_matrix(x, y)
