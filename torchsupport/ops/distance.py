@@ -43,6 +43,6 @@ def multi_rbf_distance_matrix(x, y):
   beta = 1 / (2 * sigmas)
 
   distances = sum_of_squared_distance_matrix(x, y)
-  s = distances.unsqueeze(0) * beta.view(-1, *(1 for _ in distances.dim()))
+  s = distances.unsqueeze(0) * beta.view(-1, *(1 for _ in distances.shape))
 
   return torch.sum(torch.exp(-s), dim=0) / len(sigmas)
