@@ -21,6 +21,8 @@ def test_shapes(func):
   assert func(data1, data1).shape == (20, 20)
   assert func(data1).shape == (20, 20)
   assert func(data1, data2).shape == (20, 30)
+  with pytest.raises(ValueError):
+    func(data1, torch.ones((20, 51)))
 
 @pytest.mark.parametrize('func', [mean_squared_distance_matrix,
                                   multi_rbf_distance_matrix,
