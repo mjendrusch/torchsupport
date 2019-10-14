@@ -22,7 +22,6 @@ def pad(data, indices, value=0):
     dtype=data.dtype, device=data.device
   )
   result.view(-1, *data.shape[1:])[index] = data
-  print("rei", result_indices.dtype, indices.dtype)
   return result, result_indices, index, counts
 
 def unpad(data, index):
@@ -97,7 +96,6 @@ except ImportError:
       _op = None
 
   def _update_add(out, processed, indices):
-    print(indices.shape, indices.dtype)
     out[indices] += processed
     return out
 
@@ -180,7 +178,6 @@ def reduced_sequential(module, data, indices, out=None, dim_size=None):
 def batched(module, data, indices, padding_value=0):
   padded, _, index, counts = pad(data, indices, value=padding_value)
   result = module(padded.transpose(1, 2)).transpose(1, 2)
-  print(data.shape, result.shape)
   return unpad(result, index)
 
 def reduced_batched(module, data, indices, out=None,
@@ -228,7 +225,6 @@ def pairwise(op, data, indices, padding_value=0):
   second_indices = torch.arange((counts ** 2).sum()) - second_offset
 
   # extract tensor from padded result using indices:
-  print(reference.shape, padded.shape, op_result.shape)
   result = op_result[batch_indices, first_indices, second_indices]
 
   # access: cumsum(counts ** 2)[idx] + counts[idx] * idy + idz
@@ -247,7 +243,6 @@ def pairwise_no_pad(op, data, indices):
   expansion = torch.repeat_interleave(expansion, counts)
   offset = torch.arange(0, counts.sum())
   expansion = expansion - offset - 1
-  print(expansion.size(), data.size())
   expanded = torch.repeat_interleave(data, expansion.to(data.device), dim=0)
 
   expansion_offset = counts.roll(1)
@@ -259,23 +254,8 @@ def pairwise_no_pad(op, data, indices):
   access = access - torch.repeat_interleave(expansion.roll(1).cumsum(dim=0), expansion) + off_start + expansion_offset
 
   result = op(expanded, data[access.to(data.device)])
-  print("INDS", indices.size(), expansion.size(), indices.dtype)
   return result, torch.repeat_interleave(indices, expansion, dim=0)
 
 def pairwise_get(data, access, idx):
   index = access[0][idx[0]] + access[1][idx[0]] * idx[1] + idx[2]
   return data[index]
-
-class ScatterModule(nn.Module):
-  def __init__(self):
-    """Applies a reduction function to the neighbourhood of each entity."""
-    super(ScatterModule, self).__init__()
-
-  def reduce(self, source):
-    raise NotImplementedError("Abstract")
-
-  def forward(self, source, indices):
-    results = torch.zeros_like(source)
-    for idx in range(results.size(0)):
-      results += self.reduce(source[(indices == idx).nonzero()])
-    return results

@@ -2,6 +2,7 @@
 
 import torch
 from torch.utils.data import DataLoader as TorchDataLoader
+from torch.nn.parallel.scatter_gather import Gather
 
 class Collatable():
   @classmethod
@@ -46,6 +47,28 @@ def default_collate(batch):
   else:
     return torch.utils.data.dataloader.default_collate(batch)
   raise TypeError(error_message_format.format(elem_type))
+
+def gather_collated(outputs, target_device, dim=0):
+  def gather_map(outputs):
+    out = outputs[0]
+    if isinstance(out, torch.Tensor):
+      return Gather.apply(target_device, dim, *outputs)
+    if out is None:
+      return None
+    if isinstance(out, dict):
+      if not all((len(out) == len(d) for d in outputs)):
+        raise ValueError('All dicts must have the same number of keys')
+      return type(out)(((k, gather_map([d[k] for d in outputs]))
+                         for k in out))
+    if isinstance(out, Collatable):
+      device_code = "cpu" if target_device == -1 else f"cuda:{target_device}"
+      return type(out).collate([output.move_to(device_code) for output in outputs])
+    return type(out)(map(gather_map, zip(*outputs)))
+
+  try:
+    return gather_map(outputs)
+  finally:
+    gather_map = None
 
 def DataLoader(dataset, batch_size=1, shuffle=False, sampler=None,
                batch_sampler=None, num_workers=0, collate_fn=default_collate,

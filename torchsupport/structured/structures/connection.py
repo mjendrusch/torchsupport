@@ -232,24 +232,23 @@ class ConstantStructure(AbstractStructure):
     self.lengths = [self.connections.size(0)]
 
   def move_to(self, device):
-    return ConstantStructure(
-      self.source, self.target,
-      self.connections.to(device)
-    )
+    result = self
+    result.connections = result.connections.to(device)
+    return result
 
   def chunk(self, targets):
     connections = []
     sizes = chunk_sizes(self.lengths, len(targets))
+    step = len(self.lengths) // len(targets)
     offset = 0
     for idx, size in enumerate(sizes):
       the_connections = self.connections[offset:offset + size] - offset
       the_connections = the_connections.to(targets[idx])
-      connections.append(the_connections)
+      result = ConstantStructure(self.source, self.target, the_connections)
+      result.lengths = self.lengths[step * idx:step * (idx + 1)]
+      connections.append(result)
       offset += size
-    return [
-      ConstantStructure(self.source, self.target, the_chunk)
-      for the_chunk in connections
-    ]
+    return connections
 
   def update(self, data):
     (self.source, self.target, self.connections, self.lengths) = data
@@ -297,6 +296,7 @@ class ConstantStructure(AbstractStructure):
       torch.cat(connections, dim=0)
     )
     result.lengths = lengths
+    print("coll lengths", lengths, len(structures), list(map(lambda x: x.lengths, structures)))
     return result
 
   def message(self, source, target):
@@ -478,9 +478,7 @@ class SubgraphStructure(AbstractStructure):
     return result
 
   def chunk(self, targets):
-    print("CHUNKING SUBGRAPH", self.counts, self.unique, targets)
     sizes = chunk_sizes(self.counts, len(targets))
-    print("CHUNKING SUBGRAPH", sizes)
     result = []
     offset = 0
     for size in sizes:
@@ -490,7 +488,6 @@ class SubgraphStructure(AbstractStructure):
       the_copy.unique, the_copy.counts = the_copy.indices.unique(return_counts=True)
       result.append(the_copy)
       offset += the_copy.indices.size(0)
-    print("CHUNKING SUBGRAPH", len(result))
     return result
 
   def message_iterative(self, source, target):

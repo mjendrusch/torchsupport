@@ -1,5 +1,9 @@
+import os
+import time
 import random
 from copy import copy
+
+import numpy as np
 import torch
 
 from tensorboardX import SummaryWriter
@@ -8,14 +12,25 @@ from torchsupport.data.io import netwrite, to_device
 from torchsupport.data.episodic import SupportData
 from torchsupport.data.collate import DataLoader
 
+from torchsupport.training.state import (
+  TrainingState, NetState, State, SaveStateError
+)
+
 class Training(object):
-  """Abstract training process class.
-  """
+  """Abstract training process class."""
+  checkpoint_parameters = []
+  torch_rng_state = torch.random.get_rng_state()
+  np_rng_state = np.random.get_state()
+  random_rng_state = random.getstate()
+
+  save_interval = 600
+  last_tick = 0
+
   def __init__(self):
     pass
 
   def each_step(self):
-    pass
+    self.save_tick()
 
   def each_validate(self):
     pass
@@ -31,6 +46,52 @@ class Training(object):
 
   def validate(self):
     pass
+
+  def save_path(self):
+    raise NotImplementedError("Abstract.")
+
+  def write(self, path):
+    data = {}
+    data["_torch_rng_state"] = torch.random.get_rng_state()
+    data["_np_rng_state"] = np.random.get_state()
+    data["_random_rng_state"] = random.getstate()
+    for param in self.checkpoint_parameters:
+      param.write_action(self, data)
+    torch.save(data, path)
+
+  def read(self, path):
+    data = torch.load(path)
+    torch.random.set_rng_state(data["_torch_rng_state"])
+    np.random.set_state(data["_np_rng_state"])
+    random.setstate(data["_random_rng_state"])
+    for param in self.checkpoint_parameters:
+      param.read_action(self, data)
+
+  def save(self, path=None):
+    path = path or self.save_path()
+    self.write(path)
+
+  def save_tick(self, step=None):
+    step = step or self.save_interval
+    this_tick = time.monotonic()
+    if this_tick - self.last_tick > step:
+      try:
+        self.save()
+        self.last_tick = this_tick
+      except SaveStateError:
+        torch_rng_state = torch.random.get_rng_state()
+        np_rng_state = np.random.get_state()
+        random_rng_state = random.getstate()
+        self.load()
+        torch.random.set_rng_state(torch_rng_state)
+        np.random.set_state(np_rng_state)
+        random.setstate(random_rng_state)
+
+  def load(self, path=None):
+    path = path or self.save_path()
+    if os.path.isfile(path):
+      self.read(path)
+    return self
 
 class SupervisedTraining(Training):
   """Standard supervised training process.
@@ -48,20 +109,29 @@ class SupervisedTraining(Training):
     device (str): the device to run on.
     checkpoint_path (str): the path to save network checkpoints.
   """
+  checkpoint_parameters = Training.checkpoint_parameters + [
+    TrainingState(),
+    NetState("net"),
+    NetState("optimizer")
+  ]
   def __init__(self, net, train_data, validate_data, losses,
                optimizer=torch.optim.Adam,
                schedule=None,
                max_epochs=50,
                batch_size=128,
+               accumulate=None,
                device="cpu",
                network_name="network",
                path_prefix=".",
+               report_interval=10,
+               checkpoint_interval=1000,
                valid_callback=lambda x: None):
     super(SupervisedTraining, self).__init__()
     self.valid_callback = valid_callback
     self.network_name = network_name
     self.writer = SummaryWriter(network_name)
     self.device = device
+    self.accumulate = accumulate
     self.optimizer = optimizer(net.parameters())
     if schedule is None:
       self.schedule = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, patience=10)
@@ -69,19 +139,24 @@ class SupervisedTraining(Training):
       self.schedule = schedule
     self.losses = losses
     self.train_data = DataLoader(
-      train_data, batch_size=batch_size, num_workers=8, shuffle=True
+      train_data, batch_size=batch_size, num_workers=8, shuffle=True, drop_last=True
     )
     self.validate_data = DataLoader(
-      validate_data, batch_size=batch_size, num_workers=8, shuffle=True
+      validate_data, batch_size=batch_size, num_workers=8, shuffle=True, drop_last=True
     )
     self.net = net.to(self.device)
     self.max_epochs = max_epochs
     self.checkpoint_path = f"{path_prefix}/{network_name}-checkpoint"
+    self.report_interval = report_interval
+    self.checkpoint_interval = checkpoint_interval
     self.step_id = 0
     self.epoch_id = 0
     self.validation_losses = [0 for _ in range(len(self.losses))]
     self.training_losses = [0 for _ in range(len(self.losses))]
     self.best = None
+
+  def save_path(self):
+    return self.checkpoint_path + "-save.torch"
 
   def checkpoint(self):
     the_net = self.net
@@ -118,22 +193,22 @@ class SupervisedTraining(Training):
     return loss_val
 
   def step(self, data):
-    print("step", self.step_id)
-    self.optimizer.zero_grad()
+    if self.accumulate is None:
+      self.optimizer.zero_grad()
     outputs = self.run_networks(data)
     loss_val = self.loss(outputs)
     loss_val.backward()
-    self.optimizer.step()
+    torch.nn.utils.clip_grad_norm_(self.net.parameters(), 5.0)
+    if self.accumulate is None:
+      self.optimizer.step()
+    elif self.step_id % self.accumulate == 0:
+      self.optimizer.step()
+      self.optimizer.zero_grad()
     self.each_step()
 
   def validate(self, data):
     with torch.no_grad():
-      print("valid start:", self.step_id)
       self.net.eval()
-      #print("data start", self.step_id)
-      #vit = iter(self.validate_data)
-      #data = to_device(next(vit), self.device)
-      #print("data end", self.step_id)
       outputs = self.run_networks(data)
       self.valid_loss(outputs)
       self.each_validate()
@@ -141,12 +216,12 @@ class SupervisedTraining(Training):
         self, to_device(data, "cpu"), to_device(outputs, "cpu")
       )
       self.net.train()
-      print("valid end:", self.step_id)
 
   def schedule_step(self):
     self.schedule.step(sum(self.validation_losses))
 
   def each_step(self):
+    Training.each_step(self)
     for idx, loss in enumerate(self.training_losses):
       self.writer.add_scalar(f"training loss {idx}", loss, self.step_id)
     self.writer.add_scalar(f"training loss total", sum(self.training_losses), self.step_id)
@@ -155,9 +230,6 @@ class SupervisedTraining(Training):
     for idx, loss in enumerate(self.validation_losses):
       self.writer.add_scalar(f"validation loss {idx}", loss, self.step_id)
     self.writer.add_scalar(f"validation loss total", sum(self.validation_losses), self.step_id)
-    if self.step_id % 50 == 0:#self.best is None or sum(self.validation_losses) < self.best:
-      self.best = sum(self.validation_losses)
-      self.checkpoint()
 
   def train(self):
     for epoch_id in range(self.max_epochs):
@@ -166,7 +238,7 @@ class SupervisedTraining(Training):
       for data in self.train_data:
         data = to_device(data, self.device)
         self.step(data)
-        if self.step_id % 10 == 0:
+        if self.step_id % self.report_interval == 0:
           vdata = None
           try:
             vdata = next(valid_iter)
@@ -175,6 +247,8 @@ class SupervisedTraining(Training):
             vdata = next(valid_iter)
           vdata = to_device(vdata, self.device)
           self.validate(vdata)
+        if self.step_id % self.checkpoint_interval == 0:
+          self.checkpoint()
         self.step_id += 1
       self.schedule_step()
       self.each_epoch()
@@ -197,6 +271,8 @@ class FewShotTraining(SupervisedTraining):
                device="cpu",
                network_name="network",
                path_prefix=".",
+               report_interval=10,
+               checkpoint_interval=1000,
                valid_callback=lambda x: None):
     super(FewShotTraining, self).__init__(
       net, train_data, validate_data, losses,
@@ -207,6 +283,8 @@ class FewShotTraining(SupervisedTraining):
       device=device,
       network_name=network_name,
       path_prefix=path_prefix,
+      report_interval=report_interval,
+      checkpoint_interval=checkpoint_interval,
       valid_callback=valid_callback
     )
 

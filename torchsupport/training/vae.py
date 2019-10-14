@@ -7,20 +7,31 @@ from torch.distributions import Normal, RelaxedOneHotCategorical
 
 from tensorboardX import SummaryWriter
 
+from torchsupport.training.state import (
+  TrainingState, NetNameListState, NetState
+)
 from torchsupport.training.training import Training
 import torchsupport.modules.losses.vae as vl
-from torchsupport.data.io import netwrite
+from torchsupport.data.io import netwrite, to_device
 from torchsupport.data.collate import DataLoader
 
 class AbstractVAETraining(Training):
   """Abstract base class for VAE training."""
+  checkpoint_parameters = Training.checkpoint_parameters + [
+    TrainingState(),
+    NetNameListState("network_names"),
+    NetState("optimizer")
+  ]
   def __init__(self, networks, data, valid=None,
                optimizer=torch.optim.Adam,
                optimizer_kwargs=None,
                max_epochs=50,
                batch_size=128,
                device="cpu",
+               path_prefix=".",
                network_name="network",
+               report_interval=10,
+               checkpoint_interval=1000,
                verbose=False):
     """Generic training setup for variational autoencoders.
 
@@ -39,7 +50,9 @@ class AbstractVAETraining(Training):
     super(AbstractVAETraining, self).__init__()
 
     self.verbose = verbose
-    self.checkpoint_path = network_name
+    self.checkpoint_path = f"{path_prefix}/{network_name}"
+    self.report_interval = report_interval
+    self.checkpoint_interval = checkpoint_interval
 
     self.data = data
     self.valid = valid
@@ -72,6 +85,9 @@ class AbstractVAETraining(Training):
       **optimizer_kwargs
     )
 
+  def save_path(self):
+    return f"{self.checkpoint_path}-save.torch"
+
   def divergence_loss(self, *args):
     """Abstract method. Computes the divergence loss."""
     raise NotImplementedError("Abstract")
@@ -88,9 +104,13 @@ class AbstractVAETraining(Training):
     """Abstract method. Samples from the latent distribution."""
     raise NotImplementedError("Abstract")
 
-  def run_networks(self, data):
+  def run_networks(self, data, *args):
     """Abstract method. Runs neural networks at each step."""
     raise NotImplementedError("Abstract")
+
+  def preprocess(self, data):
+    """Takes and partitions input data into VAE data and args."""
+    return data
 
   def step(self, data):
     """Performs a single step of VAE training.
@@ -98,19 +118,9 @@ class AbstractVAETraining(Training):
     Args:
       data: data points used for training."""
     self.optimizer.zero_grad()
-    if isinstance(data, (list, tuple)):
-      data = [
-        point.to(self.device)
-        for point in data
-      ]
-    elif isinstance(data, dict):
-      data = {
-        key : data[key].to(self.device)
-        for key in data
-      }
-    else:
-      data = data.to(self.device)
-    args = self.run_networks(data)
+    data = to_device(data, self.device)
+    data, *netargs = self.preprocess(data)
+    args = self.run_networks(data, *netargs)
 
     loss_val = self.loss(*args)
 
@@ -162,6 +172,11 @@ class AbstractVAETraining(Training):
       )
     self.each_checkpoint()
 
+  def validate(self, data):
+    loss = self.valid_step(data)
+    self.writer.add_scalar("valid loss", loss, self.step_id)
+    self.each_validate()
+
   def train(self):
     """Trains a VAE until the maximum number of epochs is reached."""
     for epoch_id in range(self.max_epochs):
@@ -171,20 +186,25 @@ class AbstractVAETraining(Training):
         self.data, batch_size=self.batch_size, num_workers=8,
         shuffle=True
       )
-      for data in self.train_data:
-        self.step(data)
-        self.step_id += 1
-      self.checkpoint()
       if self.valid is not None:
         self.valid_data = DataLoader(
           self.valid, batch_size=self.batch_size, num_workers=8,
           shuffle=True
         )
-        loss = 0.0
-        for data in self.valid_data:
-          loss += self.valid_step(data)
-        loss /= len(self.valid)
-        self.writer.add_scalar("valid loss", loss, self.step_id)
+      for data in self.train_data:
+        self.step(data)
+        if self.step_id % self.checkpoint_interval == 0:
+          self.checkpoint()
+        if self.valid is not None and self.step_id % self.report_interval == 0:
+          vdata = None
+          try:
+            vdata = next(valid_iter)
+          except StopIteration:
+            valid_iter = iter(self.valid_data)
+            vdata = next(valid_iter)
+          vdata = to_device(vdata, self.device)
+          self.validate(vdata)
+        self.step_id += 1
 
     netlist = [
       getattr(self, name)
@@ -303,11 +323,12 @@ class LaggingInference(ABC):
           self.aggressive_update(data)
         else:
           self.step(data)
+        if self.step_id % self.checkpoint_interval == 0:
+          self.checkpoint()
         self.step_id += 1
       valid_data = DataLoader(self.valid, batch_size=self.batch_size, shuffle=True)
       new_mi = self.compute_mi(next(iter(valid_data)))
       aggressive = new_mi > old_mi
-      self.checkpoint()
 
     netlist = [
       getattr(self, name)
@@ -371,13 +392,111 @@ class VAETraining(AbstractVAETraining):
     sample = distribution.rsample()
     return sample
 
-  def run_networks(self, data):
-    _, mean, logvar = self.encoder(data)
+  def run_networks(self, data, *args):
+    _, mean, logvar = self.encoder(data, *args)
     sample = self.sample(mean, logvar)
-    reconstruction = self.decoder(sample)
+    reconstruction = self.decoder(sample, *args)
     return mean, logvar, reconstruction, data
 
-class JointVAETraining(AbstractVAETraining):
+class IntroVAETraining(VAETraining):
+  def __init__(self, encoder, decoder, data,
+               alpha=0.25, beta=0.5, m=120,
+               optimizer=torch.optim.Adam,
+               optimizer_kwargs=None, **kwargs):
+    super(IntroVAETraining, self).__init__(
+      encoder, decoder, data,
+      optimizer=optimizer,
+      optimizer_kwargs=optimizer_kwargs,
+      **kwargs 
+    )
+    self.alpha = alpha
+    self.beta = beta
+    self.m = m
+    self.optimizer = None
+    self.generator_optimizer = optimizer(
+      list(self.decoder.parameters()),
+      **optimizer_kwargs
+    )
+    self.critic_optimizer = optimizer(
+      list(self.encoder.parameters()),
+      **optimizer_kwargs
+    )
+
+  def sample_prior(self, encoding):
+    return torch.randn_like(encoding)
+
+  def loss_adv(self, par, rt_par, p_rt_par):
+    kld = self.divergence_loss(*par)
+    rt_kld = self.divergence_loss(*rt_par)
+    rt_kld = max(self.m - rt_kld, 0)
+    p_rt_kld = self.divergence_loss(*rt_kld)
+    p_rt_kld = max(self.m - p_rt_kld)
+    return kld + self.alpha * (rt_kld + p_rt_kld)
+
+  def loss_gen(self, rt_par, p_rt_par):
+    rt_kld = self.divergence_loss(*rt_par)
+    p_rt_kld = self.divergence_loss(*rt_kld)
+    return self.alpha * (rt_kld + p_rt_kld)
+
+  def critic_loss(self, par, rt_par, p_rt_par, reconstruction, target):
+    ce = self.reconstruction_loss(reconstruction, target)
+    reg = self.loss_adv(par, rt_par, p_rt_par)
+
+    return ce + self.beta * reg
+
+  def generator_loss(self, rt_par, p_rt_par, reconstruction, target):
+    ce = self.reconstruction_loss(reconstruction, target)
+    reg = self.loss_gen(rt_par, p_rt_par)
+
+    return ce + self.beta * reg
+
+  def run_critic(self, data, *args):
+    _, *parameters = self.encoder(data, *args)
+    sample = self.sample(*parameters)
+    prior = self.sample_prior(sample)
+    reconstruction = self.decoder(sample, *args)
+    prior_reconstruction = self.decoder(prior, *args)
+    _, *roundtrip_parameters = self.encoder(reconstruction.detach(), *args)
+    _, *prior_roundtrip_parameters = self.encoder(prior_reconstruction.detach(), *args)
+
+    return (
+      (reconstruction, prior_reconstruction),
+      parameters, roundtrip_parameters, prior_roundtrip_parameters, data, reconstruction
+    )
+
+  def run_generator(self, data, reconstruction, prior_reconstruction,  *args):
+    _, *roundtrip_parameters = self.encoder(reconstruction *args)
+    _, *prior_roundtrip_parameters = self.encoder(prior_reconstruction *args)
+    return roundtrip_parameters, prior_roundtrip_parameters, data, reconstruction
+
+  def step(self, data):
+    data = to_device(data, self.device)
+    data, *netargs = self.preprocess(data)
+    
+    self.critic_optimizer.zero_grad()
+    pass_through, *critic_args = self.run_critic(data, *netargs)
+    loss_val = self.critic_loss(*critic_args)
+    loss_val.backward(retain_graph=True)
+    self.writer.add_scalar("critic loss", float(loss_val), self.step_id)
+    self.critic_optimizer.step()
+
+    self.generator_optimizer.zero_grad()
+    generator_args = self.run_generator(data, *pass_through, *netargs)
+    loss_val = self.generator_loss(*generator_args)
+    loss_val.backward()
+    self.writer.add_scalar("generator loss", float(loss_val), self.step_id)
+    self.generator_optimizer.step()
+
+    if self.verbose:
+      for loss_name in self.current_losses:
+        loss_float = self.current_losses[loss_name]
+        self.writer.add_scalar(f"{loss_name} loss", loss_float, self.step_id)
+
+    self.each_step()
+
+    return float(loss_val)
+
+class JointVAETraining(VAETraining):
   """Joint training of continuous and categorical latent variables."""
   def __init__(self, encoder, decoder, data,
                n_classes=3, ctarget=50, dtarget=5,
@@ -397,20 +516,14 @@ class JointVAETraining(AbstractVAETraining):
       temperature (float): temperature parameter of the concrete distribution.
       kwargs (dict): keyword arguments for generic VAE training.
     """
-    self.encoder = ...
-    self.decoder = ...
-    super(JointVAETraining, self).__init__({
-      "encoder": encoder,
-      "decoder": decoder
-    }, data, **kwargs)
+    super(JointVAETraining, self).__init__(
+      encoder, decoder, data, **kwargs
+    )
     self.n_classes = n_classes
     self.temperature = temperature
     self.ctarget = ctarget
     self.dtarget = dtarget
     self.gamma = gamma
-
-  def reconstruction_loss(self, reconstruction, target):
-    return vl.reconstruction_bce(reconstruction, target)
 
   def divergence_loss(self, normal_parameters, categorical_parameters):
     normal = self.gamma * vl.normal_kl_norm_loss(
@@ -445,10 +558,10 @@ class JointVAETraining(AbstractVAETraining):
     )
     return normal.rsample(), categorical.rsample()
 
-  def run_networks(self, data):
-    _, mean, logvar, probabilities = self.encoder(data)
+  def run_networks(self, data, *args):
+    _, mean, logvar, probabilities = self.encoder(data, *args)
     sample, category = self.sample(mean, logvar, probabilities)
-    reconstruction = self.decoder(sample, category)
+    reconstruction = self.decoder(sample, category, *args)
     return (mean, logvar), probabilities, reconstruction, data
 
 class FactorVAETraining(JointVAETraining):
@@ -539,19 +652,20 @@ class FactorVAETraining(JointVAETraining):
     self.writer.add_scalar("discriminator loss", float(discriminator_loss), self.step_id)
     self.each_step()
 
-class ConditionalVAETraining(AbstractVAETraining):
+class ConditionalVAETraining(VAETraining):
   def __init__(self, encoder, decoder, prior, data, **kwargs):
     self.prior = ...
     self.encoder = ...
     self.decoder = ...
-    super(ConditionalVAETraining, self).__init__({
+    AbstractVAETraining.__init__(self, {
       "encoder": encoder,
       "decoder": decoder,
       "prior": prior
     }, data, **kwargs)
 
-  def reconstruction_loss(self, reconstruction, target):
-    return vl.reconstruction_bce(reconstruction, target)
+  def preprocess(self, data):
+    data, condition = data
+    return data, condition
 
   def divergence_loss(self, parameters, prior_parameters):
     mu, lv = parameters
@@ -574,8 +688,7 @@ class ConditionalVAETraining(AbstractVAETraining):
     sample = distribution.rsample()
     return sample
 
-  def run_networks(self, data):
-    target, condition = data
+  def run_networks(self, target, condition):
     _, mean, logvar = self.encoder(target, condition)
     _, r_mean, r_logvar = self.prior(condition)
     sample = self.sample(mean, logvar)
@@ -605,8 +718,7 @@ class GSSNConditionalVAETraining(ConditionalVAETraining):
 
     return loss_val
 
-  def run_networks(self, data):
-    target, condition = data
+  def run_networks(self, target, condition):
     _, mean, logvar = self.encoder(target, condition)
     _, r_mean, r_logvar = self.prior(condition)
     sample = self.sample(mean, logvar)
@@ -619,8 +731,7 @@ class GSSNConditionalVAETraining(ConditionalVAETraining):
     )
 
 class ConditionalVAESkipTraining(ConditionalVAETraining):
-  def run_networks(self, data):
-    target, condition = data
+  def run_networks(self, target, condition):
     _, mean, logvar = self.encoder(target, condition)
     _, r_mean, r_logvar, skip = self.prior(condition)
     sample = self.sample(mean, logvar)
@@ -628,8 +739,7 @@ class ConditionalVAESkipTraining(ConditionalVAETraining):
     return (mean, logvar), (r_mean, r_logvar), sample, reconstruction, target
 
 class GSSNConditionalVAESkipTraining(GSSNConditionalVAETraining):
-  def run_networks(self, data):
-    target, condition = data
+  def run_networks(self, target, condition):
     _, mean, logvar = self.encoder(target, condition)
     _, r_mean, r_logvar, skip = self.prior(condition)
     sample = self.sample(mean, logvar)
@@ -657,12 +767,9 @@ class IndependentConditionalVAETraining(VAETraining):
       encoder, decoder, data, **kwargs
     )
 
-  def run_networks(self, data):
-    target, condition = data
-    _, mean, logvar = self.encoder(target, condition)
-    sample = self.sample(mean, logvar)
-    reconstruction = self.decoder(sample, condition)
-    return mean, logvar, reconstruction, target
+  def preprocess(self, data):
+    data, condition = data
+    return data, condition
 
 class ConditionalRecurrentCanvasVAETraining(ConditionalVAETraining):
   def __init__(self, encoder, decoder, prior, data,

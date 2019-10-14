@@ -10,22 +10,32 @@ from torch.utils.data import Dataset
 
 from tensorboardX import SummaryWriter
 
+from torchsupport.training.state import (
+  State, NetState, NetNameListState, TrainingState, PathState
+)
+from torchsupport.training.samplers import Langevin, AnnealedLangevin
 from torchsupport.training.training import Training
-from torchsupport.data.io import netwrite, to_device
+from torchsupport.data.io import netwrite, to_device, make_differentiable
 from torchsupport.data.collate import DataLoader, default_collate
 from torchsupport.modules.losses.vae import normal_kl_loss
 
 class AbstractEnergyTraining(Training):
   """Abstract base class for GAN training."""
+  checkpoint_parameters = Training.checkpoint_parameters + [
+    TrainingState(),
+    NetNameListState("names")
+  ]
   def __init__(self, scores, data,
                optimizer=torch.optim.Adam,
                optimizer_kwargs=None,
                max_epochs=50,
                batch_size=128,
                device="cpu",
+               path_prefix=".",
                network_name="network",
                verbose=False,
-               report_steps=10):
+               report_interval=10,
+               checkpoint_interval=1000):
     """Generic training setup for energy/score based models.
 
     Args:
@@ -43,8 +53,9 @@ class AbstractEnergyTraining(Training):
     super(AbstractEnergyTraining, self).__init__()
 
     self.verbose = verbose
-    self.report_steps = report_steps
-    self.checkpoint_path = network_name
+    self.report_interval = report_interval
+    self.checkpoint_interval = checkpoint_interval
+    self.checkpoint_path = f"{path_prefix}/{network_name}"
 
     netlist = []
     self.names = []
@@ -74,6 +85,9 @@ class AbstractEnergyTraining(Training):
       netlist,
       **optimizer_kwargs
     )
+
+  def save_path(self):
+    return f"{self.checkpoint_path}-save.torch"
 
   def energy_loss(self, *args):
     """Abstract method. Computes the score function loss."""
@@ -151,8 +165,9 @@ class AbstractEnergyTraining(Training):
 
       for data in self.train_data:
         self.step(data)
+        if self.step_id % self.checkpoint_interval == 0:
+          self.checkpoint()
         self.step_id += 1
-      self.checkpoint()
 
     scores = [
       getattr(self, name)
@@ -161,106 +176,54 @@ class AbstractEnergyTraining(Training):
 
     return scores
 
-def _make_differentiable(data):
-  if isinstance(data, torch.Tensor):
-    data.requires_grad_(True)
-  elif isinstance(data, (list, tuple)):
-    for item in data:
-      _make_differentiable(item)
-  elif isinstance(data, dict):
-    for key in data:
-      _make_differentiable(data[key])
-  else:
-    pass
-
 class SampleBuffer(Dataset):
   def __init__(self, owner, buffer_size=10000, buffer_probability=0.95):
-    self.samples = [
-      owner.prepare()
-      for idx in range(buffer_size)
-    ]
+    self.samples = []
+    self.current_size = 0
     self.owner = owner
     self.current = 0
+    self.buffer_size = buffer_size
     self.buffer_probability = buffer_probability
 
   def update(self, results):
     for result in results:
-      self.samples[self.current] = result
-      self.current = (self.current + 1) % len(self)
+      if len(self.samples) < self.buffer_size:
+        self.samples.append(result)
+      else:
+        self.samples[self.current] = result
+      self.current = (self.current + 1) % self.buffer_size
 
   def __getitem__(self, idx):
-    if random.random() < self.buffer_probability:
-      result = self.samples[(self.current + idx) % len(self)]
+    initialized = len(self.samples) > self.owner.batch_size
+    if random.random() < self.buffer_probability and initialized:
+      result = self.samples[idx % len(self.samples)]
     else:
       result = self.owner.prepare()
     return result
 
   def __len__(self):
-    return len(self.samples)
-
-def clip_grad_by_norm(gradient, max_norm=0.01):
-  norm = torch.norm(gradient)
-  if norm > max_norm:
-    gradient = gradient * (max_norm / norm)
-  return gradient
-
-class Langevin(nn.Module):
-  def __init__(self, rate=100.0, noise=0.005, steps=10, max_norm=0.01):
-    super(Langevin, self).__init__()
-    self.rate = rate
-    self.noise = noise
-    self.steps = steps
-    self.max_norm = max_norm
-
-  def integrate(self, score, data, *args):
-    for idx in range(self.steps):
-      _make_differentiable(data)
-      _make_differentiable(args)
-      energy, *_ = score(data + self.noise * torch.randn_like(data), *args)
-      gradient = ag.grad(energy, data, torch.ones(*energy.shape, device=data.device, requires_grad=True))[0]
-      if self.max_norm:
-        gradient = clip_grad_by_norm(gradient, self.max_norm)
-      data = data - self.rate * gradient
-      data = data.clamp(0, 1)
-      # data = data - self.noise / 2 * gradient + self.noise * torch.randn_like(data)
-    return data
-
-class AnnealedLangevin(nn.Module):
-  def __init__(self, noises, steps=100, epsilon=2e-5):
-    super(AnnealedLangevin, self).__init__()
-    self.noises = noises
-    self.steps = steps
-    self.epsilon = epsilon
-
-  def integrate(self, score, data, *args):
-    print("DASH", data.shape)
-    for noise in self.noises:
-      step_size = self.epsilon * (noise ** 2) / (self.noises[-1] ** 2)
-      noise = torch.ones(data.size(0), data.size(1), 1, 1, 1).to(data.device) * noise
-      for step in range(self.steps):
-        #print(data[0].max(), data[0].min(), data[0].mean())
-        _make_differentiable(data)
-        _make_differentiable(args)
-        gradient = score(data, noise, *args)
-        data = data + 0.5 * step_size * gradient + np.sqrt(step_size) * torch.randn_like(data)
-        data = data.clamp(0, 1)
-    print("GSH", gradient.shape)
-    return data
+    return self.buffer_size
 
 class EnergyTraining(AbstractEnergyTraining):
+  checkpoint_parameters = AbstractEnergyTraining.checkpoint_parameters + [
+    PathState(["buffer", "samples"])
+  ]
   def __init__(self, score, *args, buffer_size=100, buffer_probability=0.9,
-               sample_steps=10, decay=1, integrator=None, **kwargs):
+               sample_steps=10, decay=1, integrator=None, oos_penalty=True, **kwargs):
     self.score = ...
     super(EnergyTraining, self).__init__(
       {"score": score}, *args, **kwargs
     )
+    self.oos_penalty = oos_penalty
     self.decay = decay
     self.integrator = integrator if integrator is not None else Langevin()
     self.sample_steps = sample_steps
     self.buffer = SampleBuffer(
       self, buffer_size=buffer_size, buffer_probability=buffer_probability
     )
-    self.buffer_loader = DataLoader(self.buffer, batch_size=self.batch_size, shuffle=False)
+    self.buffer_loader = lambda x: DataLoader(
+      x, batch_size=self.batch_size, shuffle=True, drop_last=True
+    )
 
   def data_key(self, data):
     result, *args = data
@@ -270,13 +233,15 @@ class EnergyTraining(AbstractEnergyTraining):
     pass
 
   def sample(self):
-    data, *args = to_device(self.data_key(next(iter(self.buffer_loader))), self.device)
+    buffer_iter = iter(self.buffer_loader(self.buffer))
+    data, *args = to_device(self.data_key(next(buffer_iter)), self.device)
     data = self.integrator.integrate(self.score, data, *args).detach()
     detached = data.detach().cpu()
-    update = (to_device((data[idx], *[arg[idx] for arg in args]), "cpu") for idx in range(data.size(0)))
+    update = (to_device((detached[idx], *[arg[idx] for arg in args]), "cpu") for idx in range(data.size(0)))
+    make_differentiable(update, toggle=False)
     self.buffer.update(update)
 
-    return to_device((data, *args), self.device)
+    return to_device((detached, *args), self.device)
 
   def energy_loss(self, real_result, fake_result):
     regularization = (self.decay * (real_result ** 2 + fake_result ** 2)).mean()
@@ -290,12 +255,12 @@ class EnergyTraining(AbstractEnergyTraining):
   def run_energy(self, data):
     fake = self.sample()
 
-    if self.step_id % 10 == 0:
-      detached, *args = self.data_key(fake)
-      self.each_generate(detached, *args)
+    if self.step_id % self.report_interval == 0:
+      detached, *args = self.data_key(to_device(fake, "cpu"))
+      self.each_generate(detached.detach(), *args)
 
-    _make_differentiable(fake)
-    _make_differentiable(data)
+    make_differentiable(fake)
+    make_differentiable(data)
     input_data, *data_args = self.data_key(data)
     input_fake, *fake_args = self.data_key(fake)
     real_result = self.score(input_data, *data_args)
@@ -307,11 +272,10 @@ class SetVAETraining(EnergyTraining):
     return normal_kl_loss(*parameters)
 
   def loss(self, real_result, fake_result, oos_result, real_parameters, fake_parameters, oos_parameters):
-    print(oos_result.shape, real_result.shape)
-    #energy_loss = 0.5 * self.energy_loss(real_result, oos_result)
     energy_loss = self.energy_loss(real_result, fake_result)
-    energy_loss -= (oos_result).mean()
-    kld_loss = (self.divergence_loss(oos_parameters) + self.divergence_loss(fake_parameters) + self.divergence_loss(real_parameters)) / 3
+    if self.oos_penalty:
+      energy_loss -= (oos_result).mean()
+    kld_loss = (self.divergence_loss(fake_parameters) + self.divergence_loss(real_parameters)) / 2
 
     self.current_losses["energy"] = float(energy_loss)
     self.current_losses["kullback leibler"] = float(kld_loss)
@@ -326,7 +290,7 @@ class SetVAETraining(EnergyTraining):
   def bad_prepare(self):
     _, reference, *args = self.prepare()
     _, bad_reference, *_ = self.prepare()
-    noise = torch.rand(bad_reference.size(0), 1, 1, 1)
+    noise = 0.1 * torch.rand(bad_reference.size(0), 1, 1, 1)
     bad_reference = (1 - noise) * bad_reference + noise * torch.rand_like(bad_reference)
     result = (bad_reference, reference, *args)
     return result
@@ -337,31 +301,53 @@ class SetVAETraining(EnergyTraining):
       sample = self.bad_prepare()
       result.append(sample)
     data, *args = to_device(default_collate(result), self.device)
-    data = self.integrator.integrate(self.score, data, *args).detach()
+    #data = self.integrator.integrate(self.score, data, *args).detach()
     detached = data.detach().cpu()
 
     return to_device((data, *args), self.device)
 
   def run_energy(self, data):
     fake = self.sample()
-    oos = self.out_of_sample()
+    if self.oos_penalty:
+      oos = self.out_of_sample()
 
-    if self.step_id % 10 == 0:
+    if self.step_id % self.report_interval == 0:
       detached, *args = self.data_key(fake)
       self.each_generate(detached, *args)
 
-    _make_differentiable(fake)
-    _make_differentiable(data)
+    make_differentiable(fake)
+    make_differentiable(data)
+    if self.oos_penalty:
+      make_differentiable(oos)
     input_data, reference_data, *data_args = self.data_key(data)
     input_fake, reference_fake, *fake_args = self.data_key(fake)
-    input_oos, reference_oos, *oos_args = self.data_key(oos)
+    if self.oos_penalty:
+      input_oos, reference_oos, *oos_args = self.data_key(oos)
     real_result, real_parameters = self.score(input_data, reference_data, *data_args)
     fake_result, fake_parameters = self.score(input_fake, reference_fake, *fake_args)
-    oos_result, oos_parameters = self.score(input_oos, reference_oos, *oos_args)
+    oos_result = None
+    oos_parameters = None
+    if self.oos_penalty:
+      oos_result, oos_parameters = self.score(input_oos, reference_oos, *oos_args)
     return real_result, fake_result, oos_result, real_parameters, fake_parameters, oos_parameters
 
+class CyclicSetVAETraining(SetVAETraining):
+  def loss(self, real_result, fake_result, oos_result, real_parameters, fake_parameters, oos_parameters):
+    energy_loss = self.energy_loss(real_result, fake_result)
+    if self.oos_penalty:
+      energy_loss -= (oos_result).mean()
+    kld_loss = (self.divergence_loss(fake_parameters) + self.divergence_loss(real_parameters)) / 2
+
+    self.current_losses["energy"] = float(energy_loss)
+    self.current_losses["kullback leibler"] = float(kld_loss)
+
+    scale = (self.step_id % 1000) / 1000
+    scale = 1.0 if self.step_id % 2000 >= 1000 else scale
+
+    return energy_loss + scale * kld_loss
+
 class DenoisingScoreTraining(EnergyTraining):
-  def __init__(self, score, data, *args, sigma=1, factor=0.8, n_sigma=10, **kwargs):
+  def __init__(self, score, data, *args, sigma=1, factor=0.60, n_sigma=10, **kwargs):
     self.score = ...
     EnergyTraining.__init__(
       self, score, data, *args,
@@ -386,7 +372,6 @@ class DenoisingScoreTraining(EnergyTraining):
     sigma = sigma.to(self.device)
     sigma = sigma.view(*sigma.shape, *((data.dim() - sigma.dim()) * [1]))
     noise = data + sigma * torch.randn_like(data)
-    # noise = data.clamp(0, 1)
     return noise, sigma
 
   def prepare_sample(self):
@@ -396,13 +381,15 @@ class DenoisingScoreTraining(EnergyTraining):
     return default_collate(results)
 
   def sample(self):
-    integrator = AnnealedLangevin([self.sigma * self.factor ** idx for idx in range(self.n_sigma)], epsilon=2e-4)
-    data, *args = self.data_key(self.prepare_sample())
-    data = integrator.integrate(self.score, data, *args).detach()
-    update = ((data[idx], *[arg[idx] for arg in args]) for idx in range(data.size(0)))
-    self.buffer.update(update)
-
-    return to_device((data, *args), self.device)
+    self.score.eval()
+    with torch.no_grad():
+      integrator = AnnealedLangevin([
+        self.sigma * self.factor ** idx for idx in range(self.n_sigma)
+      ])
+      data, *args = self.data_key(self.prepare_sample())
+      result = integrator.integrate(self.score, data, *args).detach()
+    self.score.train()
+    return to_device((result, data, *args), self.device)
 
   def energy_loss(self, score, data, noisy, sigma):
     raw_loss = 0.5 * sigma ** 2 * ((score + (noisy - data) / sigma ** 2) ** 2)
@@ -411,7 +398,7 @@ class DenoisingScoreTraining(EnergyTraining):
 
   def each_step(self):
     super(DenoisingScoreTraining, self).each_step()
-    if self.step_id % 10 == 0:
+    if self.step_id % self.report_interval == 0 and self.step_id != 0:
       data, *args = self.sample()
       self.each_generate(data, *args)
 
@@ -439,9 +426,7 @@ class SetScoreVAETraining(DenoisingScoreTraining):
     sigma = self.sigma * self.factor ** scale.float()
     sigma = sigma.to(self.device)
     sigma = sigma.view(*sigma.shape, *((data.dim() - sigma.dim()) * [1]))
-    print(data.shape, sigma.shape)
     noise = data + sigma * torch.randn_like(data)
-    # noise = data.clamp(0, 1)
     return noise, sigma
 
   def prepare(self):

@@ -3,6 +3,8 @@ import torch
 import numpy as np
 import time
 
+from torchsupport.data.tensor_provider import TensorProvider
+
 import os
 
 def imread(path, type='float32'):
@@ -132,5 +134,19 @@ def detach(data):
       key : detach(data[key])
       for key in data
     }
-  raise ArgumentError("cannot be detached.")
+  raise ValueError("cannot be detached.")
 
+def make_differentiable(data, toggle=True):
+  if torch.is_tensor(data) and data.is_floating_point():
+    data.requires_grad_(toggle)
+  elif isinstance(data, (list, tuple)):
+    for item in data:
+      make_differentiable(item, toggle=toggle)
+  elif isinstance(data, dict):
+    for key in data:
+      make_differentiable(data[key], toggle=toggle)
+  elif isinstance(data, TensorProvider):
+    for tensor in data.tensors():
+      make_differentiable(tensor, toggle=toggle)
+  else:
+    pass

@@ -48,11 +48,11 @@ class Generator(nn.Module):
       nn.ReLU()
     )
     self.decoder = nn.Sequential(
-      spectral_norm(nn.Linear(z, 128)),
+      nn.Linear(z, 128),
       nn.ReLU(),
-      spectral_norm(nn.Linear(128, 256)),
+      nn.Linear(128, 256),
       nn.ReLU(),
-      spectral_norm(nn.Linear(256, 28 * 28)),
+      nn.Linear(256, 28 * 28),
       nn.Sigmoid()
     )
 
@@ -118,7 +118,7 @@ if __name__ == "__main__":
   training = MNISTConditionerTraining(
     generator, discriminator, data,
     network_name="mnist-nc",
-    device="cuda:0",
+    device="cpu",
     batch_size=64,
     max_epochs=1000
   )

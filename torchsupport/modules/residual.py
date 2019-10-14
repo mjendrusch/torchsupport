@@ -34,6 +34,80 @@ class IntermediateExtractor(nn.Module):
     self.outputs = []
     return outputs
 
+class FixUpBlockNd(nn.Module):
+  def __init__(self, in_size, out_size, N=1, index=0,
+               activation=func.relu, eps=0,
+               normalization=None, **kwargs):
+    super(FixUpBlockNd, self).__init__()
+
+    conv = getattr(nn, f"Conv{N}d")
+    
+    self.normalization = normalization or (lambda x: x)
+    self.convs = nn.ModuleList([
+      normalization(conv(in_size, out_size, 3, bias=False, **kwargs)),
+      normalization(conv(out_size, out_size, 3, bias=False, **kwargs)),
+    ])
+    self.project = (lambda x: x) if in_size == out_size else normalization(conv(in_size, out_size, 1, bias=False))
+
+    self.scale = nn.Parameter(torch.tensor(1.0, dtype=torch.float))
+    self.biases = nn.ParameterList([
+      nn.Parameter(torch.tensor(0.0, dtype=torch.float))
+      for _ in range(4)
+    ])
+
+    with torch.no_grad():
+      self.convs[0].weight.data = self.convs[0].weight.data * (index + 1) ** (-0.5)
+      self.convs[1].weight.data.normal_()
+      self.convs[1].weight.data = self.convs[1].weight.data * eps
+    self.activation = activation
+
+  def forward(self, inputs):
+    out = inputs + self.biases[0]
+    out = self.convs[0](out) + self.biases[1]
+    out = self.activation(out) + self.biases[2]
+    out = self.scale * self.convs[1](out) + self.biases[3]
+    return out + self.project(inputs)
+
+class FixUpBlock1d(FixUpBlockNd):
+  def __init__(self, in_size, out_size, index=0, normalization=None,
+               activation=func.relu, eps=0.0, **kwargs):
+    super().__init__(
+      in_size, out_size, N=1, index=index,
+      activation=activation, eps=eps,
+      normalization=normalization, **kwargs
+    )
+
+class FixUpBlock2d(FixUpBlockNd):
+  def __init__(self, in_size, out_size, index=0, normalization=None,
+               activation=func.relu, eps=0.0, **kwargs):
+    super().__init__(
+      in_size, out_size, N=2, index=index,
+      activation=activation, eps=eps,
+      normalization=normalization, **kwargs
+    )
+
+class FixUpBlock3d(FixUpBlockNd):
+  def __init__(self, in_size, out_size, index=0, normalization=None,
+               activation=func.relu, eps=0.0, **kwargs):
+    super().__init__(
+      in_size, out_size, N=3, index=index,
+      activation=activation, eps=eps,
+      normalization=normalization, **kwargs
+    )
+
+class FixUpFactory:
+  def __init__(self, N=1, eps=0.0, normalization=None):
+    self.fixup = getattr(sys.modules[__name__], f"FixUpBlock{N}d")
+    self.normalization = normalization or (lambda x: x)
+    self.index = 0
+    self.eps = eps
+
+  def __call__(self, *args, **kwargs):
+    result = self.fixup(*args, eps=self.eps, index=self.index,
+                        normalization=self.normalization, **kwargs)
+    self.index += 1
+    return result
+
 class ResNextBlockNd(nn.Module):
   def __init__(self, in_size, out_size, hidden_size, N=1,
                cardinality=32, activation=func.elu, **kwargs):
@@ -100,26 +174,26 @@ class ResNetBlockNd(ResNextBlockNd):
   def __init__(self, in_size, out_size, hidden_size, N=1,
                activation=func.elu, **kwargs):
     super(ResNetBlockNd, self).__init__(
-      self, in_size, out_size, hidden_size, N=N, activation=activation, **kwargs
+      self, in_size, out_size, hidden_size, cardinality=1, N=N, activation=activation, **kwargs
     )
 
 class ResNetBlock1d(ResNetBlockNd):
   def __init__(self, in_size, out_size, hidden_size,
-               cardinality=32, activation=func.elu, **kwargs):
+               activation=func.elu, **kwargs):
     super(ResNetBlock1d, self).__init__(
-      in_size, out_size, hidden_size, cardinality=cardinality, N=1, activation=activation, **kwargs
+      in_size, out_size, hidden_size, N=1, activation=activation, **kwargs
     )
 
 class ResNetBlock2d(ResNetBlockNd):
   def __init__(self, in_size, out_size, hidden_size,
                cardinality=32, activation=func.elu, **kwargs):
     super(ResNetBlock2d, self).__init__(
-      in_size, out_size, hidden_size, cardinality=cardinality, N=2, activation=activation, **kwargs
+      in_size, out_size, hidden_size, N=2, activation=activation, **kwargs
     )
 
 class ResNetBlock3d(ResNetBlockNd):
   def __init__(self, in_size, out_size, hidden_size,
                cardinality=32, activation=func.elu, **kwargs):
     super(ResNetBlock3d, self).__init__(
-      in_size, out_size, hidden_size, cardinality=cardinality, N=3, activation=activation, **kwargs
+      in_size, out_size, hidden_size, N=3, activation=activation, **kwargs
     )
