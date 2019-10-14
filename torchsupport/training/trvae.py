@@ -49,3 +49,16 @@ class TransformingVAETraining(VAETraining):
   def run_networks(self, target, condition, domain):
     res = super(TransformingVAETraining, self).run_networks(target, condition, domain)
     return (*res, domain)
+
+
+def _normalize(image):
+  return (image - image.min()) / (image.max() - image.min())
+
+
+class ImageTrVAETraining(TransformingVAETraining):
+  def run_networks(self, data, *args):
+    mean, logvar, reconstruction, data, domain = super().run_networks(data, *args)
+
+    self.writer.add_image("target", _normalize(data[0]), self.step_id)
+    self.writer.add_image("reconstruction", _normalize(reconstruction[0][0].sigmoid()),                              self.step_id)
+    return mean, logvar, reconstruction, data, domain
