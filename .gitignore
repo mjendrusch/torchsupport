@@ -13,3 +13,4 @@ XDG_CACHE_HOME
 __pycache__
 *.tfevents.*
 examples/MNIST
+
