@@ -239,16 +239,16 @@ class ConstantStructure(AbstractStructure):
   def chunk(self, targets):
     connections = []
     sizes = chunk_sizes(self.lengths, len(targets))
+    step = len(self.lengths) // len(targets)
     offset = 0
     for idx, size in enumerate(sizes):
       the_connections = self.connections[offset:offset + size] - offset
       the_connections = the_connections.to(targets[idx])
-      connections.append(the_connections)
+      result = ConstantStructure(self.source, self.target, the_connections)
+      result.lengths = self.lengths[step * idx:step * (idx + 1)]
+      connections.append(result)
       offset += size
-    return [
-      ConstantStructure(self.source, self.target, the_chunk)
-      for the_chunk in connections
-    ]
+    return connections
 
   def update(self, data):
     (self.source, self.target, self.connections, self.lengths) = data
