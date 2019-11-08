@@ -186,11 +186,13 @@ class AbstractVAETraining(Training):
         self.data, batch_size=self.batch_size, num_workers=8,
         shuffle=True
       )
+      valid_iter = None
       if self.valid is not None:
         self.valid_data = DataLoader(
           self.valid, batch_size=self.batch_size, num_workers=8,
           shuffle=True
         )
+        valid_iter = iter(self.valid_data)
       for data in self.train_data:
         self.step(data)
         if self.step_id % self.checkpoint_interval == 0:
