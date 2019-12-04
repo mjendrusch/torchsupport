@@ -66,10 +66,11 @@ class AdaptiveLayerNorm(nn.Module):
     self.bias = nn.Linear(ada_size, in_size)
   
   def forward(self, inputs, style):
+    expand = [1] * (inputs.dim() - 2)
     mean = inputs.mean(dim=1, keepdim=True)
     std = inputs.std(dim=1, keepdim=True)
-    scale = self.scale(style).view(style.size(0), -1, 1, 1)
+    scale = self.scale(style).view(style.size(0), -1, *expand)
     scale = scale - scale.mean(dim=1, keepdim=True) + 1
-    bias = self.bias(style).view(style.size(0), -1, 1, 1)
+    bias = self.bias(style).view(style.size(0), -1, *expand)
     bias = bias - bias.mean(dim=1, keepdim=True)
     return scale * (inputs - mean) / (std + 1e-6) + bias
