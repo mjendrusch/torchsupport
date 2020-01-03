@@ -16,6 +16,8 @@ def clip_grad_by_norm(gradient, max_norm=0.01):
   return gradient
 
 class Langevin(nn.Module):
+  target = None
+  step = 0
   def __init__(self, rate=100.0, noise=0.005, steps=10, max_norm=0.01, clamp=(0, 1)):
     super(Langevin, self).__init__()
     self.rate = rate
@@ -28,6 +30,25 @@ class Langevin(nn.Module):
     for idx in range(self.steps):
       make_differentiable(data)
       make_differentiable(args)
+      energy = score(data, *args)
+      if isinstance(energy, (list, tuple)):
+        energy, *_ = energy
+      gradient = ag.grad(energy, data, torch.ones_like(energy))[0]
+      if self.max_norm:
+        gradient = clip_grad_by_norm(gradient, self.max_norm)
+      data = data - self.rate * gradient + self.noise * torch.randn_like(data)
+      if self.clamp is not None:
+        data = data.clamp(*self.clamp)
+    return data
+
+class AdaptiveLangevin(Langevin):
+  def integrate(self, score, data, *args):
+    done = False
+    count = 0
+    step_count = self.steps if self.step > 0 else 10 * self.steps
+    while not done:
+      make_differentiable(data)
+      make_differentiable(args)
       energy = score(data + self.noise * torch.randn_like(data), *args)
       if isinstance(energy, (list, tuple)):
         energy, *_ = energy
@@ -37,6 +58,14 @@ class Langevin(nn.Module):
       data = data - self.rate * gradient
       if self.clamp is not None:
         data = data.clamp(*self.clamp)
+      data = data.detach()
+      done = count >= step_count
+      if self.target is not None:
+        done = done and bool((energy.mean(dim=0) <= self.target).all())
+      count += 1
+      if (count + 1) % 500 == 0:
+        data.random_()
+    self.step += 1
     return data
 
 class TrueLangevin(Langevin):
