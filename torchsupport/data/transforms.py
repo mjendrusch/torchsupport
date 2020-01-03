@@ -692,6 +692,25 @@ class Illuminate(object):
         x = x * self.illumination
         return x
 
+class CropRotate(object):
+    def __init__(self, size):
+        self.size = size
+        self.rot = Rotation(180)
+
+    def __call__(self, x):
+        result = self.rot(x)
+        size = result.shape[-1]
+        offset = (size - self.size) // 2
+        return result[:, offset:offset + self.size, offset:offset + self.size]
+
+class Clamp(object):
+    def __init__(self, low, high):
+        self.low = low
+        self.high = high
+
+    def __call__(self, x):
+        return torch.clamp(x, self.low, self.high)
+
 class PickChannels(object):
 
     def __init__(self, channels):
