@@ -372,9 +372,12 @@ class ClassifierGANTraining():
     self.discriminator_names.append("classifier")
 
   def classifier_loss(self, result, label):
-    loss_val = 0.0
-    for res, lbl in zip(result, label[0]):
-      loss_val += func.cross_entropy(res, lbl.argmax(dim=1).view(-1))
+    if isinstance(result, (list, tuple)):
+      loss_val = 0.0
+      for res, lbl in zip(result, label[0]):
+        loss_val += func.cross_entropy(res, lbl.argmax(dim=1).view(-1))
+    else:
+      loss_val = func.cross_entropy(result, label.argmax(dim=1).view(-1))
 
     return loss_val
 
@@ -404,7 +407,7 @@ class CollapseGANTraining():
 
   def result_distance(self, x, y):
     raise NotImplementedError("Abstract.")
-  
+
   def unpack_result(self, x):
     return x[1]
 
