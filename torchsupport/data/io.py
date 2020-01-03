@@ -120,6 +120,7 @@ def to_device(data, device):
     }
   if isinstance(data, DeviceMovable):
     return data.move_to(device)
+  return data
 
 def detach(data):
   if isinstance(data, torch.Tensor):
