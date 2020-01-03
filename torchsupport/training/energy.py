@@ -208,7 +208,7 @@ class EnergyTraining(AbstractEnergyTraining):
   checkpoint_parameters = AbstractEnergyTraining.checkpoint_parameters + [
     PathState(["buffer", "samples"])
   ]
-  def __init__(self, score, *args, buffer_size=100, buffer_probability=0.9,
+  def __init__(self, score, *args, buffer_size=10000, buffer_probability=0.95,
                sample_steps=10, decay=1, integrator=None, oos_penalty=True, **kwargs):
     self.score = ...
     super(EnergyTraining, self).__init__(
