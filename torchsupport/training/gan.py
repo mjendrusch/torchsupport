@@ -382,7 +382,7 @@ class ClassifierGANTraining():
     return loss_val
 
   def generator_loss(self, data, generated, sample):
-    loss_val = super().generator_loss(data, generated)
+    loss_val = super().generator_loss(data, generated, sample)
     gen, *label = generated
     dat, *dat_label = data
     classifier_fake = self.classifier_loss(self.classifier(gen), label)
