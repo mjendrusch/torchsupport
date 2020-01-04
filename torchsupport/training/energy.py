@@ -80,7 +80,7 @@ class AbstractEnergyTraining(Training):
 
     if optimizer_kwargs is None:
       optimizer_kwargs = {"lr" : 5e-4}
-    
+
     self.optimizer = optimizer(
       netlist,
       **optimizer_kwargs
@@ -185,6 +185,9 @@ class SampleBuffer(Dataset):
     self.buffer_size = buffer_size
     self.buffer_probability = buffer_probability
 
+  def reset(self):
+    self.samples = []
+
   def update(self, results):
     for result in results:
       if len(self.samples) < self.buffer_size:
@@ -209,11 +212,13 @@ class EnergyTraining(AbstractEnergyTraining):
     PathState(["buffer", "samples"])
   ]
   def __init__(self, score, *args, buffer_size=10000, buffer_probability=0.95,
-               sample_steps=10, decay=1, integrator=None, oos_penalty=True, **kwargs):
+               sample_steps=10, decay=1, reset_threshold=1000, integrator=None,
+               oos_penalty=True, **kwargs):
     self.score = ...
     super(EnergyTraining, self).__init__(
       {"score": score}, *args, **kwargs
     )
+    self.reset_threshold = reset_threshold
     self.oos_penalty = oos_penalty
     self.decay = decay
     self.integrator = integrator if integrator is not None else Langevin()
@@ -228,6 +233,15 @@ class EnergyTraining(AbstractEnergyTraining):
   def data_key(self, data):
     result, *args = data
     return (result, *args)
+
+  def each_step(self):
+    if abs(self.current_losses["ebm"]) > self.reset_threshold:
+      self.reset()
+    super().each_step()
+
+  def reset(self):
+    self.load()
+    self.buffer.reset()
 
   def each_generate(self, data, *args):
     pass
