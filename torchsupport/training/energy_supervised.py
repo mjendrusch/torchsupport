@@ -23,7 +23,7 @@ class EnergySupervisedTraining(EnergyTraining):
     buffer_iter = iter(self.buffer_loader(self.buffer))
     data, *args = to_device(self.data_key(next(buffer_iter)), self.device)
     data = self.integrator.integrate(self.create_score(), data, *args).detach()
-    detached = data.detach().cpu()
+    detached = to_device(data.detach(), "cpu")
     update = (to_device((detached[idx], *[arg[idx] for arg in args]), "cpu") for idx in range(data.size(0)))
     make_differentiable(update, toggle=False)
     self.buffer.update(update)
