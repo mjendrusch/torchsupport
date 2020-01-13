@@ -13,4 +13,8 @@ XDG_CACHE_HOME
 __pycache__
 *.tfevents.*
 examples/MNIST
-
+examples/raw
+examples/processed
+examples/flowers
+examples/cifar-10-batches-py
+*.tar.gz
