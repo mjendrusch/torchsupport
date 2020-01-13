@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as func
+from torch.nn.utils.spectral_norm import spectral_norm
 
 class PixelNorm(nn.Module):
   def __init__(self, eps=1e-16, p=2):
@@ -64,7 +65,7 @@ class AdaptiveLayerNorm(nn.Module):
     super(AdaptiveLayerNorm, self).__init__()
     self.scale = nn.Linear(ada_size, in_size)
     self.bias = nn.Linear(ada_size, in_size)
-  
+
   def forward(self, inputs, style):
     expand = [1] * (inputs.dim() - 2)
     mean = inputs.mean(dim=1, keepdim=True)
@@ -74,6 +75,42 @@ class AdaptiveLayerNorm(nn.Module):
     bias = self.bias(style).view(style.size(0), -1, *expand)
     bias = bias - bias.mean(dim=1, keepdim=True)
     return scale * (inputs - mean) / (std + 1e-6) + bias
+
+class NotNorm(nn.Module):
+  def __init__(self, in_size):
+    super().__init__()
+    self.in_size = in_size
+
+  def forward(self, inputs):
+    extension = [1] * (inputs.dim() - 2)
+
+    out = inputs.view(inputs.size(0), inputs.size(1), -1)
+    mean = out.mean(dim=-1, keepdim=True)
+    std = out.std(dim=-1, keepdim=True)
+    normed = (out - mean.detach()) / std.detach()
+    out = std * normed + mean
+    return out.view(inputs.shape)
+
+class AdaNorm(nn.Module):
+  def __init__(self, in_size, normalization=None):
+    super().__init__()
+    normalization = normalization or spectral_norm
+    self.in_size = in_size
+    self.scale = normalization(nn.Linear(2 * in_size, in_size))
+    self.bias = normalization(nn.Linear(2 * in_size, in_size))
+
+  def forward(self, inputs):
+    out = inputs.view(inputs.size(0), inputs.size(1), -1)
+    mean = out.mean(dim=-1)
+    std = out.std(dim=-1)
+    normed = (out - mean.unsqueeze(-1).detach()) / std.unsqueeze(-1).detach()
+
+    features = torch.cat((mean, std), dim=1)
+    mean = self.bias(features).unsqueeze(-1)
+    std = self.scale(features).unsqueeze(-1)
+
+    out = std * normed + mean
+    return out.view(inputs.shape)
 
 class FilterResponseNorm(nn.Module):
   def __init__(self, in_size, eps=1e-16):
