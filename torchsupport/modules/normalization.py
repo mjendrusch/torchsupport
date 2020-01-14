@@ -112,6 +112,52 @@ class AdaNorm(nn.Module):
     out = std * normed + mean
     return out.view(inputs.shape)
 
+class AdaDataNorm(nn.Module):
+  def __init__(self, in_size, normalization=None):
+    super().__init__()
+    normalization = normalization or spectral_norm
+    self.in_size = in_size
+    self.mean = nn.Parameter(torch.zeros(1, in_size, 1))
+    self.std = nn.Parameter(torch.zeros(1, in_size, 1))
+    self.scale = normalization(nn.Linear(2 * in_size, in_size))
+    self.bias = normalization(nn.Linear(2 * in_size, in_size))
+
+  def forward(self, inputs):
+    out = inputs.view(inputs.size(0), inputs.size(1), -1)
+    mean = out.mean(dim=-1)
+    std = out.std(dim=-1)
+    normed = (out - self.mean) / self.std
+
+    features = torch.cat((mean, std), dim=1)
+    mean = self.bias(features).unsqueeze(-1)
+    std = self.scale(features).unsqueeze(-1)
+
+    out = std * normed + mean
+    return out.view(inputs.shape)
+
+class BotchNorm(nn.Module):
+  def __init__(self, in_size, normalization=None):
+    super().__init__()
+    normalization = normalization or spectral_norm
+    self.bn = nn.BatchNorm2d(in_size, affine=False)
+    self.scale = normalization(nn.Linear(2 * in_size, in_size))
+    self.bias = normalization(nn.Linear(2 * in_size, in_size))
+
+  def forward(self, inputs):
+    out = inputs.view(inputs.size(0), inputs.size(1), -1)
+    mean = out.mean(dim=-1)
+    std = out.std(dim=-1)
+
+    out = self.bn(inputs)
+    out = out.view(out.size(0), out.size(1), -1)
+
+    features = torch.cat((mean, std), dim=1)
+    mean = self.bias(features).unsqueeze(-1)
+    std = self.scale(features).unsqueeze(-1)
+
+    out = std * out + mean
+    return out.view(inputs.shape)
+
 class FilterResponseNorm(nn.Module):
   def __init__(self, in_size, eps=1e-16):
     super().__init__()
