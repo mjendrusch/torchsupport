@@ -246,14 +246,21 @@ class EnergyTraining(AbstractEnergyTraining):
   def each_generate(self, data, *args):
     pass
 
+  def decompose_batch(self, data, *args):
+    return (
+      to_device((data[idx], *[arg[idx] for arg in args]), "cpu")
+      for idx in range(len(data))
+    )
+
   def sample(self):
     buffer_iter = iter(self.buffer_loader(self.buffer))
     data, *args = to_device(self.data_key(next(buffer_iter)), self.device)
-    #self.score.eval()
+    self.score.eval()
     data = self.integrator.integrate(self.score, data, *args).detach()
-    #self.score.train()
-    detached = data.detach().cpu()
-    update = (to_device((detached[idx], *[arg[idx] for arg in args]), "cpu") for idx in range(data.size(0)))
+    self.score.train()
+    detached = to_device(data.detach(), "cpu")
+    make_differentiable(args, toggle=False)
+    update = self.decompose_batch(detached, *args)
     make_differentiable(update, toggle=False)
     self.buffer.update(update)
 
@@ -323,7 +330,7 @@ class SetVAETraining(EnergyTraining):
       result.append(sample)
     data, *args = to_device(default_collate(result), self.device)
     #data = self.integrator.integrate(self.score, data, *args).detach()
-    detached = data.detach().cpu()
+    detached = to_device(data.detach(), "cpu")
 
     return to_device((data, *args), self.device)
 
@@ -407,7 +414,8 @@ class DenoisingScoreTraining(EnergyTraining):
       integrator = AnnealedLangevin([
         self.sigma * self.factor ** idx for idx in range(self.n_sigma)
       ])
-      data, *args = self.data_key(self.prepare_sample())
+      prep = to_device(self.prepare_sample(), self.device)
+      data, *args = self.data_key(prep)
       result = integrator.integrate(self.score, data, *args).detach()
     self.score.train()
     return to_device((result, data, *args), self.device)
@@ -415,6 +423,7 @@ class DenoisingScoreTraining(EnergyTraining):
   def energy_loss(self, score, data, noisy, sigma):
     raw_loss = 0.5 * sigma ** 2 * ((score + (noisy - data) / sigma ** 2) ** 2)
     raw_loss = raw_loss.sum(dim=1, keepdim=True)
+    self.current_losses["ebm"] = float(raw_loss.mean())
     return raw_loss.mean()
 
   def each_step(self):

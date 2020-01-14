@@ -135,6 +135,17 @@ class AdaDataNorm(nn.Module):
     out = std * normed + mean
     return out.view(inputs.shape)
 
+class ScaleNorm(nn.Module):
+  def __init__(self, *args):
+    super().__init__()
+    self.scale = nn.Parameter(torch.tensor(1.0, dtype=torch.float))
+
+  def forward(self, inputs):
+    out = inputs.view(inputs.size(0), -1)
+    norm = out.norm(dim=1, keepdim=True)
+    out = self.scale * out / (norm + 1e-16)
+    return out.view(*inputs.shape)
+
 class BotchNorm(nn.Module):
   def __init__(self, in_size, normalization=None):
     super().__init__()

@@ -37,7 +37,7 @@ class PackedTensor(DeviceMovable, Collatable, Chunkable, TensorProvider):
   def move_to(self, device):
     the_copy = copy(self)
     the_copy.tensor = self.tensor.to(device)
-    return self
+    return the_copy
 
   def tensors(self):
     return [self.tensor]
@@ -53,3 +53,35 @@ class PackedTensor(DeviceMovable, Collatable, Chunkable, TensorProvider):
       the_tensor = the_tensor if self.box else the_tensor.tensor
       result.append(the_tensor)
     return result
+
+  def detach(self):
+    return PackedTensor(
+      self.tensor.detach(),
+      lengths=list(self.lengths),
+      split=self.split,
+      box=self.box
+    )
+
+  def clone(self):
+    return PackedTensor(
+      self.tensor.clone(),
+      lengths=list(self.lengths),
+      split=self.split,
+      box=self.box
+    )
+
+  def __len__(self):
+    return len(self.lengths)
+
+  def __getitem__(self, idx):
+    before = sum(self.lengths[:idx])
+    window = slice(before, before + self.lengths[idx])
+    tensor = self.tensor[window]
+    lengths = [self.lengths[idx]]
+
+    return PackedTensor(
+      tensor,
+      lengths=lengths,
+      split=self.split,
+      box=self.box
+    )

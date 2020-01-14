@@ -266,8 +266,7 @@ class ConstantStructure(AbstractStructure):
     lengths = []
     offset = 0
     for structure in structures:
-      current_connections = structure.connections
-      current_connections += offset
+      current_connections = structure.connections + offset
       connections.append(current_connections)
       lengths += structure.lengths
       offset += current_connections.size(0)
@@ -295,7 +294,6 @@ class ConstantStructure(AbstractStructure):
       torch.cat(connections, dim=0)
     )
     result.lengths = lengths
-    print("coll lengths", lengths, len(structures), list(map(lambda x: x.lengths, structures)))
     return result
 
   def message(self, source, target):
@@ -488,6 +486,9 @@ class SubgraphStructure(AbstractStructure):
       result.append(the_copy)
       offset += the_copy.indices.size(0)
     return result
+
+  def move_to(self, device):
+    return SubgraphStructure(self.indices.to(device))
 
   def message_iterative(self, source, target):
     for subgraph in self.unique:

@@ -7,6 +7,7 @@ from torch import nn
 from torch.nn import functional as func
 import torch.autograd as ag
 
+from torchsupport.modules.gradient import hard_one_hot
 from torchsupport.data.io import make_differentiable
 
 def clip_grad_by_norm(gradient, max_norm=0.01):
@@ -86,7 +87,6 @@ class TrueLangevin(Langevin):
       data = data - self.noise ** 2 / 2 * gradient + noise
       if self.clamp is not None:
         data = data.clamp(*self.clamp)
-    print(gradient.view(energy.size(0), -1).mean(dim=1)[:5])
     return data
 
 class DiscreteLangevin(Langevin):
@@ -106,6 +106,122 @@ class DiscreteLangevin(Langevin):
       if self.max_norm:
         gradient = clip_grad_by_norm(gradient, self.max_norm)
       data = self.update(data - self.rate * gradient)
+    return data
+
+class PackedDiscreteLangevin(Langevin):
+  def integrate(self, score, data, *args):
+    data = data.clone()
+    current_energy, *_ = score(data, *args)
+    for idx in range(self.steps):
+      make_differentiable(data)
+      make_differentiable(args)
+
+      energy = score(data, *args)
+      if isinstance(energy, (list, tuple)):
+        energy, *_ = energy
+
+      gradient = ag.grad(energy, data.tensor, torch.ones_like(energy))[0]
+      if self.max_norm:
+        gradient = clip_grad_by_norm(gradient, self.max_norm)
+
+      # attempt at gradient based local update of discrete variables:
+      grad_prob = (-500 * gradient).softmax(dim=1)
+      new_prob = self.noise + self.rate * grad_prob + (1 - self.noise - self.rate) * data.tensor
+      new_val = hard_one_hot(new_prob.log())
+      data.tensor = new_val
+
+      data = data.detach()
+
+    return data
+
+class PackedDiscreteGPLangevin(Langevin):
+  def __init__(self, scale=50, rate=0.5, noise=0.1, steps=10):
+    super().__init__(rate=rate, noise=noise, steps=steps, max_norm=None, clamp=None)
+    self.scale = scale
+
+  def integrate(self, score, data, *args):
+    data = data.clone()
+    result = data.clone()
+    current_energy = score(data, *args)
+    for idx in range(self.steps):
+      make_differentiable(data)
+      make_differentiable(args)
+
+      energy, deltas = score(data, *args, return_deltas=True)
+
+      # attempt at gradient based local update of discrete variables:
+      grad_prob = torch.zeros_like(deltas)
+      grad_prob[torch.arange(deltas.size(0)), deltas.argmax(dim=1)] = 1
+      if self.scale is not None:
+        grad_prob = (self.scale * deltas).softmax(dim=1)
+      new_prob = self.noise + self.rate * grad_prob + (1 - self.noise - self.rate) * data.tensor
+      new_val = hard_one_hot(new_prob.log())
+      data.tensor = new_val
+
+      data = data.detach()
+
+    return data
+
+class PackedHardDiscreteLangevin(PackedDiscreteGPLangevin):
+  def integrate(self, score, data, *args):
+    data = data.clone()
+    result = data.clone()
+    current_energy = score(data, *args)
+    for idx in range(self.steps):
+      energy, deltas = score(data, *args, return_deltas=True)
+
+      # attempt at gradient based local update of discrete variables:
+      grad_prob = torch.zeros_like(deltas)
+      grad_prob[torch.arange(deltas.size(0)), deltas.argmax(dim=1)] = 1
+      if self.scale is not None:
+        grad_prob = (self.scale * deltas).softmax(dim=1)
+      access = torch.rand(deltas.size(0), dtype=torch.float, device=deltas.device)
+      access = access < self.rate
+      data.tensor[access] = hard_one_hot(grad_prob[access].log())
+
+      data = data.detach()
+
+    return data
+
+class IndependentSampler(PackedDiscreteGPLangevin):
+  def pick_positions(self, neighbours, counts):
+    locations = torch.zeros(neighbours.size(0), dtype=torch.uint8)
+    starts = []
+    independents = []
+    total = 0
+    for count in counts:
+      count = int(count)
+      start = random.randrange(0, count)
+      for idx in range(count):
+        index = total + (start + idx) % count
+        if locations[index]:
+          continue
+        locations[neighbours[index]] = 1
+        independents.append(index)
+
+      total += count
+
+    return torch.tensor(sorted(independents))
+
+  def integrate(self, score, data, *args):
+    data = data.clone()
+    result = data.clone()
+    current_energy = score(data, *args)
+    access_cache = []
+    for idx in range(self.steps):
+      energy, deltas = score(data, *args, return_deltas=True)
+
+      # attempt at gradient based local update of discrete variables:
+      grad_prob = torch.zeros_like(deltas)
+      grad_prob[torch.arange(deltas.size(0)), deltas.argmax(dim=1)] = 1
+      if self.scale is not None:
+        grad_prob = (self.scale * deltas).softmax(dim=1)
+      
+      access = self.pick_positions(args[-2].connections, args[-1].counts)
+      data.tensor[access] = hard_one_hot(grad_prob[access].log())
+
+      data = data.detach()
+
     return data
 
 class MCMC():
@@ -131,7 +247,7 @@ class MCMC():
       result[torch.arange(0, result.size(0)), :, position] = 0
       result[torch.arange(0, result.size(0)), change, position] = 1
     return result
-  
+
   def integrate(self, score, data, *args):
     result = data.clone()
     current_energy = score(data, *args)
@@ -148,6 +264,52 @@ class MCMC():
     else:
       result = data
     return result
+
+class PackedMCMC(MCMC):
+  def mutate(self, score, data, *args):
+    result = data.clone()
+    count = 0
+    for length in data.lengths:
+      n_mutations = random.randrange(0, length)
+      data_slice = slice(count, count + length)
+
+      position = torch.randint(0, length, (n_mutations,))
+      change = torch.randint(0, 20, (n_mutations,))
+
+      subview = result.tensor[data_slice]
+      subview[position, :] = 0
+      subview[position, change] = 1
+
+      count += length
+    return result
+
+  def metropolis(self, current, proposal):
+    log_alpha = - (proposal - current) / self.temperature
+    alpha = log_alpha.exp().view(-1)
+    uniform = torch.rand_like(alpha)
+    accept = uniform < alpha
+    return accept
+
+  def integrate(self, score, data, *args):
+    with torch.no_grad():
+      membership = args[-1]
+      result = data.clone()
+      current_energy = score(data, *args)
+      first_energy = current_energy.clone()
+      for idx in range(self.steps):
+        proposal = self.mutate(score, data, *args)
+        energy = score(proposal, *args)
+        accepted = self.metropolis(current_energy, energy)
+        current_energy[accepted] = energy[accepted]
+        accepted = torch.repeat_interleave(accepted, membership.counts)
+        data.tensor[accepted] = proposal.tensor[accepted]
+      if self.constrain:
+        accepted = (current_energy < first_energy).view(-1)
+        accepted = torch.repeat_interleave(accepted, membership.counts)
+        result.tensor[accepted] = data.tensor[accepted]
+      else:
+        result = data
+      return result
 
 class GeneticAlgorithmMCMC(MCMC):
   def crossover(self, score, data, *args):
@@ -172,12 +334,12 @@ class GradientProposalMCMC(MCMC):
     make_differentiable(args)
     energy = score(result, *args)
     gradient = ag.grad(energy, result, torch.ones(*energy.shape, device=result.device))[0]
-    
+
     # position choice
     position_gradient = -gradient.sum(dim=1)
     position_distribution = torch.distributions.Categorical(logits=position_gradient)
     position_proposal = position_distribution.sample()
-    
+
     # change choice
     change_gradient = -gradient[
       torch.arange(0, gradient.size(0)),
