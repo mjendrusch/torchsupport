@@ -249,9 +249,9 @@ class EnergyTraining(AbstractEnergyTraining):
   def sample(self):
     buffer_iter = iter(self.buffer_loader(self.buffer))
     data, *args = to_device(self.data_key(next(buffer_iter)), self.device)
-    self.score.eval()
+    #self.score.eval()
     data = self.integrator.integrate(self.score, data, *args).detach()
-    self.score.train()
+    #self.score.train()
     detached = data.detach().cpu()
     update = (to_device((detached[idx], *[arg[idx] for arg in args]), "cpu") for idx in range(data.size(0)))
     make_differentiable(update, toggle=False)
@@ -269,6 +269,12 @@ class EnergyTraining(AbstractEnergyTraining):
     return regularization + ebm
 
   def run_energy(self, data):
+    make_differentiable(data)
+    input_data, *data_args = self.data_key(data)
+    real_result = self.score(input_data, *data_args)
+
+    # sample after first pass over real data, to catch
+    # possible batch-norm shenanigans without blowing up.
     fake = self.sample()
 
     if self.step_id % self.report_interval == 0:
@@ -276,11 +282,10 @@ class EnergyTraining(AbstractEnergyTraining):
       self.each_generate(detached.detach(), *args)
 
     make_differentiable(fake)
-    make_differentiable(data)
-    input_data, *data_args = self.data_key(data)
     input_fake, *fake_args = self.data_key(fake)
-    real_result = self.score(input_data, *data_args)
+    #self.score.eval()
     fake_result = self.score(input_fake, *fake_args)
+    #self.score.train()
     return real_result, fake_result
 
 class SetVAETraining(EnergyTraining):

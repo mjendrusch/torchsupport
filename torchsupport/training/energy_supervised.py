@@ -22,7 +22,9 @@ class EnergySupervisedTraining(EnergyTraining):
   def sample(self):
     buffer_iter = iter(self.buffer_loader(self.buffer))
     data, *args = to_device(self.data_key(next(buffer_iter)), self.device)
+    self.score.eval()
     data = self.integrator.integrate(self.create_score(), data, *args).detach()
+    self.score.train()
     detached = data.detach().cpu()
     update = (to_device((detached[idx], *[arg[idx] for arg in args]), "cpu") for idx in range(data.size(0)))
     make_differentiable(update, toggle=False)
@@ -54,6 +56,13 @@ class EnergySupervisedTraining(EnergyTraining):
 class EnergyConditionalTraining(EnergySupervisedTraining):
   def logit_energy(self, logits, labels):
     return logits[torch.arange(logits.size(0)), labels]
+
+  def create_score(self):
+    def _score(data, *args):
+      labels = args[0]
+      logits = self.score(data, *args)
+      return self.logit_energy(logits, labels)
+    return _score
 
   def classifier_loss(self, logits, labels):
     return func.cross_entropy(-logits, labels)

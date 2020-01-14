@@ -285,8 +285,7 @@ class ConstantStructure(AbstractStructure):
     lengths = []
     offset = 0
     for structure in structures:
-      current_connections = structure.connections
-      current_connections += offset
+      current_connections = structure.connections + offset
       connections.append(current_connections)
       lengths += structure.lengths
       offset += current_connections.size(0)
