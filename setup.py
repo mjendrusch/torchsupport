@@ -23,5 +23,6 @@ setuptools.setup(
                      'torch',
                      'tensorboardX',
                      'networkx',
+                     'scikit-image',
                      ]
 )
