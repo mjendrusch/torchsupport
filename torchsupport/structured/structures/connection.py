@@ -232,7 +232,7 @@ class ConstantStructure(AbstractStructure):
     self.lengths = [self.connections.size(0)]
 
   def move_to(self, device):
-    result = self
+    result = copy(self)
     result.connections = result.connections.to(device)
     return result
 
@@ -478,10 +478,11 @@ class SubgraphStructure(AbstractStructure):
     sizes = chunk_sizes(self.counts, len(targets))
     result = []
     offset = 0
-    for size in sizes:
+    for idx, size in enumerate(sizes):
       the_copy = copy(self)
       the_copy.indices = self.indices[offset:offset + size]
       the_copy.indices = the_copy.indices - the_copy.indices[0]
+      the_copy.indices = the_copy.indices.to(targets[idx])
       the_copy.unique, the_copy.counts = the_copy.indices.unique(return_counts=True)
       result.append(the_copy)
       offset += the_copy.indices.size(0)
