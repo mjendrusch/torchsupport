@@ -22,5 +22,6 @@ setuptools.setup(
                      'pandas',
                      'torch',
                      'tensorboardX',
+                     'networkx',
                      ]
 )
