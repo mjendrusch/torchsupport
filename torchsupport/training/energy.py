@@ -276,6 +276,12 @@ class EnergyTraining(AbstractEnergyTraining):
     return regularization + ebm
 
   def run_energy(self, data):
+    make_differentiable(data)
+    input_data, *data_args = self.data_key(data)
+    real_result = self.score(input_data, *data_args)
+
+    # sample after first pass over real data, to catch
+    # possible batch-norm shenanigans without blowing up.
     fake = self.sample()
 
     if self.step_id % self.report_interval == 0:
@@ -283,11 +289,10 @@ class EnergyTraining(AbstractEnergyTraining):
       self.each_generate(detached.detach(), *args)
 
     make_differentiable(fake)
-    make_differentiable(data)
-    input_data, *data_args = self.data_key(data)
     input_fake, *fake_args = self.data_key(fake)
-    real_result = self.score(input_data, *data_args)
+    #self.score.eval()
     fake_result = self.score(input_fake, *fake_args)
+    #self.score.train()
     return real_result, fake_result
 
 class SetVAETraining(EnergyTraining):
