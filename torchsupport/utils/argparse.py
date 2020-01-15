@@ -1,8 +1,17 @@
 import inspect
 import argparse
+import re
 import json
 
 def get_args(method):
+  """
+  Helper to get the arguments (positional and keywords) 
+  from the parameters of any function or class
+  Args:
+    method [function]: 
+  returns:
+    args, kwargs
+  """
   sig = inspect.signature(method)
   parameters = sig.parameters
   args = []
@@ -16,17 +25,29 @@ def get_args(method):
   return args, kwargs
 
 def get_docs(method, names):
+  """
+  Tries to extract useful parameter descriptions from docstrings
+  Expected docstring format Google (name_of_param: description)
+  Args:
+    method: The method to extract from
+    names: an iterable containing strings for the parameter names
+  returns: 
+    a mapping of parameter name to docstring line
+  """
   doc = inspect.getdoc(method)
   lines = [
     line.strip()
     for line in doc.split("\n")
   ]
+  pattern = r"^(?::param +)?{name}\b[ ]*(?:\(.*\)|\[.*\])?:\s*(.*)$"
   docs = {}
   for name in names:
+    regex = re.compile(pattern.format(name=name))
     docs[name] = ""
     for line in lines:
-      if line.startswith(name):
-        docs[name] = line
+      match = regex.match(line)
+      if match:
+        docs[name] = match.group(1)
   return docs
 
 def _maybe(data, default):
@@ -35,6 +56,10 @@ def _maybe(data, default):
   return data
 
 def add_kwarg_parse(parser, kwarg, doc, namespace=None):
+  """
+  Logic to add a parser flag for a kwarg stored in a Parameter object
+  Supports namespacing
+  """
   if namespace is None:
     namespace = ""
   name = kwarg.name
@@ -48,11 +73,18 @@ def add_kwarg_parse(parser, kwarg, doc, namespace=None):
   return default
 
 def add_class_parse(parser, the_class, namespace=None):
-  method = the_class.__init__
+  """
+  Expand a parser with the kwargs from a single class (or function).
+  Ignores args.
+  """
+  if inspect.isclass(the_class):
+    method = the_class.__init__
+  else:
+    method = the_class
   _, kwargs = get_args(method)
   names = [kwarg.name for kwarg in kwargs]
   spaced_names = [
-    namespace + "_" + name
+    namespace + "_" + name # TODO: Q? Fails when no namespace provided? 
     for name in names
   ]
   docs = get_docs(method, names)
@@ -63,6 +95,12 @@ def add_class_parse(parser, the_class, namespace=None):
   return names, spaced_names, defaults
 
 class ClassesParser():
+  """
+  Convenience wrapper for the standard argparse.ArgumentParser.
+  Takes a list of classes (or functions) 
+  and creates a namespaced argument parser (stored in self.parser)
+  with flags for all keyword arguments
+  """
   def __init__(self, class_dict, json_dict=None, **kwargs):
     parser, name_dict, space_dict, default_dict = self._classes_parser(class_dict, **kwargs)
     self.option_dict = None
@@ -86,9 +124,18 @@ class ClassesParser():
     return parser, name_dict, space_dict, default_dict
   
   def add_argument(self, *args, **kwargs):
+    """Wraps argparse.ArgumentParser.add_argument"""
     self.parser.add_argument(*args, **kwargs)
 
   def parse_args(self, *args, **kwargs):
+    """
+    Parses arguments like the standard argparse.ArgumentParser.parse_args()
+    Either reads from the passed command line arguments or takes a list of strings 
+    Returns a special OptionWrapper object to handle namespaces
+    Args:
+      args: args of argparse.ArgumentParser.parse_args
+      kwargs: kwargs of argparse.ArgumentParser.parse_args
+    """
     options = self.parser.parse_args(*args, **kwargs)
     return OptionWrapper(
       options, self.name_dict, self.space_dict, self.default_dict,
@@ -96,6 +143,9 @@ class ClassesParser():
     )
 
 class OptionWrapper():
+  """
+  Object returned by torchsupport.utils.argparse.ClassesParser
+  """
   def __init__(self, options, name_dict, space_dict,
                default_dict, option_dict=None):
     if option_dict is None:

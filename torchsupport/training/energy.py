@@ -80,7 +80,7 @@ class AbstractEnergyTraining(Training):
 
     if optimizer_kwargs is None:
       optimizer_kwargs = {"lr" : 5e-4}
-    
+
     self.optimizer = optimizer(
       netlist,
       **optimizer_kwargs
@@ -185,6 +185,9 @@ class SampleBuffer(Dataset):
     self.buffer_size = buffer_size
     self.buffer_probability = buffer_probability
 
+  def reset(self):
+    self.samples = []
+
   def update(self, results):
     for result in results:
       if len(self.samples) < self.buffer_size:
@@ -208,12 +211,14 @@ class EnergyTraining(AbstractEnergyTraining):
   checkpoint_parameters = AbstractEnergyTraining.checkpoint_parameters + [
     PathState(["buffer", "samples"])
   ]
-  def __init__(self, score, *args, buffer_size=100, buffer_probability=0.9,
-               sample_steps=10, decay=1, integrator=None, oos_penalty=True, **kwargs):
+  def __init__(self, score, *args, buffer_size=10000, buffer_probability=0.95,
+               sample_steps=10, decay=1, reset_threshold=1000, integrator=None,
+               oos_penalty=True, **kwargs):
     self.score = ...
     super(EnergyTraining, self).__init__(
       {"score": score}, *args, **kwargs
     )
+    self.reset_threshold = reset_threshold
     self.oos_penalty = oos_penalty
     self.decay = decay
     self.integrator = integrator if integrator is not None else Langevin()
@@ -229,15 +234,33 @@ class EnergyTraining(AbstractEnergyTraining):
     result, *args = data
     return (result, *args)
 
+  def each_step(self):
+    if abs(self.current_losses["ebm"]) > self.reset_threshold:
+      self.reset()
+    super().each_step()
+
+  def reset(self):
+    self.load()
+    self.buffer.reset()
+
   def each_generate(self, data, *args):
     pass
+
+  def decompose_batch(self, data, *args):
+    return (
+      to_device((data[idx], *[arg[idx] for arg in args]), "cpu")
+      for idx in range(len(data))
+    )
 
   def sample(self):
     buffer_iter = iter(self.buffer_loader(self.buffer))
     data, *args = to_device(self.data_key(next(buffer_iter)), self.device)
+    self.score.eval()
     data = self.integrator.integrate(self.score, data, *args).detach()
-    detached = data.detach().cpu()
-    update = (to_device((detached[idx], *[arg[idx] for arg in args]), "cpu") for idx in range(data.size(0)))
+    self.score.train()
+    detached = to_device(data.detach(), "cpu")
+    make_differentiable(args, toggle=False)
+    update = self.decompose_batch(detached, *args)
     make_differentiable(update, toggle=False)
     self.buffer.update(update)
 
@@ -253,6 +276,12 @@ class EnergyTraining(AbstractEnergyTraining):
     return regularization + ebm
 
   def run_energy(self, data):
+    make_differentiable(data)
+    input_data, *data_args = self.data_key(data)
+    real_result = self.score(input_data, *data_args)
+
+    # sample after first pass over real data, to catch
+    # possible batch-norm shenanigans without blowing up.
     fake = self.sample()
 
     if self.step_id % self.report_interval == 0:
@@ -260,11 +289,10 @@ class EnergyTraining(AbstractEnergyTraining):
       self.each_generate(detached.detach(), *args)
 
     make_differentiable(fake)
-    make_differentiable(data)
-    input_data, *data_args = self.data_key(data)
     input_fake, *fake_args = self.data_key(fake)
-    real_result = self.score(input_data, *data_args)
+    #self.score.eval()
     fake_result = self.score(input_fake, *fake_args)
+    #self.score.train()
     return real_result, fake_result
 
 class SetVAETraining(EnergyTraining):
@@ -302,7 +330,7 @@ class SetVAETraining(EnergyTraining):
       result.append(sample)
     data, *args = to_device(default_collate(result), self.device)
     #data = self.integrator.integrate(self.score, data, *args).detach()
-    detached = data.detach().cpu()
+    detached = to_device(data.detach(), "cpu")
 
     return to_device((data, *args), self.device)
 
@@ -386,7 +414,8 @@ class DenoisingScoreTraining(EnergyTraining):
       integrator = AnnealedLangevin([
         self.sigma * self.factor ** idx for idx in range(self.n_sigma)
       ])
-      data, *args = self.data_key(self.prepare_sample())
+      prep = to_device(self.prepare_sample(), self.device)
+      data, *args = self.data_key(prep)
       result = integrator.integrate(self.score, data, *args).detach()
     self.score.train()
     return to_device((result, data, *args), self.device)
@@ -394,6 +423,7 @@ class DenoisingScoreTraining(EnergyTraining):
   def energy_loss(self, score, data, noisy, sigma):
     raw_loss = 0.5 * sigma ** 2 * ((score + (noisy - data) / sigma ** 2) ** 2)
     raw_loss = raw_loss.sum(dim=1, keepdim=True)
+    self.current_losses["ebm"] = float(raw_loss.mean())
     return raw_loss.mean()
 
   def each_step(self):
