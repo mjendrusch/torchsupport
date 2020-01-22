@@ -22,5 +22,7 @@ setuptools.setup(
                      'pandas',
                      'torch',
                      'tensorboardX',
+                     'networkx',
+                     'scikit-image',
                      ]
 )

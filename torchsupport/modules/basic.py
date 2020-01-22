@@ -71,24 +71,28 @@ def one_hot_encode(data, code, numeric=False):
 
   Args:
     data (Sequence): sequence of non-encoded data points.
-    code (Sequence): sequence of codes for one-hot encoding.
-
+    code (Int | Sequence): sequence of codes for one-hot encoding or a the alphabet length if data is already a list of indices.
   Returns:
     FloatTensor containing a one-hot encoding of the input data.
   """
   try:
-    coded = torch.tensor(list(map(
-      code.index, data
-    )), dtype=torch.int64)
+    if isinstance(code, int):
+      coded = torch.tensor(data, dtype=torch.int64)
+      alpha_len = code
+    else:
+      coded = torch.tensor(list(map(
+        code.index, data
+      )), dtype=torch.int64)
+      alpha_len = len(code)
   except:
     print(data)
     exit()
   if numeric:
     result = coded
   else:
-    result = torch.zeros(len(code), len(data), dtype=torch.float)
-    for idx, point in enumerate(coded):
-      result[point, idx] = 1
+    data_len = len(data)
+    result = torch.zeros(alpha_len, data_len, dtype=torch.float)
+    result[coded, torch.arange(data_len)] = 1
   return result
 
 class OneHotEncoder(nn.Module):
