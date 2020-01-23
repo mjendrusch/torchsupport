@@ -216,7 +216,7 @@ class IndependentSampler(PackedDiscreteGPLangevin):
       grad_prob[torch.arange(deltas.size(0)), deltas.argmax(dim=1)] = 1
       if self.scale is not None:
         grad_prob = (self.scale * deltas).softmax(dim=1)
-      
+
       access = self.pick_positions(args[-2].connections, args[-1].counts)
       data.tensor[access] = hard_one_hot(grad_prob[access].log())
 
@@ -365,9 +365,9 @@ class AnnealedLangevin(nn.Module):
   def integrate(self, score, data, *args):
     for noise in self.noises:
       step_size = self.epsilon * (noise / self.noises[-1]) ** 2
-      noise = torch.ones(data.size(0), data.size(1), 1, 1, 1).to(data.device) * noise
+      noise = torch.ones(data.size(0), *((data.dim() - 1) * [1])).to(data.device) * noise
       for step in range(self.steps):
         gradient = score(data, noise, *args)
         update = step_size * gradient + np.sqrt(2 * step_size) * torch.randn_like(data)
         data = data + update
-    return (data - data.min()) / (data.max() - data.min())
+    return data
