@@ -33,7 +33,9 @@ class UniversalTransformer(nn.Module):
     )
     interaction = self.interact(local, local, structure)
     interaction = self.dropout(interaction)
-    return self.residual_bn(interaction + self.project_in(data))
+
+    # use pre-norm for stable training.
+    return self.residual_bn(interaction) + self.project_in(data)
 
 class Transformer(UniversalTransformer):
   def __init__(self, in_size, out_size, hidden_size,

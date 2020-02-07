@@ -149,7 +149,8 @@ class NeighbourAddAttention(NeighbourAttention):
     return (query + data).sum(dim=-1)
 
 class NeighbourMultiHeadAttention(ConnectedModule):
-  def __init__(self, in_size, out_size, attention_size, query_size=None, heads=64):
+  def __init__(self, in_size, out_size, attention_size, query_size=None, heads=64,
+               normalization=lambda x: x):
     """Aggregates a node neighbourhood using a pairwise dot-product attention mechanism.
     Args:
       size (int): size of the attention embedding.
@@ -159,10 +160,10 @@ class NeighbourMultiHeadAttention(ConnectedModule):
     self.query_size = query_size
     self.attention_size = attention_size
     self.heads = heads
-    self.query = nn.Linear(query_size, heads * attention_size)
-    self.key = nn.Linear(in_size, heads * attention_size)
-    self.value = nn.Linear(in_size, heads * attention_size)
-    self.output = nn.Linear(heads * attention_size, out_size)
+    self.query = normalization(nn.Linear(query_size, heads * attention_size))
+    self.key = normalization(nn.Linear(in_size, heads * attention_size))
+    self.value = normalization(nn.Linear(in_size, heads * attention_size))
+    self.output = normalization(nn.Linear(heads * attention_size, out_size))
 
   def attend(self, query, data):
     raise NotImplementedError("Abstract.")

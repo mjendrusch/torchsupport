@@ -54,7 +54,7 @@ def random_substructure(structure, num_nodes, depth):
 class FullyConnectedScatter(ScatterStructure):
   def __init__(self, indices):
     unique, counts = indices.unique(return_counts=True)
-    structure_indices = torch.arange(counts.sum())
+    structure_indices = torch.arange(counts.sum(), device=indices.device)
     structure_indices = torch.repeat_interleave(
       structure_indices, torch.repeat_interleave(
         counts, counts
@@ -73,7 +73,8 @@ class FullyConnectedScatter(ScatterStructure):
     base = base.cumsum(dim=0)
     base = torch.repeat_interleave(torch.repeat_interleave(base, counts), repeated_counts)
 
-    structure_connections = torch.arange((counts * counts).sum()) - offset + base
+    structure_connections = torch.arange((counts * counts).sum(), device=indices.device)
+    structure_connections = structure_connections - offset + base
 
     super(FullyConnectedScatter, self).__init__(
       0, 0,

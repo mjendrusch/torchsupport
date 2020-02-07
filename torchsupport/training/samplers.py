@@ -42,6 +42,23 @@ class Langevin(nn.Module):
         data = data.clamp(*self.clamp)
     return data
 
+class PackedLangevin(Langevin):
+  def integrate(self, score, data, *args):
+    for idx in range(self.steps):
+      make_differentiable(data)
+      make_differentiable(args)
+      energy = score(data, *args)
+      if isinstance(energy, (list, tuple)):
+        energy, *_ = energy
+      gradient = ag.grad(energy, data.tensor, torch.ones_like(energy))[0]
+      if self.max_norm:
+        gradient = clip_grad_by_norm(gradient, self.max_norm)
+      data.tensor = data.tensor - self.rate * gradient + self.noise * torch.randn_like(data.tensor)
+      if self.clamp is not None:
+        data.tensor = data.tensor.clamp(*self.clamp)
+      data.tensor = data.tensor % (2 * np.pi)
+    return data
+
 class AdaptiveLangevin(Langevin):
   def integrate(self, score, data, *args):
     done = False
@@ -203,12 +220,21 @@ class IndependentSampler(PackedDiscreteGPLangevin):
 
     return torch.tensor(sorted(independents))
 
+  def perturb(self, data):
+    positions = (torch.rand(data.tensor.size(0)) < self.noise).view(-1).nonzero().view(-1)
+    values = torch.randint(0, 20, (positions.size(0),))
+    data.tensor[positions] = 0
+    data.tensor[positions, values] = 1
+    return data
+
   def integrate(self, score, data, *args):
     data = data.clone()
     result = data.clone()
     current_energy = score(data, *args)
     access_cache = []
     for idx in range(self.steps):
+      data = self.perturb(data)
+
       energy, deltas = score(data, *args, return_deltas=True)
 
       # attempt at gradient based local update of discrete variables:

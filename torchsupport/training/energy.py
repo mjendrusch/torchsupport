@@ -267,8 +267,8 @@ class EnergyTraining(AbstractEnergyTraining):
     return to_device((detached, *args), self.device)
 
   def energy_loss(self, real_result, fake_result):
-    regularization = (self.decay * (real_result ** 2 + fake_result ** 2)).mean()
-    ebm = (real_result - fake_result).mean()
+    regularization = self.decay * ((real_result ** 2).mean() + (fake_result ** 2).mean())
+    ebm = real_result.mean() - fake_result.mean()
     self.current_losses["real"] = float(real_result.mean())
     self.current_losses["fake"] = float(fake_result.mean())
     self.current_losses["regularization"] = float(regularization)
@@ -436,7 +436,34 @@ class DenoisingScoreTraining(EnergyTraining):
     data, *args = self.data_key(data)
     noisy, sigma = self.noise(data)
     result = self.score(noisy, sigma, *args)
-    return result.view(result.size(0), -1), data.view(result.size(0), -1), noisy.view(result.size(0), -1), sigma.view(result.size(0), -1)
+    return (
+      result.view(result.size(0), -1),
+      data.view(result.size(0), -1),
+      noisy.view(result.size(0), -1),
+      sigma.view(result.size(0), -1)
+    )
+
+class MultiscaleScoreTraining(DenoisingScoreTraining):
+  def __init__(self, score, data, *args, sigma_0=0.1, **kwargs):
+    super().__init__(score, data, *args, **kwargs)
+    self.sigma_0 = sigma_0
+
+  def run_energy(self, data):
+    data, *args = self.data_key(data)
+    noisy, sigma = self.noise(data)
+    result = self.score(noisy, *args)
+    return (
+      result.view(result.size(0), -1),
+      data.view(result.size(0), -1),
+      noisy.view(result.size(0), -1),
+      sigma.view(result.size(0), -1)
+    )
+
+  def energy_loss(self, score, data, noisy, sigma):
+    raw_loss = 0.5 / (sigma ** 2) * ((self.sigma_0 ** 2 * score + (noisy - data)) ** 2)
+    raw_loss = raw_loss.sum(dim=1, keepdim=True)
+    self.current_losses["ebm"] = float(raw_loss.mean())
+    return raw_loss.mean()
 
 class SetScoreVAETraining(DenoisingScoreTraining):
   def divergence_loss(self, parameters):
