@@ -397,3 +397,20 @@ class AnnealedLangevin(nn.Module):
         update = step_size * gradient + np.sqrt(2 * step_size) * torch.randn_like(data)
         data = data + update
     return data
+
+class AnnealedPackedLangevin(nn.Module):
+  def __init__(self, noises, steps=10, epsilon=2e-5):
+    super(AnnealedPackedLangevin, self).__init__()
+    self.noises = noises
+    self.steps = steps
+    self.epsilon = epsilon
+
+  def integrate(self, score, data, *args):
+    for noise in self.noises:
+      step_size = self.epsilon * (noise / self.noises[-1]) ** 2
+      noise = torch.ones(data.tensor.size(0), *((data.tensor.dim() - 1) * [1])).to(data.tensor.device) * noise
+      for step in range(self.steps):
+        gradient = score(data, noise, *args)
+        update = step_size * gradient + np.sqrt(2 * step_size) * torch.randn_like(gradient)
+        data.tensor = (data.tensor + update) % 6.3
+    return data

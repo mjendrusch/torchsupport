@@ -427,7 +427,7 @@ class DenoisingScoreTraining(EnergyTraining):
     return raw_loss.mean()
 
   def each_step(self):
-    super(DenoisingScoreTraining, self).each_step()
+    AbstractEnergyTraining.each_step(self)
     if self.step_id % self.report_interval == 0 and self.step_id != 0:
       data, *args = self.sample()
       self.each_generate(data, *args)
@@ -435,13 +435,33 @@ class DenoisingScoreTraining(EnergyTraining):
   def run_energy(self, data):
     data, *args = self.data_key(data)
     noisy, sigma = self.noise(data)
+    make_differentiable(noisy)
     result = self.score(noisy, sigma, *args)
     return (
-      result.view(result.size(0), -1),
-      data.view(result.size(0), -1),
-      noisy.view(result.size(0), -1),
-      sigma.view(result.size(0), -1)
+      result,#.view(result.size(0), -1),
+      data,#.view(result.size(0), -1),
+      noisy,#.view(result.size(0), -1),
+      sigma,#.view(result.size(0), -1)
     )
+
+class SlicedScoreTraining(DenoisingScoreTraining):
+  def noise_vectors(self, score):
+    return torch.randn_like(score)
+
+  def energy_loss(self, score, data, noisy, sigma):
+    vectors = self.noise_vectors(score)
+    grad_v = (score * vectors).view(score.size(0), -1).sum()
+    jacobian = ag.grad(grad_v, noisy, create_graph=True)[0]
+
+    norm = (score ** 2).view(score.size(0), -1).sum(dim=-1) / 2
+    jacobian = (vectors * jacobian).view(score.size(0), -1).sum(dim=-1)
+
+    result = (norm + jacobian) * sigma.view(score.size(0), -1) ** 2
+    result = result.mean()
+
+    self.current_losses["ebm"] = float(result)
+
+    return result
 
 class MultiscaleScoreTraining(DenoisingScoreTraining):
   def __init__(self, score, data, *args, sigma_0=0.1, **kwargs):

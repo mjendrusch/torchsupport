@@ -10,13 +10,13 @@ from torchsupport.data.io import netwrite, to_device, make_differentiable
 from torchsupport.training.energy import EnergyTraining
 
 class EnergySupervisedTraining(EnergyTraining):
-  def logit_energy(self, logits):
+  def logit_energy(self, logits, *args):
     return -logits.logsumexp(dim=-1)
 
   def create_score(self):
-    def _score(data, *args):
-      logits = self.score(data, *args)
-      return self.logit_energy(logits)
+    def _score(data, *args, **kwargs):
+      logits = self.score(data, *args, **kwargs)
+      return self.logit_energy(logits, *args)
     return _score
 
   def sample(self):
@@ -26,7 +26,7 @@ class EnergySupervisedTraining(EnergyTraining):
     data = self.integrator.integrate(self.create_score(), data, *args).detach()
     self.score.train()
     detached = to_device(data.detach(), "cpu")
-    update = (to_device((detached[idx], *[arg[idx] for arg in args]), "cpu") for idx in range(data.size(0)))
+    update = self.decompose_batch(detached, *args)
     make_differentiable(update, toggle=False)
     self.buffer.update(update)
 
@@ -37,9 +37,25 @@ class EnergySupervisedTraining(EnergyTraining):
 
   def run_energy(self, data):
     data, labels = data
-    real_logits, fake_logits = super().run_energy(data)
-    real_result = self.logit_energy(real_logits)
-    fake_result = self.logit_energy(fake_logits)
+    
+    make_differentiable(data)
+    input_data, *data_args = self.data_key(data)
+    real_logits = self.score(input_data, *data_args)
+
+    # sample after first pass over real data, to catch
+    # possible batch-norm shenanigans without blowing up.
+    fake = self.sample()
+
+    if self.step_id % self.report_interval == 0:
+      detached, *args = self.data_key(to_device(fake, "cpu"))
+      self.each_generate(detached.detach(), *args)
+
+    make_differentiable(fake)
+    input_fake, *fake_args = self.data_key(fake)
+    fake_logits = self.score(input_fake, *fake_args)
+    
+    real_result = self.logit_energy(real_logits, *data_args)
+    fake_result = self.logit_energy(fake_logits, *fake_args)
 
     # set integrator target, if appropriate.
     if self.integrator.target is None:
