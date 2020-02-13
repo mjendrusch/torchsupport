@@ -44,9 +44,9 @@ class ConnectedModule(nn.Module):
     return torch.cat(results, dim=0)
 
 class NeighbourLinear(ConnectedModule):
-  def __init__(self, source_channels, target_channels):
+  def __init__(self, source_channels, target_channels, normalization=lambda x: x):
     super(NeighbourLinear, self).__init__(has_scatter=True)
-    self.linear = nn.Linear(source_channels, target_channels)
+    self.linear = normalization(nn.Linear(source_channels, target_channels))
 
   def reduce_scatter(self, own_data, source_message, indices, node_count):
     return scatter.mean(
@@ -60,7 +60,8 @@ class NeighbourLinear(ConnectedModule):
     return own_data + func.relu(out).mean(dim=1)
 
 class NeighbourAssignment(ConnectedModule):
-  def __init__(self, source_channels, target_channels, out_channels, size):
+  def __init__(self, source_channels, target_channels, out_channels, size,
+               normalization=lambda x: x):
     """Aggregates a node neighbourhood using soft weight assignment. (FeaStNet)
 
     Args:
@@ -70,11 +71,12 @@ class NeighbourAssignment(ConnectedModule):
     """
     super(NeighbourAssignment, self).__init__(has_scatter=True)
     self.linears = nn.ModuleList([
-      nn.Linear(source_channels, out_channels)
+      normalization(nn.Linear(source_channels, out_channels, bias=False))
       for _ in range(size)
     ])
-    self.source = nn.Linear(source_channels, size)
-    self.target = nn.Linear(target_channels, size)
+    self.bias = nn.Parameter(torch.randn(1, out_channels))
+    self.source = normalization(nn.Linear(source_channels, size))
+    self.target = normalization(nn.Linear(target_channels, size))
 
   def reduce_scatter(self, own_data, source_message, indices, node_count):
     target = self.target(own_data)
@@ -97,8 +99,9 @@ class NeighbourAssignment(ConnectedModule):
       weight_tensors.append(result.unsqueeze(0))
     weighted = torch.cat(weight_tensors, dim=0)
     source = unflatten_message(source, source_message)
-    assignment = func.softmax(source + target, dim=-1).unsqueeze(0)
-    return (assignment.transpose(0, 3) * weighted).mean(dim=0)
+    assignment = func.softmax(source + target.transpose(0, 1), dim=1).unsqueeze(0)
+    result = (assignment.transpose(0, 3) * weighted).sum(dim=0).mean(dim=1)
+    return result + self.bias
 
 class NeighbourAttention(ConnectedModule):
   def __init__(self, in_size, out_size, query_size=None, attention_size=None):
