@@ -47,18 +47,17 @@ class AdaptiveInstanceNormPP(AdaptiveInstanceNorm):
 class AdaptiveBatchNorm(nn.Module):
   def __init__(self, in_size, ada_size):
     super(AdaptiveBatchNorm, self).__init__()
+    self.bn = nn.BatchNorm2d(in_size, affine=False)
     self.scale = nn.Linear(ada_size, in_size)
     self.bias = nn.Linear(ada_size, in_size)
 
   def forward(self, inputs, style):
-    in_view = inputs.view(inputs.size(0), -1)
-    mean = inputs.mean(dim=0, keepdim=True)
-    std = inputs.std(dim=0, keepdim=True)
+    out = self.bn(inputs)
     scale = self.scale(style).view(style.size(0), -1, 1, 1)
     scale = scale - scale.mean(dim=1, keepdim=True) + 1
     bias = self.bias(style).view(style.size(0), -1, 1, 1)
     bias = bias - bias.mean(dim=1, keepdim=True)
-    return scale * (inputs - mean) / (std + 1e-6) + bias
+    return scale * out + bias
 
 class AdaptiveLayerNorm(nn.Module):
   def __init__(self, in_size, ada_size):
@@ -167,6 +166,26 @@ class BotchNorm(nn.Module):
     std = self.scale(features).unsqueeze(-1)
 
     out = std * out + mean
+    return out.view(inputs.shape)
+
+class SemiNorm(nn.Module):
+  def __init__(self, in_size, normalization=None):
+    super().__init__()
+    normalization = normalization or spectral_norm
+    self.norm = nn.Linear(2 * in_size, in_size)
+    self.bn = nn.LayerNorm(in_size)
+
+  def forward(self, inputs):
+    out = inputs.view(inputs.size(0), inputs.size(1), -1)
+    mean = out.mean(dim=-1)
+    std = out.std(dim=-1)
+
+    out = self.bn(inputs)
+    out = out.view(out.size(0), out.size(1), -1)
+
+    features = self.norm(torch.cat((mean, std), dim=1))
+
+    out = out + features.unsqueeze(-1)
     return out.view(inputs.shape)
 
 class FilterResponseNorm(nn.Module):
