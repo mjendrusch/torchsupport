@@ -14,6 +14,18 @@ from torchsupport.data.collate import DataLoader
 
 from torchsupport.training.gan import GANTraining, RothGANTraining
 
+def _gradient_norm(inputs, parameters):
+  out = torch.ones(inputs.size()).to(inputs.device)
+  gradients = torch.autograd.grad(
+    inputs, parameters, create_graph=True, retain_graph=True,
+    grad_outputs=out
+  )
+  grad_sum = 0.0
+  for gradient in gradients:
+    grad_sum += (gradient ** 2).view(gradient.size(0), -1).sum(dim=1)
+  grad_sum = torch.sqrt(grad_sum + 1e-16)
+  return grad_sum, out
+
 class NeuralConditionerTraining(RothGANTraining):
   def __init__(self, generator, discriminator, data, **kwargs):
     super(NeuralConditionerTraining, self).__init__(
@@ -23,11 +35,23 @@ class NeuralConditionerTraining(RothGANTraining):
     )
 
   def mixing_key(self, data):
-    print(data)
     if len(data) == 4:
       return data[1]
     else:
       return data[0]
+
+  def regularization(self, fake, real, generated_result, real_result):
+    real_norm, real_out = _gradient_norm(real_result, self.mixing_key(real))
+    fake_norm, fake_out = _gradient_norm(generated_result, self.mixing_key(fake))
+
+    real_penalty = real_norm ** 2
+    fake_penalty = fake_norm ** 2
+
+    penalty = 0.5 * (real_penalty + fake_penalty).mean()
+
+    out = (real_out, fake_out)
+
+    return penalty, out
 
   #def discriminator_loss(self, data, fake, fake_res, real_res):
   #  loss, out = GANTraining.discriminator_loss(self, data, fake, fake_res, real_res)
@@ -50,7 +74,7 @@ class NeuralConditionerTraining(RothGANTraining):
     return data * mask
 
   def run_generator(self, data):
-    sample = self.sample()
+    sample = self.sample(data)
     inputs, available, requested = data
     restricted_inputs = self.restrict_inputs(inputs, available)
     generated = self.generator(
