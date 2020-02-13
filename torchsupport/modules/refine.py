@@ -21,8 +21,9 @@ class ResBlock(nn.Module):
     return out + inputs
 
 class PoolBlock(nn.Module):
-  def __init__(self, size, ada_size, depth=3):
+  def __init__(self, size, ada_size, width=5, depth=3):
     super().__init__()
+    self.width = width
     self.bn = nn.ModuleList([
       AdaptiveBatchNorm(size, ada_size)
       for idx in range(depth)
@@ -35,13 +36,13 @@ class PoolBlock(nn.Module):
   def forward(self, inputs, condition):
     out = inputs
     for bn, block in zip(self.bn, self.blocks):
-      inner = func.avg_pool2d(bn(out, condition), 5, stride=1, padding=2)
+      inner = func.max_pool2d(bn(out, condition), self.width, stride=1, padding=2)
       inner = block(inner)
       out = out + inner
     return out
 
 class RefineBlock(nn.Module):
-  def __init__(self, size, ada_size):
+  def __init__(self, size, ada_size, width=5, depth=3):
     super().__init__()
     self.res_low = nn.ModuleList([
       ResBlock(size, ada_size)
@@ -53,7 +54,7 @@ class RefineBlock(nn.Module):
     ])
     self.low = nn.Conv2d(size, size, 3, padding=1)
     self.high = nn.Conv2d(size, size, 3, padding=1)
-    self.pool = PoolBlock(size, ada_size)
+    self.pool = PoolBlock(size, ada_size, width=width, depth=depth)
 
   def forward(self, low, high, condition):
     for block in self.res_low:
