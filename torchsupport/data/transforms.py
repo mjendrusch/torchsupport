@@ -735,3 +735,11 @@ class Compose(object):
         for transform in self.transforms:
             out = transform(out)
         return out
+
+class Network(object):
+    def __init__(self, net):
+        self.net = net
+
+    def __call__(self, x):
+        with torch.no_grad():
+            return self.net(x.unsqueeze(0))[0]
