@@ -241,7 +241,7 @@ def pairwise_no_pad(op, data, indices):
   unique, counts = indices.unique(return_counts=True)
   expansion = torch.cumsum(counts, dim=0)
   expansion = torch.repeat_interleave(expansion, counts)
-  offset = torch.arange(0, counts.sum())
+  offset = torch.arange(0, counts.sum(), device=data.device)
   expansion = expansion - offset - 1
   expanded = torch.repeat_interleave(data, expansion.to(data.device), dim=0)
 
@@ -250,7 +250,7 @@ def pairwise_no_pad(op, data, indices):
   expansion_offset = torch.repeat_interleave(expansion_offset, counts)
   expansion_offset = torch.repeat_interleave(expansion_offset, expansion)
   off_start = torch.repeat_interleave(torch.repeat_interleave(counts, counts) - expansion, expansion)
-  access = torch.arange(expansion.sum())
+  access = torch.arange(expansion.sum(), device=data.device)
   access = access - torch.repeat_interleave(expansion.roll(1).cumsum(dim=0), expansion) + off_start + expansion_offset
 
   result = op(expanded, data[access.to(data.device)])
