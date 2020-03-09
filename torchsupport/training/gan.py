@@ -565,7 +565,7 @@ class RothGANTraining(GANTraining):
     real_penalty = real_norm ** 2 * (1 - real_prob) ** 2
     fake_penalty = fake_norm ** 2 * fake_prob ** 2
 
-    penalty = 0.5 * self.gamma * (real_penalty + fake_penalty).mean()
+    penalty = 0.5 * self.gamma * (real_penalty.mean() + fake_penalty.mean())
 
     out = (real_out, fake_out)
 

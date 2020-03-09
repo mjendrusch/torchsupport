@@ -152,6 +152,24 @@ def softmax(data, indices, dim_size=None):
   out = out / (add(out, indices, dim_size=dim_size)[indices] + 1e-16)
   return out
 
+def autoregressive(module, data, indices):
+  _e, counts = indices.unique(return_counts=True)
+  max_count = counts.max()
+  out = data
+  values = []
+  for idx in range(max_count):
+    out = module(out)
+    values.append(out.unsqueeze(0))
+
+  values = torch.cat(values, dim=0)
+  access_0 = torch.cat([
+    torch.arange(0, count, dtype=torch.long, device=values.device)
+    for count in counts
+  ], dim=0)
+  access_1 = indices
+  result = values[access_0, access_1]
+  return result
+
 def sequential(module, data, indices):
   packed, _, _ = pack(data, indices)
   result, hidden = module(packed)
