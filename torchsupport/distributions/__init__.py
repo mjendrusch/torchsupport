@@ -1,5 +1,7 @@
 import torch
 import torch.distributions as dist
+from torchsupport.distributions.mixture import Mixture
+from torchsupport.distributions.von_mises import VonMises
 
 def _harden_one_hot(self, inputs):
   hard = torch.zeros_like(inputs)
