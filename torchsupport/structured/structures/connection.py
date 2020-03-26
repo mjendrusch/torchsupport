@@ -444,6 +444,12 @@ class ScatterStructure(AbstractStructure):
       index_offset += the_copy.node_count
     return result
 
+  def move_to(self, device):
+    result = copy(self)
+    result.connections = result.connections.to(device)
+    result.indices = result.indices.to(device)
+    return result
+
   def __len__(self):
     return self.node_count
 

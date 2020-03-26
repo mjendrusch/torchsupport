@@ -149,7 +149,7 @@ def softmax(data, indices, dim_size=None):
     dim_size = indices.max() + 1
   out = data - max(data, indices, dim_size=dim_size)[indices]
   out = out.exp()
-  out = out / (add(out, indices, dim_size=dim_size)[indices] + 1e-16)
+  out = out / (add(out, indices, dim_size=dim_size)[indices] + 1e-6)
   return out
 
 def autoregressive(module, data, indices):
