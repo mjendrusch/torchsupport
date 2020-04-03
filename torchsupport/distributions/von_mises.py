@@ -85,7 +85,7 @@ class VonMises(Distribution):
     """
     arg_constraints = {'loc': constraints.real, 'concentration': constraints.positive}
     support = constraints.real
-    has_rsample = False
+    has_rsample = True
 
     def __init__(self, loc, concentration, validate_args=None):
         self.loc, self.concentration = broadcast_all(loc, concentration)
@@ -114,6 +114,13 @@ class VonMises(Distribution):
         shape = self._extended_shape(sample_shape)
         x = torch.empty(shape, dtype=self.loc.dtype, device=self.loc.device)
         return _rejection_sample(self.loc, self.concentration, self._proposal_r, x)
+
+    def rsample(self, sample_shape=torch.Size()):
+        with torch.no_grad():
+            shape = self._extended_shape(sample_shape)
+            x = torch.empty(shape, dtype=self.loc.dtype, device=self.loc.device)
+            sample = _rejection_sample(0, self.concentration, self._proposal_r, x)
+        return sample + self.loc
 
     def expand(self, batch_shape):
         try:

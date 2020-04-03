@@ -163,6 +163,7 @@ class NeighbourMultiHeadAttention(ConnectedModule):
     self.query_size = query_size
     self.attention_size = attention_size
     self.heads = heads
+    self.out_size = out_size
     self.query = normalization(nn.Linear(query_size, heads * attention_size))
     self.key = normalization(nn.Linear(in_size, heads * attention_size))
     self.value = normalization(nn.Linear(in_size, heads * attention_size))
@@ -172,6 +173,8 @@ class NeighbourMultiHeadAttention(ConnectedModule):
     raise NotImplementedError("Abstract.")
 
   def reduce_scatter(self, own_data, source_message, indices, node_count):
+    if indices.size(0) == 0:
+      return torch.zeros(node_count, self.out_size, dtype=own_data.dtype, device=own_data.device)
     target = self.query(own_data).view(*own_data.shape[:-1], -1, self.heads)
     source = self.key(source_message).view(*source_message.shape[:-1], -1, self.heads)
     value = self.value(source_message).view(*source_message.shape[:-1], -1, self.heads)
