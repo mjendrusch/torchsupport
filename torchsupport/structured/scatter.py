@@ -157,8 +157,9 @@ def autoregressive(module, data, indices):
   max_count = counts.max()
   out = data
   values = []
+  state = None
   for idx in range(max_count):
-    out = module(out)
+    out, state = module(out, state)
     values.append(out.unsqueeze(0))
 
   values = torch.cat(values, dim=0)
