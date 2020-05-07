@@ -266,6 +266,7 @@ def pairwise_no_pad(op, data, indices):
 
   expansion_offset = counts.roll(1)
   expansion_offset[0] = 0
+  expansion_offset = expansion_offset.cumsum(dim=0)
   expansion_offset = torch.repeat_interleave(expansion_offset, counts)
   expansion_offset = torch.repeat_interleave(expansion_offset, expansion)
   off_start = torch.repeat_interleave(torch.repeat_interleave(counts, counts) - expansion, expansion)
