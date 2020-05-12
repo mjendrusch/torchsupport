@@ -1,6 +1,9 @@
 from abc import ABC, abstractmethod
 import numpy as np
+from enum import Enum
 import torch
+import mlflow
+import mlflow.pytorch
 from torch import nn
 from torch.nn import functional as func
 from torch.distributions import Normal, RelaxedOneHotCategorical
@@ -14,6 +17,67 @@ from torchsupport.training.training import Training
 import torchsupport.modules.losses.vae as vl
 from torchsupport.data.io import netwrite, to_device
 from torchsupport.data.collate import DataLoader
+
+
+class LoggerTypes(Enum):
+  TENSORBOARD = "tensorboard"
+  MLFLOW = "mlflow"
+  NONE = "none"
+
+
+class LoggingTypes(Enum):
+  PARAM = "param"
+  METRIC = "metric"
+  IMAGE = "image"
+  MODEL = "model"
+
+
+class LoggingSystem(object):
+  def __init__(self):
+    pass
+
+  def log(self, type, key, content, step_id=None):
+    pass
+
+
+class TensorboardLogger(LoggingSystem):
+  writer = None
+
+  def __init__(self, network_id):
+    self.writer = SummaryWriter(network_id)
+
+  def log(self, logging_type, key, content, step_id=None):
+    if logging_type == LoggingTypes.METRIC:
+      self.writer.add_scalar(key, content, step_id)
+    elif logging_type == LoggingTypes.IMAGE:
+      self.writer.add_image(key, content, step_id)
+
+
+class MlflowLogger(LoggingSystem):
+  network_id = None
+  def __init__(self, network_id, mlflow_tracking_uri=None):
+    if mlflow_tracking_uri:
+      mlflow.set_tracking_uri(mlflow_tracking_uri)
+    mlflow.set_experiment(network_id)
+    mlflow.start_run()
+    self.network_id = network_id
+
+  def log(self, logging_type, key, content, step_id=None):
+    if logging_type == LoggingTypes.METRIC:
+      assert type(key) is str, f"Logging a metric with MLflow requires a string key. Type is: ${type(key)}"
+      assert type(content) is float, f"Logging a metric with MLflow requires a float value. Type is: ${type(content)}"
+      if step_id is not None:
+        assert type(step_id) is int, f"Logging a metric with MLflow requires a integer step ID. Type is: ${type(step_id)}"
+      mlflow.log_metric(key, content, step_id)
+    elif logging_type == LoggingTypes.PARAM:
+      mlflow.log_param(key, content)
+    elif logging_type == LoggingTypes.IMAGE:
+      print("WARNING: Cannot log images with the torchsupport MLflow backend yet. Skipping.")
+    elif logging_type == LoggingTypes.MODEL:
+      mlflow.pytorch.log_model(content, key)
+    else:
+      raise NotImplementedError(f"Invalid logging type: ${logging_type}")
+
 
 class AbstractVAETraining(Training):
   """Abstract base class for VAE training."""
@@ -32,6 +96,7 @@ class AbstractVAETraining(Training):
                network_name="network",
                report_interval=10,
                checkpoint_interval=1000,
+               logger_type=LoggerTypes.MLFLOW,
                verbose=False):
     """Generic training setup for variational autoencoders.
 
@@ -72,8 +137,16 @@ class AbstractVAETraining(Training):
 
     self.current_losses = {}
     self.network_name = network_name
-    self.writer = SummaryWriter(network_name)
-
+    # self.writer = SummaryWriter(network_name)
+    if logger_type == LoggerTypes.TENSORBOARD:
+      self.logger = TensorboardLogger(network_name)
+    elif logger_type == LoggerTypes.MLFLOW:
+      self.logger = MlflowLogger(network_name)
+    else:
+      self.logger = LoggingSystem()
+    self.logger.log(LoggingTypes.PARAM, "max_epochs", self.max_epochs)
+    self.logger.log(LoggingTypes.PARAM, "batch_size", self.batch_size)
+    self.logger.log(LoggingTypes.PARAM, "device", self.device)
     self.epoch_id = 0
     self.step_id = 0
 
@@ -127,8 +200,10 @@ class AbstractVAETraining(Training):
     if self.verbose:
       for loss_name in self.current_losses:
         loss_float = self.current_losses[loss_name]
-        self.writer.add_scalar(f"{loss_name} loss", loss_float, self.step_id)
-    self.writer.add_scalar("total loss", float(loss_val), self.step_id)
+        self.logger.log(LoggingTypes.METRIC, f"{loss_name} loss", loss_float, self.step_id)
+        # self.writer.add_scalar(f"{loss_name} loss", loss_float, self.step_id)
+    self.logger.log(LoggingTypes.METRIC, "total loss", float(loss_val), self.step_id)
+    # self.writer.add_scalar("total loss", float(loss_val), self.step_id)
 
     loss_val.backward()
     self.optimizer.step()
@@ -166,6 +241,7 @@ class AbstractVAETraining(Training):
       the_net = getattr(self, name)
       if isinstance(the_net, torch.nn.DataParallel):
         the_net = the_net.module
+      self.logger.log(LoggingTypes.MODEL, f"{name}-epoch-{self.epoch_id}-step-{self.step_id}", the_net)
       netwrite(
         the_net,
         f"{self.checkpoint_path}-{name}-epoch-{self.epoch_id}-step-{self.step_id}.torch"
@@ -174,7 +250,8 @@ class AbstractVAETraining(Training):
 
   def validate(self, data):
     loss = self.valid_step(data)
-    self.writer.add_scalar("valid loss", loss, self.step_id)
+    # self.writer.add_scalar("valid loss", loss, self.step_id)
+    self.logger.log(LoggingTypes.METRIC, "valid loss", loss, self.step_id)
     self.each_validate()
 
   def train(self):
@@ -479,20 +556,22 @@ class IntroVAETraining(VAETraining):
     pass_through, *critic_args = self.run_critic(data, *netargs)
     loss_val = self.critic_loss(*critic_args)
     loss_val.backward(retain_graph=True)
-    self.writer.add_scalar("critic loss", float(loss_val), self.step_id)
+    self.logger.log(LoggingTypes.METRIC, "critic loss", float(loss_val), self.step_id)
+    # self.writer.add_scalar("critic loss", float(loss_val), self.step_id)
     self.critic_optimizer.step()
 
     self.generator_optimizer.zero_grad()
     generator_args = self.run_generator(data, *pass_through, *netargs)
     loss_val = self.generator_loss(*generator_args)
     loss_val.backward()
-    self.writer.add_scalar("generator loss", float(loss_val), self.step_id)
+    self.logger.log(LoggingTypes.METRIC, "generator loss", float(loss_val), self.step_id)
     self.generator_optimizer.step()
 
     if self.verbose:
       for loss_name in self.current_losses:
         loss_float = self.current_losses[loss_name]
-        self.writer.add_scalar(f"{loss_name} loss", loss_float, self.step_id)
+        self.logger.log(LoggingTypes.METRIC, f"{loss_name} loss", loss_float, self.step_id)
+        # self.writer.add_scalar(f"{loss_name} loss", loss_float, self.step_id)
 
     self.each_step()
 
@@ -636,7 +715,7 @@ class FactorVAETraining(JointVAETraining):
     ce = self.reconstruction_loss(reconstruction, data)
     tc = self.divergence_loss((mean, logvar), (self.decoder, sample))
     loss_val = ce + tc
-    self.writer.add_scalar("total loss", float(loss_val), self.step_id)
+    self.logger.log(LoggingTypes.METRIC, "total loss", float(loss_val), self.step_id)
 
     self.optimizer.zero_grad()
     loss_val.backward()
@@ -651,7 +730,7 @@ class FactorVAETraining(JointVAETraining):
     discriminator_loss.backward()
     self.discriminator_optimizer.step()
 
-    self.writer.add_scalar("discriminator loss", float(discriminator_loss), self.step_id)
+    self.logger.log(LoggingTypes.METRIC, "discriminator loss", float(discriminator_loss), self.step_id)
     self.each_step()
 
 class ConditionalVAETraining(VAETraining):
