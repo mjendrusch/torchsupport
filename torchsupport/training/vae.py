@@ -3,7 +3,6 @@ import numpy as np
 from enum import Enum
 import torch
 import mlflow
-import mlflow.pytorch
 from torch import nn
 from torch.nn import functional as func
 from torch.distributions import Normal, RelaxedOneHotCategorical
@@ -74,6 +73,7 @@ class MlflowLogger(LoggingSystem):
     elif logging_type == LoggingTypes.IMAGE:
       print("WARNING: Cannot log images with the torchsupport MLflow backend yet. Skipping.")
     elif logging_type == LoggingTypes.MODEL:
+      import mlflow.pytorch
       mlflow.pytorch.log_model(content, key)
     else:
       raise NotImplementedError(f"Invalid logging type: ${logging_type}")
@@ -96,7 +96,7 @@ class AbstractVAETraining(Training):
                network_name="network",
                report_interval=10,
                checkpoint_interval=1000,
-               logger_type=LoggerTypes.MLFLOW,
+               logger_type=LoggerTypes.TENSORBOARD,
                verbose=False):
     """Generic training setup for variational autoencoders.
 
@@ -142,8 +142,10 @@ class AbstractVAETraining(Training):
       self.logger = TensorboardLogger(network_name)
     elif logger_type == LoggerTypes.MLFLOW:
       self.logger = MlflowLogger(network_name)
-    else:
+    elif logger_type == LoggerTypes.NONE:
       self.logger = LoggingSystem()
+    else:
+      raise ValueError("Logger must be one of the types listed in LoggingTypes.")
     self.logger.log(LoggingTypes.PARAM, "max_epochs", self.max_epochs)
     self.logger.log(LoggingTypes.PARAM, "batch_size", self.batch_size)
     self.logger.log(LoggingTypes.PARAM, "device", self.device)

@@ -70,7 +70,7 @@ class MNISTVAETraining(VAETraining):
     return mean, logvar, reconstruction, data
 
 if __name__ == "__main__":
-  mnist = MNIST("examples/", download=True, transform=ToTensor())
+  mnist = MNIST("examples/", download=False, transform=ToTensor())
   data = VAEDataset(mnist)
 
   encoder = Encoder(z=32)
@@ -82,7 +82,6 @@ if __name__ == "__main__":
     device="cpu",
     batch_size=64,
     max_epochs=1000,
-    logger_type=LoggerTypes.TENSORBOARD,
     verbose=True
   )
 
