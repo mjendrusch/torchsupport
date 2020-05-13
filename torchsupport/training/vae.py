@@ -137,7 +137,7 @@ class AbstractVAETraining(Training):
 
     self.current_losses = {}
     self.network_name = network_name
-    # self.writer = SummaryWriter(network_name)
+    self.writer = SummaryWriter(network_name)
     if logger_type == LoggerTypes.TENSORBOARD:
       self.logger = TensorboardLogger(network_name)
     elif logger_type == LoggerTypes.MLFLOW:
