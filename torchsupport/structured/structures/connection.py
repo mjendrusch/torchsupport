@@ -439,7 +439,7 @@ class ScatterStructure(AbstractStructure):
       the_copy.lengths = self.lengths[idx * step:(idx + 1) * step]
       the_copy.node_counts = self.node_counts[idx * step:(idx + 1) * step]
       the_copy.node_count = sum(the_copy.node_counts)
-      result.append(the_copy)
+      result.append(the_copy.to(targets[idx]))
       offset += size
       index_offset += the_copy.node_count
     return result
