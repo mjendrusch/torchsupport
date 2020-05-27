@@ -12,7 +12,8 @@ class VQ(nn.Module):
     self.discount = discount
     self.n_vectors = n_vectors
     self.weights = torch.ones(in_size, dtype=torch.float)
-    self.prototypes = torch.randn(n_vectors, in_size, requires_grad=True)
+    self.combinations = torch.randn(n_vectors, in_size, requires_grad=True)
+    self.prototypes = self.combinations / self.weights
 
   def update(self, inputs, code):
     # update counts
@@ -22,9 +23,9 @@ class VQ(nn.Module):
 
     # update vectors
     values, indices = code.sort()
-    self.prototypes = self.discount * self.prototypes
-    scatter.add((1 - self.discount) * inputs[indices], values, out=self.prototypes)
-    self.prototypes = self.prototypes / self.weights
+    self.combinations = self.discount * self.combinations
+    scatter.add((1 - self.discount) * inputs[indices], values, out=self.combinations)
+    self.prototypes = self.combinations / self.weights
 
   def forward(self, inputs):
     inputs, shape = deshape(inputs)
