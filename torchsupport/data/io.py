@@ -108,6 +108,10 @@ class DeviceMovable():
 def to_device(data, device):
   if isinstance(data, torch.Tensor):
     return data.to(device)
+  if isinstance(data, tuple) and hasattr(data, "_asdict"):
+    typ = type(data)
+    dict_val = to_device(data._asdict(), device)
+    return typ(**dict_val)
   if isinstance(data, (list, tuple)):
     return [
       to_device(point, device)
