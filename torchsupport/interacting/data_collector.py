@@ -1,7 +1,8 @@
 import torch
 import torch.multiprocessing as mp
 
-def _collector_worker(statistics, buffer, distributor, collector, done):
+def _collector_worker(statistics, buffer, distributor,
+                      collector, done, piecewise):
   torch.set_num_threads(1)
   while True:
     if done.value:
@@ -9,13 +10,20 @@ def _collector_worker(statistics, buffer, distributor, collector, done):
     result = collector.sample_trajectory()
     trajectory_statistics = collector.compute_statistics(result)
     trajectory = distributor.commit_trajectory(result)
-    for item in trajectory:
-      buffer.append(item)
+
+    if piecewise:
+      for item in trajectory:
+        buffer.append(item)
+    else:
+      buffer.append(trajectory)
+
     statistics.update(trajectory_statistics)
 
 class ExperienceCollector:
-  def __init__(self, distributor, collector, n_workers=16):
+  def __init__(self, distributor, collector,
+               piecewise=True, n_workers=16):
     self.n_workers = n_workers
+    self.piecewise = piecewise
     self.distributor = distributor
     self.collector = collector
     self.done = mp.Value("l", 0)
@@ -25,7 +33,8 @@ class ExperienceCollector:
     for idx in range(self.n_workers):
       proc = mp.Process(
         target=_collector_worker,
-        args=(statistics, buffer, self.distributor, self.collector, self.done)
+        args=(statistics, buffer, self.distributor,
+              self.collector, self.done, self.piecewise)
       )
       self.procs.append(proc)
       proc.start()

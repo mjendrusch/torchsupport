@@ -31,11 +31,13 @@ class OffPolicyTraining(Training):
                auxiliary_networks=None,
                max_steps=1_000_000,
                buffer_size=100_000,
+               piecewise_append=False,
                policy_steps=1,
                auxiliary_steps=1,
                n_workers=8,
                batch_size=64,
                discount=0.99,
+               double=False,
                checkpoint_interval=10,
                optimizer=torch.optim.Adam,
                optimizer_kwargs=None,
@@ -69,9 +71,12 @@ class OffPolicyTraining(Training):
     self.collector = EnvironmentCollector(environment, agent, discount=discount)
     self.distributor = DefaultDistributor()
     self.data_collector = ExperienceCollector(
-      self.distributor, self.collector, n_workers=n_workers
+      self.distributor, self.collector,
+      n_workers=n_workers, piecewise=piecewise_append
     )
-    self.buffer = SchemaBuffer(self.data_collector.schema(), buffer_size)
+    self.buffer = SchemaBuffer(
+      self.data_collector.schema(), buffer_size, double=double
+    )
 
     optimizer_kwargs = optimizer_kwargs or {}
     self.optimizer = optimizer(

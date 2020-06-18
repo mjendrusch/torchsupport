@@ -345,12 +345,19 @@ class CombinedBuffer(AbstractBuffer):
         continue
       buffer.prepare_for_append(position, nuke_next_n)
 
+  def _append_single(self, data):
+    data, _ = self.data_size(data)
+    position, nuke_next_n = self.position_for_append(data)
+    self.prepare_append(position, nuke_next_n)
+    self.raw_append(data)
+
   def append(self, data):
     with self.ctrl.write:
-      data, _ = self.data_size(data)
-      position, nuke_next_n = self.position_for_append(data)
-      self.prepare_append(position, nuke_next_n)
-      self.raw_append(data)
+      if isinstance(data, list):
+        for item in data:
+          self._append_single(item)
+      else:
+        self._append_single(item)
 
   def __getitem__(self, index):
     with self.ctrl.read:
@@ -363,9 +370,62 @@ class CombinedBuffer(AbstractBuffer):
   def __len__(self):
     return min(map(len, [self.buffers[key] for key in self.buffers]))
 
-def SchemaBuffer(schema, size):
+class DoubleBuffer:
+  """Double Buffer to prevent locking the training process.
+
+  .. note::
+      Double the buffer, double the memory consumption. Beware!
+  """
+  def __init__(self, x, y):
+    self.ctrl = ReadWriteControl(self)
+    self.ctrl_flick = mp.Lock()
+    self.which_buffer = mp.Value("l", 0)
+    self.buffers = [x, y]
+
+  def pull_changes(self):
+    pass
+
+  def push_changes(self):
+    pass
+
+  def sample(self, batch_size):
+    with self.ctrl.read:
+      buffer = self.buffers[self.which_buffer.value]
+      return buffer.sample(batch_size)
+
+  def flick(self):
+    with self.ctrl.write:
+      position = self.which_buffer.value
+      flick = (position + 1) % 2
+      self.which_buffer.value = flick
+      return position, flick
+
+  def append(self, data):
+    with self.ctrl_flick:
+      position, flick = self.flick()
+      buffer = self.buffers[position]
+      buffer.append(data)
+      position, flick = self.flick()
+      buffer = self.buffers[position]
+      buffer.append(data)
+
+  def __getitem__(self, index):
+    with self.ctrl.read:
+      buffer = self.buffers[self.which_buffer.value]
+      return buffer[index]
+
+  def __len__(self):
+    with self.ctrl.read:
+      buffer = self.buffers[self.which_buffer.value]
+      return len(buffer)
+
+def SchemaBuffer(schema, size, double=False):
   result = ...
-  if schema is None:
+  if double:
+    left = SchemaBuffer(schema, size)
+    right = SchemaBuffer(schema, size)
+    result = DoubleBuffer(left, right)
+  elif schema is None:
     result = NoneBuffer()
   elif torch.is_tensor(schema):
     shape = schema.shape
