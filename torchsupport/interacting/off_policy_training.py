@@ -143,6 +143,7 @@ class OffPolicyTraining(Training):
   def step(self):
     self.current_losses["reward"] = float(self.statistics.total)
     self.current_losses["length"] = float(self.statistics.length)
+    self.current_losses["environment steps"] = float(self.statistics.steps)
 
     for _ in range(self.auxiliary_steps):
       self.auxiliary_step()

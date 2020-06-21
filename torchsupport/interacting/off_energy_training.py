@@ -3,6 +3,7 @@ import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as func
+from torch.utils.data import Dataset
 
 from tensorboardX import SummaryWriter
 
@@ -21,6 +22,19 @@ from torchsupport.interacting.distributor_task import DefaultDistributor
 from torchsupport.interacting.data_collector import ExperienceCollector
 from torchsupport.interacting.stats import EnergyStatistics
 
+class InfiniteWrapper(Dataset):
+  def __init__(self, data, steps=1, batch=1):
+    self.data = data
+    self.steps = steps
+    self.batch = batch
+
+  def __getitem__(self, index):
+    index = index % len(self.data)
+    return self.data[index]
+
+  def __len__(self):
+    return self.steps * self.batch
+
 class OffEnergyTraining(Training):
   checkpoint_parameters = Training.checkpoint_parameters + [
     TrainingState(),
@@ -35,6 +49,7 @@ class OffEnergyTraining(Training):
                decay=1.0,
                max_steps=1_000_000,
                buffer_size=100_000,
+               double=False,
                score_steps=1,
                auxiliary_steps=1,
                n_workers=8,
@@ -69,16 +84,24 @@ class OffEnergyTraining(Training):
     self.decay = decay
     self.score = score.to(device)
     self.energy = energy
-    self.collector = EnergyCollector(energy, integrator, self.batch_size)
+    self.collector = EnergyCollector(
+      energy, integrator, batch_size=2 * self.batch_size
+    )
     self.distributor = DefaultDistributor()
     self.data_collector = ExperienceCollector(
       self.distributor, self.collector, n_workers=n_workers
     )
-    self.buffer = SchemaBuffer(self.data_collector.schema(), buffer_size)
+    self.buffer = SchemaBuffer(
+      self.data_collector.schema(), buffer_size,
+      double=double
+    )
 
     self.data = data
+    self.wrapped_data = InfiniteWrapper(
+      data, steps=self.max_steps, batch=self.batch_size
+    )
     self.data_loader = DataLoader(
-      self.data, batch_size=self.batch_size, num_workers=8,
+      self.wrapped_data, batch_size=self.batch_size, num_workers=8,
       shuffle=True, drop_last=True
     )
     self.data_iter = iter(self.data_loader)
@@ -90,6 +113,10 @@ class OffEnergyTraining(Training):
 
     auxiliary_netlist = []
     self.auxiliary_names = []
+    if not auxiliary_networks:
+      self.auxiliary_steps = 0
+
+    auxiliary_networks = auxiliary_networks or {"_dummy": nn.Linear(1, 1)}
     for network in auxiliary_networks:
       self.auxiliary_names.append(network)
       network_object = auxiliary_networks[network].to(device)
@@ -151,6 +178,10 @@ class OffEnergyTraining(Training):
     try:
       data = next(self.data_iter)
     except StopIteration:
+      # NOTE: with spawn, this pickles the dataset
+      # for whatever reason.
+      # Workaround: wrap datasets in infinite
+      # length wrapper.
       self.data_iter = iter(self.data_loader)
       data = next(self.data_iter)
 
@@ -201,7 +232,7 @@ class OffEnergyTraining(Training):
     for _ in range(self.max_steps):
       self.step()
       if self.step_id % self.report_interval == 0:
-        sample = self.buffer.sample()
+        sample = self.buffer.sample(self.batch_size)
         self.each_generate(sample)
         self.validate()
       if self.step_id % self.checkpoint_interval == 0:

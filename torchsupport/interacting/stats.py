@@ -13,8 +13,10 @@ class ExperienceStatistics(Statistics):
     self.decay = decay
     self._total = torch.tensor([0.0])
     self._length = torch.tensor([0.0])
+    self._total_steps = torch.tensor([0])
     self._total.share_memory_()
     self._length.share_memory_()
+    self._total_steps.share_memory_()
 
   def pull_changes(self):
     pass
@@ -26,6 +28,7 @@ class ExperienceStatistics(Statistics):
     with self.ctrl.write:
       self._total[0] = (1 - self.decay) * stats.total + self.decay * self._total[0]
       self._length[0] = (1 - self.decay) * stats.length + self.decay * self._length[0]
+      self._total_steps[0] = self._total_steps[0] + stats.length
 
   @property
   def total(self):
@@ -36,6 +39,11 @@ class ExperienceStatistics(Statistics):
   def length(self):
     with self.ctrl.read:
       return self._length
+
+  @property
+  def steps(self):
+    with self.ctrl.read:
+      return self._total_steps
 
 class EnergyStatistics(Statistics):
   pass
