@@ -1,8 +1,9 @@
 import random
-from collections import namedtuple
 
 import torch
 from torch.distributions import Categorical
+
+from torchsupport.data.namedtuple import namedtuple
 
 from torchsupport.interacting.policies.policy import Policy, ModulePolicy
 

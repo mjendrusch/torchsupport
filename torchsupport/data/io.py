@@ -4,6 +4,7 @@ import numpy as np
 import time
 
 from torchsupport.data.tensor_provider import TensorProvider
+from torchsupport.data.namedtuple import NamedTuple
 
 import os
 
@@ -108,9 +109,9 @@ class DeviceMovable():
 def to_device(data, device):
   if isinstance(data, torch.Tensor):
     return data.to(device)
-  if isinstance(data, tuple) and hasattr(data, "_asdict"):
+  if isinstance(data, NamedTuple):
     typ = type(data)
-    dict_val = to_device(data._asdict(), device)
+    dict_val = to_device(data.asdict(), device)
     return typ(**dict_val)
   if isinstance(data, (list, tuple)):
     return [

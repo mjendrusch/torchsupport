@@ -1,7 +1,8 @@
-from collections import namedtuple
-
 import torch
 import torch.multiprocessing as mp
+
+from torchsupport.data.io import make_differentiable
+from torchsupport.data.namedtuple import namedtuple
 
 class AbstractCollector:
   def pull_changes(self):
@@ -112,7 +113,7 @@ class EnvironmentCollector(AbstractCollector):
     discounted = 0
     for step in reversed(trajectory):
       discounted = step.rewards + self.discount * discounted
-      result = [step._replace(returns=discounted)] + result
+      result = [step.replace(returns=discounted)] + result
     return result
 
   def compute_statistics(self, trajectory):
@@ -123,7 +124,8 @@ class EnvironmentCollector(AbstractCollector):
 class EnergyCollector(AbstractCollector):
   data_type = namedtuple("Data", [
     "initial_state", "final_state",
-    "initial_energy", "final_energy"
+    "initial_energy", "final_energy",
+    "args"
   ])
   stat_type = namedtuple("Stat", [
     "energy"
@@ -132,8 +134,9 @@ class EnergyCollector(AbstractCollector):
   def __init__(self, energy, integrator, batch_size=32):
     self.integrator = integrator
     self.energy = energy.move()
-    self.batch_size = 32
+    self.batch_size = batch_size
     self.batch = None
+    self.args = None
 
   def pull_changes(self):
     self.energy.pull()
@@ -146,33 +149,45 @@ class EnergyCollector(AbstractCollector):
 
   def initial_state(self):
     if self.batch is None:
-      self.batch = self.energy.prepare().detach()
+      self.batch, self.args = self.energy.prepare(self.batch_size)
     batch = self.batch
-    batch_energy = self.energy(batch).detach()
+    args = self.args
+    pass_batch, pass_args = self.energy.pack_batch(batch, args)
+    batch_energy = self.energy(pass_batch, *pass_args).detach()
     return self.data_type(
       initial_state=batch,
       final_state=batch,
       initial_energy=batch_energy,
-      final_energy=batch_energy
+      final_energy=batch_energy,
+      args=args
     )
 
   def step(self, state):
-    batch = state.final_energy
+    batch = state.final_state
+    args = state.args
     energy = state.final_energy
-    batch = self.energy.reset(batch, energy).detach()
-    new_batch = self.integrator(self.energy, batch).detach()
+    batch, args = self.energy.reset(batch, args, energy)
+    pass_batch, pass_args = self.energy.pack_batch(batch, args)
+    #print(self.energy.energy._module.module.postprocess.weight)
+    new_batch = self.integrator.integrate(
+      self.energy, pass_batch, *pass_args
+    ).detach()
+    # make_differentiable(new_batch, False)
+    new_batch = self.energy.unpack_batch(new_batch)
     new_energy = self.energy(new_batch).detach()
 
     return self.data_type(
       initial_state=batch, final_state=new_batch,
-      initial_energy=energy, final_energy=new_energy
+      initial_energy=energy, final_energy=new_energy,
+      args=args
     )
 
   def schema(self):
     schema = self.energy.schema()
     return self.data_type(
-      initial_state=schema.state, final_state=schema.state,
-      initial_energy=schema.energy, final_energy=schema.energy
+      initial_state=schema.batch, final_state=schema.batch,
+      initial_energy=schema.energy, final_energy=schema.energy,
+      args=schema.args
     )
 
   def compute_statistics(self, trajectory):
@@ -180,18 +195,27 @@ class EnergyCollector(AbstractCollector):
     length = len(trajectory)
     return self.stat_type(energy=energy / length)
 
+  def split_trajectory(self, state):
+    shaped_args = state.args or [None] * len(state.initial_state)
+    state = state.replace(args=shaped_args)
+    trajectory = [
+      self.data_type(
+        initial_state=initial, final_state=final,
+        initial_energy=E_i, final_energy=E_f,
+        args=arg
+      )
+      for initial, final, E_i, E_f, arg in zip(*state)
+    ]
+    return trajectory
+
   def sample_trajectory(self):
     self.pull_changes()
     self.initialize()
     state = self.initial_state()
     state = self.step(state)
-    self.batch = state
+    self.batch = state.final_state
+    self.args = state.args
     self.push_changes()
-    trajectory = [
-      self.data_type(
-        initial_state=initial, final_state=final,
-        initial_energy=E_i, final_energy=E_f
-      )
-      for initial, final, E_i, E_f in zip(*state)
-    ]
+
+    trajectory = self.split_trajectory(state)
     return trajectory

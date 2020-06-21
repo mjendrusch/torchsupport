@@ -1,9 +1,8 @@
-from collections import namedtuple
-
 import torch
 import torch.multiprocessing as mp
 
 from torchsupport.interacting.control import ReadWriteControl
+from torchsupport.data.namedtuple import NamedTuple, namedtuple
 
 class AbstractBuffer:
   def __getitem__(self, index):
@@ -305,8 +304,8 @@ class CombinedBuffer(AbstractBuffer):
 
   def data_size(self, data):
     items = {}
-    if isinstance(data, tuple) and hasattr(data, "_asdict"):
-      data = data._asdict()
+    if isinstance(data, NamedTuple):
+      data = data.asdict()
     result_size = None
     for key in self.buffers:
       buffer = self.buffers[key]
@@ -357,7 +356,7 @@ class CombinedBuffer(AbstractBuffer):
         for item in data:
           self._append_single(item)
       else:
-        self._append_single(item)
+        self._append_single(data)
 
   def __getitem__(self, index):
     with self.ctrl.read:
@@ -436,8 +435,8 @@ def SchemaBuffer(schema, size, double=False):
       key : SchemaBuffer(schema[key], size)
       for key in schema
     })
-  elif isinstance(schema, tuple) and hasattr(schema, "_asdict"):
-    result = SchemaBuffer(schema._asdict(), size)
+  elif isinstance(schema, NamedTuple):
+    result = SchemaBuffer(schema.asdict(), size)
   else:
     raise ValueError(f"{type(schema)} is not a valid schema type.")
   return result

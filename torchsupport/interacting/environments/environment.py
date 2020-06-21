@@ -1,4 +1,4 @@
-from collections import namedtuple
+from torchsupport.data.namedtuple import namedtuple
 
 class Environment:
   data_type = namedtuple("Data", [

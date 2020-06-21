@@ -57,7 +57,7 @@ class ReadWriteControl:
   def changed(self):
     timestamp = self.timestamp.value
     local_timestamp = self.local_timestamp
-    return local_timestamp < timestamp
+    return local_timestamp != timestamp
 
   @property
   def read(self):
