@@ -357,13 +357,15 @@ def _gradient_norm(inputs, parameters):
   return grad_sum, out
 
 class ClassifierGANTraining():
-  def __init__(self, classifier, optimizer=torch.optim.Adam, classifier_optimizer_kwargs=None):
+  def __init__(self, classifier, fixed=False, autonomous=False, optimizer=torch.optim.Adam, classifier_optimizer_kwargs=None):
     self.checkpoint_parameters += [
       NetState("classifier"),
       NetState("classifier_optimizer")
     ]
     if classifier_optimizer_kwargs is None:
       classifier_optimizer_kwargs = {}
+    self.autonomous = autonomous
+    self.fixed = fixed
     self.classifier = classifier.to(self.device)
     self.classifier_optimizer = optimizer(
       self.classifier.parameters(),
@@ -381,22 +383,63 @@ class ClassifierGANTraining():
 
     return loss_val
 
+  def entropy(self, result):
+    out = result.softmax(dim=1) * result.log_softmax(dim=1)
+    out = out.sum(dim=1).mean()
+    return out
+
+  def classifier_penalty(self, result):
+    if isinstance(result, (list, tuple)):
+      loss_val = 0.0
+      for res, lbl in zip(result, label[0]):
+        loss_val += self.entropy(res)
+    else:
+      loss_val = self.entropy(result)
+
+    return -loss_val
+
   def generator_loss(self, data, generated, sample):
     loss_val = super().generator_loss(data, generated, sample)
     gen, *label = generated
     dat, *dat_label = data
     classifier_fake = self.classifier_loss(self.classifier(gen), label)
-    classifier_real = self.classifier_loss(self.classifier(dat), dat_label)
 
-    self.current_losses["classifier real"] = float(classifier_real)
     self.current_losses["classifier fake"] = float(classifier_fake)
 
-    return loss_val + classifier_real + classifier_fake
+    if not self.autonomous:
+      classifier_real = self.classifier_loss(self.classifier(dat), dat_label)
+
+      self.current_losses["classifier real"] = float(classifier_real)
+
+      return loss_val + classifier_real + classifier_fake
+
+    return loss_val + classifier_fake
+
+  def classifier_step(self, data):
+    self.classifier_optimizer.zero_grad()
+    data = to_device(data, self.device)
+    data, generated, sample = self.run_generator(data)
+    dat, *dat_label = data
+    gen, *gen_label = generated
+    result = self.classifier(dat)
+    fake_result = self.classifier(gen)
+    classifier_real = self.classifier_loss(result, dat_label)
+    self.current_losses["classifier real"] = float(classifier_real)
+    entropy_penalty = self.classifier_penalty(fake_result)
+    self.current_losses["classifier penalty"] = float(entropy_penalty)
+    loss_val = classifier_real + 0.1 * entropy_penalty
+    loss_val.backward()
+    self.classifier_optimizer.step()
 
   def generator_step(self, data):
-    self.classifier_optimizer.zero_grad()
-    super().generator_step(data)
-    self.classifier_optimizer.step()
+    if self.autonomous:
+      super().generator_step(data)
+      self.classifier_step(data)
+    else:
+      self.classifier_optimizer.zero_grad()
+      super().generator_step(data)
+      if not self.fixed:
+        self.classifier_optimizer.step()
 
 class CollapseGANTraining():
   def __init__(self, diversity_weight):
