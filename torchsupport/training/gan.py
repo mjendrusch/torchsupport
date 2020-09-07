@@ -256,7 +256,7 @@ class AbstractGANTraining(Training):
 
 class GANTraining(AbstractGANTraining):
   """Standard GAN training setup."""
-  def __init__(self, generator, discriminator, data, **kwargs):
+  def __init__(self, generator, discriminator, data, smoothing=0.1, **kwargs):
     """Standard setup of a generator and discriminator
     neural network playing a minimax game towards minimization
     of the Jensen-Shannon entropy.
@@ -269,6 +269,7 @@ class GANTraining(AbstractGANTraining):
     """
     self.generator = ...
     self.discriminator = ...
+    self.smoothing = smoothing
     super(GANTraining, self).__init__(
       {"generator": generator},
       {"discriminator": discriminator},
@@ -291,10 +292,9 @@ class GANTraining(AbstractGANTraining):
 
   def discriminator_loss(self, generated, real,
                          generated_result, real_result):
-    gen_noise = 0.1 * torch.rand(generated_result.size(0), 1).to(self.device)
-    real_noise = 0.1 * torch.rand(real_result.size(0), 1).to(self.device)
+    real_noise = self.smoothing * torch.ones(real_result.size(0), 1).to(self.device)
     generated_loss = func.binary_cross_entropy_with_logits(
-      generated_result, torch.ones(generated_result.size(0), 1).to(self.device) - gen_noise
+      generated_result, torch.ones(generated_result.size(0), 1).to(self.device)
     )
     real_loss = func.binary_cross_entropy_with_logits(
       real_result, torch.zeros(real_result.size(0), 1).to(self.device) + real_noise
