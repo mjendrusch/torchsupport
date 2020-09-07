@@ -41,7 +41,7 @@ class FixUpBlockNd(nn.Module):
     super(FixUpBlockNd, self).__init__()
 
     conv = getattr(nn, f"Conv{N}d")
-    
+
     self.normalization = normalization or (lambda x: x)
     self.convs = nn.ModuleList([
       normalization(conv(in_size, out_size, 3, bias=False, **kwargs)),

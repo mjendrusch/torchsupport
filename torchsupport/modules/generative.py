@@ -7,6 +7,20 @@ import torchsupport.modules.normalization as tsn
 from torchsupport.modules.attention import NonLocal
 
 class UpsampleBlock(nn.Module):
+  r"""Single simple generator block.
+
+  Shape:
+    - Inputs: :math:`(N, C_{in}, H, W)`
+    - Outputs: :math:`(N, C_{out}, H \cdot U, W \cdot U)`
+
+  Args:
+    in_size (int): number of input features.
+    out_size (int): number of output features.
+    size (tuple): shape of the initial constant input tensor.
+      Default: None
+    upsample (int): upsampling scaling factor.
+    activation (function): activation function. Default: func.elu
+  """
   def __init__(self, in_size, out_size,
                size=None, upsample=2,
                activation=func.elu):
@@ -39,8 +53,27 @@ class UpsampleBlock(nn.Module):
     return self.pixnorm(out)
 
 class StyleGANBlock(nn.Module):
+  r"""Single generator block of a StyleGAN generator.
+
+  Shape:
+    - Inputs: :math:`(N, C_{in}, H, W)`
+    - Latents: :math:`(N, C_{latent})`
+    - Outputs: :math:`(N, C_{out}, H \cdot U, W \cdot U)`
+
+  Args:
+    in_size (int): number of input features.
+    out_size (int): number of output features.
+    ada_size (int): size of the condition space.
+    size (tuple): shape of the initial constant input tensor.
+      Default: None
+    upsample (int): upsampling scaling factor.
+    normalization (type): type of weight normalization.
+      Default: lambda x: x
+    activation (function): activation function. Default: func.elu
+  """
   def __init__(self, in_size, out_size, ada_size,
-               size=None, upsample=2, activation=func.elu, normalization=lambda x: x):
+               size=None, upsample=2, activation=func.elu,
+               normalization=lambda x: x):
     super(StyleGANBlock, self).__init__()
     self.upsample = upsample
     self.register_parameter(
@@ -85,6 +118,23 @@ class StyleGANBlock(nn.Module):
     return out
 
 class BigGANBlock(nn.Module):
+  r"""Single generator block of a BigGAN generator.
+
+  Shape:
+    - Inputs: :math:`(N, C_{in}, H, W)`
+    - Latents: :math:`(N, C_{latent})`
+    - Outputs: :math:`(N, C_{out}, H \cdot U, W \cdot U)`
+
+  Args:
+    in_size (int): number of input features.
+    out_size (int): number of output features.
+    latent_size (int): size of the latent space.
+    hidden_size (int): number of hidden features. Default: in_size // 4
+    upsample (int): upsampling scaling factor.
+    normalization (type): type of adaptive normalization.
+      Default: AdaptiveBatchNorm
+    activation (function): activation function. Default: func.relu
+  """
   def __init__(self, in_size, out_size, latent_size,
                hidden_size=None, upsample=1,
                normalization=tsn.AdaptiveBatchNorm,
@@ -123,6 +173,19 @@ class BigGANBlock(nn.Module):
     return out + skip
 
 class BigGANDiscriminatorBlock(nn.Module):
+  r"""Single discriminator block of a BigGAN discriminator.
+
+  Shape:
+    - Inputs: :math:`(N, C_{in}, H, W)`
+    - Outputs: :math:`(N, C_{out}, H / D, W / D)`
+
+  Args:
+    in_size (int): number of input features.
+    out_size (int): number of output features.
+    hidden_size (tuple): number of hidden features. Default: out_size
+    downsample (int): downsampling scaling factor.
+    activation (function): activation function. Default: func.relu
+  """
   def __init__(self, in_size, out_size,
                hidden_size=None, downsample=2,
                activation=func.relu):
@@ -144,7 +207,7 @@ class BigGANDiscriminatorBlock(nn.Module):
       self.project = spectral_norm(nn.Conv2d(in_size, out_size - in_size, 1))
     else:
       self.project = lambda x: None
-  
+
   def forward(self, inputs):
     skip = func.avg_pool2d(inputs, self.downsample)
     missing = self.project(skip)
@@ -159,4 +222,3 @@ class BigGANDiscriminatorBlock(nn.Module):
       out = block(out)
 
     return skip + out
-

@@ -10,7 +10,7 @@ class MLP(nn.Module):
 
   Applies a series of matrix multiplications interleaved
   with nonlinear activation and optional normalization
-  to a batch of input tensors. 
+  to a batch of input tensors.
 
   Shape:
     - Input: :math:`(N, C_{in})`

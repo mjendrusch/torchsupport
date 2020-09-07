@@ -4,6 +4,12 @@ import torch.nn.functional as func
 from torch.nn.utils.spectral_norm import spectral_norm
 
 class PixelNorm(nn.Module):
+  r"""Pixel-wise feature normalization.
+
+  Args:
+    eps (float): machine epsilon. Default: 1e-16
+    p (float): exponent of the :math:`L^p` norm used for normalization.
+  """
   def __init__(self, eps=1e-16, p=2):
     super(PixelNorm, self).__init__()
     self.eps = eps
@@ -25,6 +31,17 @@ class AdaptiveInstanceNorm(nn.Module):
     scale = self.scale(style).view(style.size(0), -1, 1, 1)
     bias = self.bias(style).view(style.size(0), -1, 1, 1)
     return scale * (inputs - mean) / (std + 1e-6) + bias
+
+class Affine(nn.Module):
+  def __init__(self, in_size, ada_size):
+    super(Affine, self).__init__()
+    self.scale = nn.Linear(ada_size, in_size)
+    self.bias = nn.Linear(ada_size, in_size)
+
+  def forward(self, inputs, style):
+    scale = self.scale(style).view(style.size(0), -1, 1, 1)
+    bias = self.bias(style).view(style.size(0), -1, 1, 1)
+    return scale * inputs + bias
 
 class AdaptiveInstanceNormPP(AdaptiveInstanceNorm):
   def __init__(self, in_size, ada_size):

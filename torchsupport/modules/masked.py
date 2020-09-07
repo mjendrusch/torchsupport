@@ -3,6 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as func
 
 class MaskedConv1d(nn.Conv1d):
+  r"""1D causally masked convolution for autoregressive
+  convolutional models.
+
+  Thin wrapper around :class:`nn.Conv1d`."""
   def __init__(self, *args, **kwargs):
     super().__init__(*args, **kwargs)
     mask = torch.zeros_like(self.weight)
@@ -16,6 +20,10 @@ class MaskedConv1d(nn.Conv1d):
     return super().forward(inputs)
 
 class MaskedConv2d(nn.Conv2d):
+  r"""2D causally masked convolution for autoregressive
+  convolutional models.
+
+  Thin wrapper around :class:`nn.Conv2d`."""
   def __init__(self, *args, **kwargs):
     super().__init__(*args, **kwargs)
     mask = torch.zeros_like(self.weight)
@@ -31,6 +39,10 @@ class MaskedConv2d(nn.Conv2d):
     return super().forward(inputs)
 
 class MaskedConv3d(nn.Conv3d):
+  r"""3D causally masked convolution for autoregressive
+  convolutional models.
+
+  Thin wrapper around :class:`nn.Conv3d`."""
   def __init__(self, *args, **kwargs):
     super().__init__(*args, **kwargs)
     mask = torch.zeros_like(self.weight)

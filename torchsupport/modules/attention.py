@@ -4,6 +4,14 @@ import torch.nn.functional as func
 import sys
 
 class NonLocal(nn.Module):
+  r"""Non-local block for self-attention on 2D grid-structured data.
+
+  Args:
+    in_size (int): number of input features.
+    attention_size (int): number of attention heads. Default: 32
+    size (optional int): downscaled input size for input pooling.
+    scale (optional int): downscaling scale for input pooling.
+  """
   def __init__(self, in_size, attention_size=32, size=None, scale=None):
     super(NonLocal, self).__init__()
     self.size = size
@@ -35,16 +43,16 @@ class NonLocal(nn.Module):
     return self.project(result) + inputs
 
 class AttentionBranch(nn.Module):
-  def __init__(self, N, branches, in_channels, preprocess=None, activation=func.tanh):
-    """Pixel-wise branch selection layer using attention.
+  r"""Pixel-wise branch selection layer using attention.
 
-    Args:
-      N (int): dimensionality of convolutions.
-      branches (iterable nn.Module): neural network branches to choose from.
-      in_channels (int): number of input channels.
-      preprocess (nn.Module): module performing feature preprocessing for attention.
-      activation (nn.Module): activation function for attention computation. 
-    """
+  Args:
+    N (int): dimensionality of convolutions.
+    branches (iterable nn.Module): neural network branches to choose from.
+    in_channels (int): number of input channels.
+    preprocess (nn.Module): module performing feature preprocessing for attention.
+    activation (nn.Module): activation function for attention computation. 
+  """
+  def __init__(self, N, branches, in_channels, preprocess=None, activation=func.tanh):
     super(AttentionBranch, self).__init__()
     self.is_module = False
     if isinstance(branches, nn.Module):
@@ -82,20 +90,20 @@ for dim in range(1, 4):
   setattr(sys.modules[__name__], f"AttentionBranch{dim}d", _generating_function_outer(dim))
 
 class GuidedAttention(nn.Module):
+  r"""Pixel-wise attention gated by a guide image.
+
+  Args:
+    N (int): dimensionality of convolutions.
+    in_channels (int): number of input channels.
+    out_channels (int): number of attention heads.
+    hidden (int): number of hidden channels.
+    inner_activation (nn.Module): activation on guide and input sum.
+    outer_activation (nn.Module): activation on attention.
+    reduce (bool): reduce or concatenate the results of the attention heads.
+  """
   def __init__(self, N, in_channels, out_channels, hidden=32,
                inner_activation=func.relu, outer_activation=func.tanh,
                reduce=True):
-    """Pixel-wise attention gated by a guide image.
-
-    Args:
-      N (int): dimensionality of convolutions.
-      in_channels (int): number of input channels.
-      out_channels (int): number of attention heads.
-      hidden (int): number of hidden channels.
-      inner_activation (nn.Module): activation on guide and input sum.
-      outer_activation (nn.Module): activation on attention.
-      reduce (bool): reduce or concatenate the results of the attention heads.
-    """
     super(GuidedAttention, self).__init__()
     self.input_embedding = nn.__dict__[f"Conv{N}d"](in_channels, hidden, 1)
     self.guide_embedding = nn.__dict__[f"Conv{N}d"](in_channels, hidden, 1)

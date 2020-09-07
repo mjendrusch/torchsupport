@@ -4,15 +4,15 @@ import torch.nn.functional as func
 from torchsupport.ops.shape import batchexpand, flatten
 
 class Combination(nn.Module):
-  def __init__(self, combinator, evaluator):
-    """Structural element for disjoint combination / evaluation networks.
+  r"""Structural element for disjoint combination / evaluation networks.
 
-    Args:
-      combinator (nn.Module): module joining two disjoint input tensors,
-        for example by concatenation.
-      evaluator (nn.Module): module taking a combined tensor, and performing
-        computation on that tensor.
-    """
+  Args:
+    combinator (nn.Module): module joining two disjoint input tensors,
+      for example by concatenation.
+    evaluator (nn.Module): module taking a combined tensor, and performing
+      computation on that tensor.
+  """
+  def __init__(self, combinator, evaluator):
     super(Combination, self).__init__()
     self.combinator = combinator
     self.evaluator = evaluator
@@ -23,13 +23,13 @@ class Combination(nn.Module):
     return result
 
 class Concatenation(Combination):
-  def __init__(self, evaluator):
-    """Structural element concatenating two tensors.
+  r"""Structural element concatenating two tensors.
 
-    Args:
-      evaluator (nn.Module): module taking the concatenated tensor, and
-        performing computation on that tensor.
-    """
+  Args:
+    evaluator (nn.Module): module taking the concatenated tensor, and
+      performing computation on that tensor.
+  """
+  def __init__(self, evaluator):
     super(Concatenation, self).__init__(
       lambda input, task: _concatenate(input, task),
       evaluator
@@ -48,17 +48,17 @@ def _concatenate(input, task):
   return concatenated
 
 class ConnectedCombination(Concatenation):
+  r"""Structural element performing a linear map on a concatenation
+  of two Tensors.
+  
+  Args:
+    evaluator (nn.Module): module taking a combined tensor, and
+      performing computation on that tensor.
+    inputs (int): number of input features.
+    outputs (int): desired number of output features.
+    batch_norm (bool): perform batch normalization?
+  """
   def __init__(self, evaluator, inputs, outputs, batch_norm=True):
-    """Structural element performing a linear map on a concatenation
-    of two Tensors.
-    
-    Args:
-      evaluator (nn.Module): module taking a combined tensor, and
-        performing computation on that tensor.
-      inputs (int): number of input features.
-      outputs (int): desired number of output features.
-      batch_norm (bool): perform batch normalization?
-    """
     super(ConnectedCombination, self).__init__(evaluator)
     self.connected = nn.Linear(inputs, outputs)
     if batch_norm:
@@ -76,16 +76,16 @@ class ConnectedCombination(Concatenation):
     return result
 
 class BilinearCombination(Combination):
-  def __init__(self, evaluator, inputs, outputs, batch_norm=True):
-    """Structural element combining two tensors by bilinear transformation.
+  r"""Structural element combining two tensors by bilinear transformation.
 
-    Args:
-      evaluator (nn.Module): module taking a combined tensor, and
-                  performing computation on that tensor.
-      inputs (list or tuple): number of input features for each input tensor.
-      outputs (int): number of output features.
-      batch_norm (bool): perform batch normalization?
-    """
+  Args:
+    evaluator (nn.Module): module taking a combined tensor, and
+                performing computation on that tensor.
+    inputs (list or tuple): number of input features for each input tensor.
+    outputs (int): number of output features.
+    batch_norm (bool): perform batch normalization?
+  """
+  def __init__(self, evaluator, inputs, outputs, batch_norm=True):
     bilinear = nn.Bilinear(*inputs, outputs)
     if batch_norm:
       batch_norm_layer = nn.BatchNorm1d(outputs)

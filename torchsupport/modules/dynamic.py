@@ -3,13 +3,13 @@ import torch.nn as nn
 import torch.nn.functional as func
 
 class DynamicOp(nn.Module):
-  def __init__(self, op, generator):
-    """General operation with dynamically generated weights.
+  r"""General operation with dynamically generated weights.
 
-    Args:
-      op (nn.Module): the operation in question.
-      generator (nn.Module): weight generating network.
-    """
+  Args:
+    op (nn.Module): the operation in question.
+    generator (nn.Module): weight generating network.
+  """
+  def __init__(self, op, generator):
     super(DynamicOp, self).__init__()
     self.generator = generator
     self.op = op
@@ -25,18 +25,18 @@ class DynamicOp(nn.Module):
     return result
 
 class DynamicConv2d(nn.Module):
+  r"""Performs an efficient dynamic convolution using grouped convs.
+
+  Args:
+    generator (nn.Module): weight generating network, returning weights
+      of the shape `(batch_size, output_channels, input_channels, width, height)`.
+    kernel_size (int): convolution kernel size.
+    stride (int): convolution stride.
+    padding (int): convolution padding.
+    dilation (int): convolution dilation.
+  """
   def __init__(self, generator, kernel_size, stride=1,
                padding=0, dilation=1):
-    """Performs an efficient dynamic convolution using grouped convs.
-    
-    Args:
-      generator (nn.Module): weight generating network, returning weights
-        of the shape `(batch_size, output_channels, input_channels, width, height)`.
-      kernel_size (int): convolution kernel size.
-      stride (int): convolution stride.
-      padding (int): convolution padding.
-      dilation (int): convolution dilation.
-    """
     self.generator = generator
     self.kernel_size = kernel_size
     self.stride = stride
