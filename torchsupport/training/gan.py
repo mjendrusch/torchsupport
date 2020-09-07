@@ -441,6 +441,27 @@ class ClassifierGANTraining():
       if not self.fixed:
         self.classifier_optimizer.step()
 
+class StaticClassifierGANTraining:
+  def __init__(self, classifier, classifier_weight=1.0):
+    self.classifier = classifier.to(self.device)
+    self.classifier_weight = classifier_weight
+
+  def classifier_loss(self, result, label):
+    if isinstance(result, (list, tuple)):
+      loss_val = 0.0
+      for res, lbl in zip(result, label[0]):
+        loss_val += func.cross_entropy(res, lbl.argmax(dim=1).view(-1))
+    else:
+      loss_val = func.cross_entropy(result, label.argmax(dim=1).view(-1))
+
+    return loss_val
+
+  def generator_loss(self, data, generated, sample):
+    loss_val = super().generator_loss(data, generated, sample)
+    gen, *label = generated
+    classifier_fake = self.classifier_loss(self.classifier(gen), label)
+    return loss_val + self.classifier_weight * classifier_fake
+
 class CollapseGANTraining():
   def __init__(self, diversity_weight):
     self.diversity_weight = diversity_weight
