@@ -39,3 +39,30 @@ class Sampler:
         trajectory.append(experience)
       trajectory.complete()
       return trajectory
+
+class TaskSampler:
+  def __init__(self, policies, environment):
+    self.policies = policies
+    self.trajectories = []
+    self.environment = environment
+
+  def sample(self, agent_output, inputs=None):
+    raise NotImplementedError("Abstract.")
+
+  def run_step(self, initial_state, inputs=None):
+    raise NotImplementedError("Abstract.")
+
+  def step(self, inputs=None):
+    initial_state = self.environment.observe()
+
+    agent_output, agent_state = self.run_step(initial_state, inputs)
+
+    action = self.sample(agent_output, agent_state)
+    reward = self.environment.act(action)
+    terminal = int(self.environment.is_done())
+    final_state = self.environment.observe()
+
+    return Experience(
+      initial_state, final_state, action, reward,
+      terminal=terminal, logits=agent_output, outputs=agent_state
+    )

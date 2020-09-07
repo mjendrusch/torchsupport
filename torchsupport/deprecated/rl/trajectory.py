@@ -1,3 +1,7 @@
+from copy import copy
+
+import numpy as np
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as func
@@ -5,6 +9,33 @@ import torch.nn.functional as func
 from torchsupport.data.io import DeviceMovable, to_device
 from torchsupport.data.collate import Collatable, default_collate
 from torchsupport.structured.chunkable import Chunkable, scatter_chunked
+
+def _clone_aux(data):
+  if isinstance(data, torch.Tensor):
+    return data.clone()
+  if isinstance(data, (list, tuple)):
+    return type(data)([_clone_aux(item) for item in data])
+  if isinstance(data, dict):
+    return {key: _clone_aux(data[key]) for key in data}
+  return data
+
+def _numpy_aux(data):
+  if isinstance(data, torch.Tensor):
+    return data.numpy()
+  if isinstance(data, (list, tuple)):
+    return type(data)([_numpy_aux(item) for item in data])
+  if isinstance(data, dict):
+    return {key: _numpy_aux(data[key]) for key in data}
+  return data
+
+def _tensor_aux(data):
+  if isinstance(data, np.ndarray):
+    return torch.Tensor(data)
+  if isinstance(data, (list, tuple)):
+    return type(data)([_tensor_aux(item) for item in data])
+  if isinstance(data, dict):
+    return {key: _tensor_aux(data[key]) for key in data}
+  return data
 
 class Experience(Collatable, Chunkable, DeviceMovable):
   __slots__ = [
@@ -19,6 +50,37 @@ class Experience(Collatable, Chunkable, DeviceMovable):
     self.reward = reward
     self.logits = logits
     self.outputs = outputs
+
+  def numpy(self):
+    self.initial_state = _numpy_aux(self.initial_state)
+    self.final_state = _numpy_aux(self.final_state)
+    self.terminal = _numpy_aux(self.terminal)
+    self.action = _numpy_aux(self.action)
+    self.reward = _numpy_aux(self.reward)
+    self.logits = _numpy_aux(self.logits)
+    self.outputs = _numpy_aux(self.outputs)
+    return self
+
+  def torch(self):
+    self.initial_state = _tensor_aux(self.initial_state)
+    self.final_state = _tensor_aux(self.final_state)
+    self.terminal = self.terminal
+    self.action = _tensor_aux(self.action)
+    self.reward = _tensor_aux(self.reward)
+    self.logits = _tensor_aux(self.logits)
+    self.outputs = _tensor_aux(self.outputs)
+    return self
+
+  def clone(self):
+    return Experience(
+      initial_state=_clone_aux(self.initial_state),
+      final_state=_clone_aux(self.final_state),
+      action=_clone_aux(self.action),
+      reward=_clone_aux(self.reward),
+      terminal=self.terminal,
+      logits=_clone_aux(self.logits),
+      outputs=_clone_aux(self.logits)
+    )
 
   @classmethod
   def collate(cls, inputs):
@@ -93,6 +155,28 @@ class Experience(Collatable, Chunkable, DeviceMovable):
 class Trajectory:
   def __init__(self):
     self.experiences = []
+
+  def numpy(self):
+    self.experiences = [
+      exp.numpy()
+      for exp in self.experiences
+    ]
+    return self
+
+  def torch(self):
+    self.experiences = [
+      exp.torch()
+      for exp in self.experiences
+    ]
+    return self
+
+  def clone(self):
+    result = copy(self)
+    result.experiences = [
+      exp.clone()
+      for exp in result.experiences
+    ]
+    return result
 
   def append(self, experience):
     self.experiences.append(experience)

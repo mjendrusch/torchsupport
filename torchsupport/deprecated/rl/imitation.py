@@ -10,7 +10,7 @@ from torchsupport.rl.trajectory import Trajectory
 from torchsupport.rl.sampler import Sampler
 from torchsupport.rl.data import ExperienceGenerator, ReplayBuffer
 
-class OffPolicyTraining(Training):
+class EnvironmentConditionedTraining(Training):
   def __init__(self, agent, environment,
                optimizer=torch.optim.Adam,
                optimizer_kwargs=None,
@@ -90,6 +90,9 @@ class OffPolicyTraining(Training):
     outputs = self.run_networks(data)
     self.update(*outputs)
     self.each_step()
+
+  def initialize_buffer(self, experience):
+    pass # TODO: set up a replay buffer with offline data.
 
   def train(self):
     self.generator.start(self.agent)

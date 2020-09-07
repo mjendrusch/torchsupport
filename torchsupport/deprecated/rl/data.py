@@ -39,6 +39,27 @@ class SharedModel:
       model.load_state_dict(self.model.state_dict())
     return model
 
+class SharedModelList:
+  def __init__(self, models):
+    self.models = [
+      SharedModel(model)
+      for model in models
+    ]
+
+  def update(self, models):
+    for model, reference in zip(models, self.models):
+      reference.update(model)
+
+  def read(self, models=None):
+    if models is None:
+      models = [
+        deepcopy(model.model)
+        for model in self.models
+      ]
+    for model, reference in zip(models, self.models):
+      reference.read(model=model)
+    return models
+
 class ExperienceGenerator:
   def __init__(self, model, env,
                sampler_kind=Sampler,
@@ -69,8 +90,10 @@ class ExperienceGenerator:
   def join(self):
     self.done.update(1)
     while not self.queue.empty():
+      print("rolling here")
       _ = self.queue.get_nowait()
     for proc in self.procs:
+      print("rolling there")
       proc.join()
     self.procs = []
 
@@ -86,7 +109,9 @@ class ExperienceGenerator:
     while not self.queue.empty():
       if got >= self.max_items:
         break
-      results.append(deepcopy(self.queue.get()))
+      retrieved = self.queue.get()
+      results.append(retrieved.torch())
+      del retrieved
       got += 1
     try:
       print("length", sum(map(len, results)) / len(results))
@@ -99,10 +124,11 @@ def _sampler_worker(queue, shared_model, model, environment, done, kind, traj):
   torch.set_num_threads(1)
   while True:
     if done.read():
+      print("DONE")
       break
     model = shared_model.read(model=model)
     result = sampler.sample_episode(kind=traj)
-    queue.put(result)
+    queue.put(result.numpy())
 
 class ReplayBuffer(Dataset):
   def __init__(self, size=10000):
