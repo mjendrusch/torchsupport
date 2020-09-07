@@ -627,6 +627,33 @@ class RothGANTraining(GANTraining):
 
     return loss_val + penalty, out
 
+class RGANTraining(RothGANTraining):
+  def __init__(self, *args, r1=True, r2=False, **kwargs):
+    super(RGANTraining, self).__init__(args, **kwargs)
+    self.r1 = r1
+    self.r2 = r2
+
+  def penalty(self, results, inputs):
+    norm, out = _gradient_norm(results, self.mixing_key(inputs))
+    penalty = norm ** 2
+    return penalty, out
+
+  def regularization(self, fake, real, generated_result, real_result):
+    penalty = 0.0
+    out = []
+    if self.r1:
+      real_penalty, real_out = self.penalty(real_result, real)
+      penalty += self.gamma * real_penalty.mean() / 2
+      out.append(real_out)
+    if self.r2:
+      fake_penalty, fake_out = self.penalty(generated_result, fake)
+      penalty += self.gamma * fake_penalty.mean() / 2
+      out.append(fake_out)
+
+    out = tuple(*out)
+
+    return penalty, out
+
 class GPGANTraining(GANTraining):
   """GAN training setup with zero-centered gradient penalty
   (Thanh-Tung et al. 2019) for more stable training of standard GAN."""
