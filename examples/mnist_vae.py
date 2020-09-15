@@ -6,7 +6,7 @@ from torch.utils.data import Dataset
 from torchvision.datasets import MNIST
 from torchvision.transforms import ToTensor
 
-from torchsupport.training.vae import VAETraining
+from torchsupport.training.vae import VAETraining, LoggingTypes, LoggerTypes
 
 def normalize(image):
   return (image - image.min()) / (image.max() - image.min())
@@ -59,11 +59,14 @@ class Decoder(nn.Module):
   def forward(self, sample):
     return self.decoder(sample).view(-1, 1, 28, 28)
 
+
 class MNISTVAETraining(VAETraining):
   def run_networks(self, data, *args):
     mean, logvar, reconstruction, data = super().run_networks(data, *args)
-    self.writer.add_image("target", normalize(data[0]), self.step_id)
-    self.writer.add_image("reconstruction", normalize(reconstruction[0].sigmoid()), self.step_id)
+    # self.writer.add_image("target", normalize(data[0]), self.step_id)
+    self.logger.log(LoggingTypes.IMAGE, "target", normalize(data[0]), self.step_id)
+    # self.writer.add_image("reconstruction", normalize(reconstruction[0].sigmoid()), self.step_id)
+    self.logger.log(LoggingTypes.IMAGE, "reconstruction", normalize(reconstruction[0].sigmoid()), self.step_id)
     return mean, logvar, reconstruction, data
 
 if __name__ == "__main__":
