@@ -22,7 +22,7 @@ class ResGeneratorBlock(nn.Module):
     out = self.weight * self.blocks(inputs) + self.skip(inputs)
     return out
 
-class ResGeneratorBackbone(nn.Module):
+class ResGenerator(nn.Module):
   def __init__(self, in_size=100, base_channels=64, channel_factors=None,
                kernel_size=3, activation=None, weight=None):
     super().__init__()
@@ -47,7 +47,7 @@ class ResGeneratorBackbone(nn.Module):
       out = block(out)
     return out
 
-class ResDiscriminatorBackbone(nn.Module):
+class ResDiscriminator(nn.Module):
   def __init__(self, in_size=3, base_channels=64, channel_factors=None,
                kernel_size=3, activation=None, weight=None):
     super().__init__()
