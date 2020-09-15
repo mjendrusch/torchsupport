@@ -101,8 +101,7 @@ def one_hot_encode(data, code, numeric=False):
       )), dtype=torch.int64)
       alpha_len = len(code)
   except:
-    print(data)
-    exit()
+    raise ValueError("Found undecodable character in data.")
   if numeric:
     result = coded
   else:

@@ -61,12 +61,12 @@ class DynamicConv2d(nn.Module):
     height = weight_size[3]
 
     filters = weight_size[1]
-    debatched = input.reshape(channels * batch_size, size[2], size[3])
-    result = nn.conv2d(debatched, weights,
-                       stride=self.stride,
-                       padding=self.padding,
-                       dilation=self.dilation,
-                       groups=batch_size)
+    debatched = input.reshape(channels * batch_size, *size[2:])
+    result = func.conv2d(debatched[None], weights,
+                         stride=self.stride,
+                         padding=self.padding,
+                         dilation=self.dilation,
+                         groups=batch_size)
     result = result.reshape(batch_size, filters, result.size()[2], result.size()[3])
     return result
 

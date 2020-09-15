@@ -3,8 +3,9 @@ import torch.nn as nn
 import torch.nn.functional as func
 from torch.nn.utils import spectral_norm
 
-import torchsupport.modules.normalization as tsn
-from torchsupport.modules.attention import NonLocal
+from torchsupport.modules.normalization import (
+  PixelNorm, AdaptiveBatchNorm, AdaptiveInstanceNorm
+)
 
 class UpsampleBlock(nn.Module):
   r"""Single simple generator block.
@@ -31,7 +32,7 @@ class UpsampleBlock(nn.Module):
       self.is_first = True
       total_size = torch.Size(size).numel()
       self.input = nn.Linear(in_size, out_size * total_size)
-    self.pixnorm = tsn.PixelNorm()
+    self.pixnorm = PixelNorm()
     self.convs = nn.ModuleList([
       nn.Conv2d(in_size, in_size, 3),
       nn.Conv2d(in_size, out_size, 3)
@@ -97,8 +98,8 @@ class StyleGANBlock(nn.Module):
       nn.Conv2d(in_size, out_size, 3, padding=1)
     ])
     self.adas = nn.ModuleList([
-      tsn.AdaptiveInstanceNorm(in_size, ada_size),
-      tsn.AdaptiveInstanceNorm(out_size, ada_size)
+      AdaptiveInstanceNorm(in_size, ada_size),
+      AdaptiveInstanceNorm(out_size, ada_size)
     ])
     self.activation = activation
 
@@ -137,7 +138,7 @@ class BigGANBlock(nn.Module):
   """
   def __init__(self, in_size, out_size, latent_size,
                hidden_size=None, upsample=1,
-               normalization=tsn.AdaptiveBatchNorm,
+               normalization=AdaptiveBatchNorm,
                activation=func.relu):
     super(BigGANBlock, self).__init__()
     if hidden_size is None:
