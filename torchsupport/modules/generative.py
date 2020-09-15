@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as func
 from torch.nn.utils import spectral_norm
 
+from torchsupport.modules.weights import lr_equal
 from torchsupport.modules.normalization import (
   PixelNorm, AdaptiveBatchNorm, AdaptiveInstanceNorm
 )
@@ -70,12 +71,18 @@ class StyleGANBlock(nn.Module):
     upsample (int): upsampling scaling factor.
     normalization (type): type of weight normalization.
       Default: lambda x: x
+    equalize_lr (bool): flag for learning rate equalization. If true,
+      initializes all convolutions to a standard normal distribution
+      and performs weight and learning rate-scaling at run time.
     activation (function): activation function. Default: func.elu
   """
   def __init__(self, in_size, out_size, ada_size,
                size=None, upsample=2, activation=func.elu,
-               normalization=lambda x: x):
+               normalization=None, equalize_lr=False):
     super(StyleGANBlock, self).__init__()
+    self.normalization = normalization or (lambda x: x)
+    self.equalize_lr = lr_equal if equalize_lr else (lambda x: x)
+    self.modifier = lambda x: self.normalization(self.equalize_lr(x))
     self.upsample = upsample
     self.register_parameter(
       "noise_0",
@@ -94,8 +101,8 @@ class StyleGANBlock(nn.Module):
         nn.Parameter(torch.randn(1, in_size, *size))
       )
     self.convs = nn.ModuleList([
-      nn.Conv2d(in_size, in_size, 3, padding=1),
-      nn.Conv2d(in_size, out_size, 3, padding=1)
+      self.modifier(nn.Conv2d(in_size, in_size, 3, padding=1)),
+      self.modifier(nn.Conv2d(in_size, out_size, 3, padding=1))
     ])
     self.adas = nn.ModuleList([
       AdaptiveInstanceNorm(in_size, ada_size),
