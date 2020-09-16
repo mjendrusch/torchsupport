@@ -47,42 +47,24 @@ class OffEnergyTraining(Training):
                auxiliary_networks=None,
                integrator=None,
                decay=1.0,
-               max_steps=1_000_000,
                buffer_size=100_000,
                double=False,
                score_steps=1,
                auxiliary_steps=1,
                n_workers=8,
-               batch_size=64,
-               checkpoint_interval=10,
                optimizer=torch.optim.Adam,
                optimizer_kwargs=None,
                aux_optimizer=torch.optim.Adam,
-               aux_optimizer_kwargs=None,
-               device="cpu",
-               network_name="network",
-               path_prefix=".",
-               report_interval=1000,
-               verbose=True):
-    self.epoch_id = 0
-    self.max_steps = max_steps
+               aux_optimizer_kwargs=None):
     self.score_steps = score_steps
     self.auxiliary_steps = auxiliary_steps
-    self.checkpoint_interval = checkpoint_interval
-    self.report_interval = report_interval
-    self.step_id = 0
-    self.verbose = verbose
-    self.checkpoint_path = f"{path_prefix}/{network_name}-checkpoint"
 
     self.current_losses = {}
-    self.writer = SummaryWriter(f"{path_prefix}/{network_name}")
 
     self.statistics = EnergyStatistics()
-    self.device = device
-    self.batch_size = batch_size
     self.integrator = integrator
     self.decay = decay
-    self.score = score.to(device)
+    self.score = score.to(self.device)
     self.energy = energy
     self.collector = EnergyCollector(
       energy, integrator, batch_size=2 * self.batch_size
@@ -119,7 +101,7 @@ class OffEnergyTraining(Training):
     auxiliary_networks = auxiliary_networks or {"_dummy": nn.Linear(1, 1)}
     for network in auxiliary_networks:
       self.auxiliary_names.append(network)
-      network_object = auxiliary_networks[network].to(device)
+      network_object = auxiliary_networks[network].to(self.device)
       setattr(self, network, network_object)
       auxiliary_netlist.extend(list(network_object.parameters()))
 
@@ -128,8 +110,14 @@ class OffEnergyTraining(Training):
       auxiliary_netlist, **aux_optimizer_kwargs
     )
 
-  def save_path(self):
-    return self.checkpoint_path + "-save"
+    self.checkpoint_names = dict(
+      score=self.score,
+      **{
+        name: getattr(self, name)
+        for name in self.auxiliary_names
+        if name != "_dummy"
+      }
+    )
 
   def run_score(self, sample, data):
     raise NotImplementedError("Abstract.")
@@ -202,16 +190,6 @@ class OffEnergyTraining(Training):
 
     self.each_step()
 
-  def checkpoint(self):
-    the_net = self.score
-    if isinstance(self.score, torch.nn.DataParallel):
-      the_net = the_net.module
-    netwrite(
-      the_net,
-      f"{self.checkpoint_path}-step-{self.step_id}.torch"
-    )
-    self.each_checkpoint()
-
   def validate(self):
     pass # TODO
 
@@ -227,16 +205,16 @@ class OffEnergyTraining(Training):
   def each_generate(self, data):
     pass
 
+  def report(self):
+    sample = self.buffer.sample(self.batch_size)
+    self.each_generate(sample)
+    self.validate()
+
   def train(self):
     self.initialize()
     for _ in range(self.max_steps):
       self.step()
-      if self.step_id % self.report_interval == 0:
-        sample = self.buffer.sample(self.batch_size)
-        self.each_generate(sample)
-        self.validate()
-      if self.step_id % self.checkpoint_interval == 0:
-        self.checkpoint()
+      self.log()
       self.step_id += 1
 
     self.finalize()

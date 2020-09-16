@@ -25,56 +25,34 @@ class ClusteringTraining(Training):
                order_less=True,
                loss=nn.CrossEntropyLoss(),
                optimizer=torch.optim.Adam,
-               max_epochs=50,
-               batch_size=128,
-               device="cpu",
-               report_interval=10,
-               checkpoint_interval=1000,
-               path_prefix=".",
-               network_name="network"):
-    super(ClusteringTraining, self).__init__()
-    self.net = net.to(device)
+               optimizer_kwargs=None,
+               **kwargs):
+    super(ClusteringTraining, self).__init__(**kwargs)
+    self.net = net.to(self.device)
     self.clustering = clustering
     self.data = data
     self.train_data = None
     self.loss = loss
-    self.max_epochs = max_epochs
-    self.batch_size = batch_size
-    self.device = device
 
-    self.report_interval = report_interval
-    self.checkpoint_interval = checkpoint_interval
-
-    self.checkpoint_path = f"{path_prefix}/{network_name}"
+    self.checkpoint_path = self.full_path
     self.order_less = order_less
 
     if not order_less:
-      self.classifier = nn.Linear(256, 50)
-      self.classifier = self.classifier.to(self.device)
+      self.embedding = nn.Linear(256, 50)
+      self.embedding = self.embedding.to(self.device)
     else:
       self.embedding = nn.Linear(256, 256)
       self.embedding = self.embedding.to(self.device)
 
-    self.optimizer = optimizer(self.net.parameters())
-
-    self.network_name = network_name
-    self.writer = SummaryWriter(network_name)
-
-    self.epoch_id = 0
-    self.step_id = 0
-
-  def save_path(self):
-    return f"{self.checkpoint_path}-save.torch"
-
-  def checkpoint(self):
-    the_net = self.net
-    if isinstance(the_net, torch.nn.DataParallel):
-      the_net = the_net.module
-    netwrite(
-      the_net,
-      f"{self.checkpoint_path}-encoder-epoch-{self.epoch_id}-step-{self.step_id}.torch"
+    optimizer_kwargs = optimizer_kwargs or {}
+    self.optimizer = optimizer(
+      list(self.net.parameters()) + list(self.embedding.parameters()),
+      **optimizer_kwargs
     )
-    self.each_checkpoint()
+    self.checkpoint_names = dict(
+      net=self.net,
+      embedding=self.embedding
+    )
 
   def step(self, data, label, centers):
     self.optimizer.zero_grad()
@@ -84,7 +62,7 @@ class ClusteringTraining(Training):
       center_embedding = self.embedding(centers.squeeze())
       logits = center_embedding.matmul(attention.unsqueeze(2)).squeeze()
     else:
-      logits = self.classifier(attention.reshape(attention.size(0), -1))
+      logits = self.embedding(attention.reshape(attention.size(0), -1))
     label = label.long().to(self.device)
     loss_val = self.loss(logits, label)
     loss_val.backward()
@@ -207,8 +185,7 @@ class ClusteringTraining(Training):
       )
       for data, label in self.train_data:
         self.step(data, label, centers)
-        if self.step_id % self.checkpoint_interval == 0:
-          self.checkpoint()
+        self.log()
         self.step_id += 1
 
     return self.net
@@ -219,30 +196,16 @@ class ClusterAETraining(ClusteringTraining):
                center_size=1024,
                gamma=0.1,
                alpha=0.1,
-               clustering=KMeans(3),
-               loss=nn.CrossEntropyLoss(),
                optimizer=torch.optim.Adam,
-               max_epochs=50,
-               batch_size=128,
-               device="cpu",
-               report_interval=10,
-               checkpoint_interval=1000,
-               path_prefix=".",
-               network_name="network"):
+               optimizer_kwargs=None,
+               **kwargs):
     super(ClusterAETraining, self).__init__(
       encoder, data,
-      clustering=clustering,
-      loss=loss,
       optimizer=optimizer,
-      max_epochs=max_epochs,
-      batch_size=batch_size,
-      device=device,
-      path_prefix=path_prefix,
-      network_name=network_name,
-      report_interval=report_interval,
-      checkpoint_interval=checkpoint_interval
+      optimizer_kwargs=optimizer_kwargs,
+      **kwargs
     )
-    self.decoder = decoder.to(device)
+    self.decoder = decoder.to(self.device)
 
     self.alpha = 0.1
     self.gamma = gamma
@@ -250,22 +213,29 @@ class ClusterAETraining(ClusteringTraining):
       n_clusters,
       center_size,
       requires_grad=True,
-      device=device
+      device=self.device
     )
     with torch.no_grad():
       self.centers.mul_(
-        torch.tensor(2).float().to(device)
+        torch.tensor(2).float().to(self.device)
       ).add_(
-        torch.tensor(-1).float().to(device)
+        torch.tensor(-1).float().to(self.device)
       )
 
+    optimizer_kwargs = optimizer_kwargs or {}
     self.center_optimizer = optimizer(
-      [self.centers]
+      [self.centers], **optimizer_kwargs
     )
 
     self.optimizer = optimizer(
       list(self.net.parameters()) +
-      list(self.decoder.parameters())
+      list(self.decoder.parameters()),
+      **optimizer_kwargs
+    )
+
+    self.checkpoint_names = dict(
+      net=self.net,
+      decoder=self.decoder
     )
 
   def hardening_loss(self, predictions):
@@ -358,8 +328,7 @@ class ClusterAETraining(ClusteringTraining):
       for internal_epoch in range(1):
         for data, *_ in islice(self.train_data, 100):
           self.step(data)
-          if self.step_id % self.checkpoint_interval == 0:
-            self.checkpoint()
+          self.log()
           self.step_id += 1
 
       self.each_cluster()
@@ -369,36 +338,29 @@ class ClusterAETraining(ClusteringTraining):
 
 class DEPICTTraining(ClusteringTraining):
   def __init__(self, encoder, decoder, classifier, data,
-               clustering=KMeans(3),
-               loss=nn.CrossEntropyLoss(),
                optimizer=torch.optim.Adam,
-               max_epochs=50,
-               batch_size=128,
-               device="cpu",
-               report_interval=10,
-               checkpoint_interval=1000,
-               path_prefix=".",
-               network_name="network"):
+               optimizer_kwargs=None,
+               **kwargs):
     super(DEPICTTraining, self).__init__(
       encoder, data,
-      clustering=clustering,
-      loss=loss,
       optimizer=optimizer,
-      max_epochs=max_epochs,
-      batch_size=batch_size,
-      device=device,
-      path_prefix=path_prefix,
-      network_name=network_name,
-      report_interval=report_interval,
-      checkpoint_interval=checkpoint_interval
+      optimizer_kwargs=optimizer_kwargs,
+      **kwargs
     )
-    self.decoder = decoder.to(device)
-    self.classifier = classifier.to(device)
+    self.decoder = decoder.to(self.device)
+    self.classifier = classifier.to(self.device)
 
     self.optimizer = optimizer(
       list(self.net.parameters()) +
       list(self.decoder.parameters()) +
-      list(self.classifier.parameters())
+      list(self.classifier.parameters()),
+      **optimizer_kwargs
+    )
+
+    self.checkpoint_names = dict(
+      net=self.net,
+      decoder=self.decoder,
+      classifier=self.classifier
     )
 
   def expectation(self):
@@ -427,7 +389,7 @@ class DEPICTTraining(ClusteringTraining):
   def vae_loss(self, mean, logvar, reconstruction, target, beta=20, c=0.5):
     mse = func.mse_loss(reconstruction, target)
     kld = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp())
-    
+
     self.writer.add_scalar("mse loss", float(mse), self.step_id)
     self.writer.add_scalar("kld loss", float(kld), self.step_id)
     self.writer.add_scalar("kld-c loss", float(torch.norm(kld - c, 2)), self.step_id)
@@ -498,6 +460,7 @@ class DEPICTTraining(ClusteringTraining):
       )
       for data, expected_logits in self.train_data:
         self.step(data, expected_logits, centers)
+        self.log()
         self.step_id += 1
 
       expectation, embedding = self.expectation()
@@ -513,27 +476,15 @@ class DEPICTTraining(ClusteringTraining):
 class HierarchicalClusteringTraining(ClusteringTraining):
   def __init__(self, net, data,
                optimizer=torch.optim.Adam,
-               loss=nn.CrossEntropyLoss(),
-               max_epochs=50,
-               batch_size=128,
-               device="cpu",
-               path_prefix=".",
-               network_name="network",
-               report_interval=10,
-               checkpoint_interval=1000,
-               depth=[5, 10, 50]):
+               optimizer_kwargs=None,
+               depth=[5, 10, 50],
+               **kwargs):
     super(HierarchicalClusteringTraining, self).__init__(
       net, data,
       clustering=None,
-      loss=loss,
       optimizer=optimizer,
-      max_epochs=max_epochs,
-      batch_size=batch_size,
-      device=device,
-      path_prefix=path_prefix,
-      network_name=network_name,
-      report_interval=report_interval,
-      checkpoint_interval=checkpoint_interval,
+      optimizer_kwargs=optimizer_kwargs,
+      **kwargs
     )
 
     self.depth = depth
@@ -548,7 +499,15 @@ class HierarchicalClusteringTraining(ClusteringTraining):
     ])
 
     self.optimizer = optimizer(
-      list(net.parameters()) + list(self.cluster_embeddings.parameters())
+      list(self.net.parameters()) + list(self.cluster_embeddings.parameters()),
+      **optimizer_kwargs
+    )
+    self.checkpoint_names = dict(
+      net=self.net,
+      **{
+        f"embedding-{idx}": embedding
+        for idx, embedding in enumerate(self.cluster_embeddings)
+      }
     )
 
   def step(self, data, label, centers):
@@ -595,8 +554,7 @@ class HierarchicalClusteringTraining(ClusteringTraining):
       for inner_epoch in range(1):
         for data, label in self.train_data:
           self.step(data, label, center_hierarchy)
-          if self.step_id % self.checkpoint_interval == 0:
-            self.checkpoint()
+          self.log()
           self.step_id += 1
 
     return self.net
@@ -604,63 +562,31 @@ class HierarchicalClusteringTraining(ClusteringTraining):
 class VAEClusteringTraining(HierarchicalClusteringTraining):
   def __init__(self, encoder, decoder, data,
                optimizer=torch.optim.Adam,
-               loss=nn.CrossEntropyLoss(),
-               max_epochs=50,
-               batch_size=128,
-               device="cpu",
-               path_prefix=".",
-               network_name="network",
-               report_interval=10,
-               checkpoint_interval=1000,
-               depth=[5, 10, 50]):
+               optimizer_kwargs=None,
+               **kwargs):
     super(VAEClusteringTraining, self).__init__(
       encoder, data,
-      depth=depth,
-      loss=loss,
-      optimizer=optimizer,
-      max_epochs=max_epochs,
-      batch_size=batch_size,
-      device=device,
-      path_prefix=".",
-      network_name=network_name,
-      report_interval=10,
-      checkpoint_interval=1000
+      **kwargs
     )
 
-    self.decoder = decoder.to(device)
+    self.decoder = decoder.to(self.device)
 
+    optimizer_kwargs = optimizer_kwargs or {}
     self.optimizer = optimizer(
       list(encoder.parameters()) +
       list(decoder.parameters()) +
-      list(self.cluster_embeddings.parameters())
+      list(self.cluster_embeddings.parameters()),
+      **optimizer_kwargs
     )
 
-  def checkpoint(self):
-    the_net = self.net
-    if isinstance(the_net, torch.nn.DataParallel):
-      the_net = the_net.module
-    netwrite(
-      the_net,
-      f"{self.network_name}-encoder-epoch-{self.epoch_id}-step-{self.step_id}.torch"
+    self.checkpoint_names = dict(
+      encoder=self.net,
+      decoder=self.decoder,
+      **{
+        f"embedding-{idx}": embedding
+        for idx, embedding in enumerate(self.cluster_embeddings)
+      }
     )
-
-    the_net = self.decoder
-    if isinstance(the_net, torch.nn.DataParallel):
-      the_net = the_net.module
-    netwrite(
-      the_net,
-      f"{self.network_name}-decoder-epoch-{self.epoch_id}-step-{self.step_id}.torch"
-    )
-
-    for idx, classifier in enumerate(self.cluster_embeddings):
-      the_net = classifier
-      if isinstance(the_net, torch.nn.DataParallel):
-        the_net = the_net.module
-      netwrite(
-        the_net,
-        f"{self.network_name}-classifier-{idx}-epoch-{self.epoch_id}-step-{self.step_id}.torch"
-      )
-    self.each_checkpoint()
 
   def vae_loss(self, mean, logvar, reconstruction, target, beta=20, c=0.5):
     mse = func.mse_loss(reconstruction, target)
@@ -716,63 +642,32 @@ class VAEClusteringTraining(HierarchicalClusteringTraining):
 class RegularizedClusteringTraining(HierarchicalClusteringTraining):
   def __init__(self, encoder, decoder, data,
                optimizer=torch.optim.Adam,
-               loss=nn.CrossEntropyLoss(),
-               max_epochs=50,
-               batch_size=128,
-               device="cpu",
-               path_prefix=".",
-               network_name="network",
-               report_interval=10,
-               checkpoint_interval=1000,
-               depth=[5, 10, 50]):
+               optimizer_kwargs=None,
+               depth=[5, 10, 50], **kwargs):
     super(RegularizedClusteringTraining, self).__init__(
       encoder, data,
-      depth=depth,
-      loss=loss,
       optimizer=optimizer,
-      max_epochs=max_epochs,
-      batch_size=batch_size,
-      device=device,
-      path_prefix=path_prefix,
-      network_name=network_name,
-      report_interval=10,
-      checkpoint_interval=1000
+      optimizer_kwargs=optimizer_kwargs,
+      **kwargs
     )
 
-    self.decoder = decoder.to(device)
+    self.decoder = decoder.to(self.device)
 
+    optimizer_kwargs = optimizer_kwargs or {}
     self.optimizer = optimizer(
       list(encoder.parameters()) +
       list(decoder.parameters()) +
-      list(self.cluster_embeddings.parameters())
+      list(self.cluster_embeddings.parameters()),
+      **optimizer_kwargs
     )
 
-  def checkpoint(self):
-    the_net = self.net
-    if isinstance(the_net, torch.nn.DataParallel):
-      the_net = the_net.module
-    netwrite(
-      the_net,
-      f"{self.network_name}-encoder-epoch-{self.epoch_id}-step-{self.step_id}.torch"
+    self.checkpoint_names = dict(
+      net=self.net,
+      **{
+        f"embedding-{idx}": embedding
+        for idx, embedding in enumerate(self.cluster_embeddings)
+      }
     )
-
-    the_net = self.decoder
-    if isinstance(the_net, torch.nn.DataParallel):
-      the_net = the_net.module
-    netwrite(
-      the_net,
-      f"{self.network_name}-decoder-epoch-{self.epoch_id}-step-{self.step_id}.torch"
-    )
-
-    for idx, classifier in enumerate(self.cluster_embeddings):
-      the_net = classifier
-      if isinstance(the_net, torch.nn.DataParallel):
-        the_net = the_net.module
-      netwrite(
-        the_net,
-        f"{self.network_name}-classifier-{idx}-epoch-{self.epoch_id}-step-{self.step_id}.torch"
-      )
-    self.each_checkpoint()
 
   def ae_loss(self, reconstruction, target):
     mse = func.mse_loss(reconstruction, target)

@@ -33,14 +33,7 @@ class AbstractGANTraining(Training):
                discriminator_optimizer_kwargs=None,
                n_critic=1,
                n_actor=1,
-               max_epochs=50,
-               batch_size=128,
-               device="cpu",
-               path_prefix=".",
-               network_name="network",
-               verbose=False,
-               report_interval=10,
-               checkpoint_interval=1000):
+               **kwargs):
     """Generic training setup for generative adversarial networks.
 
     Args:
@@ -60,12 +53,7 @@ class AbstractGANTraining(Training):
       network_name (string): identifier of the network architecture.
       verbose (bool): log all events and losses?
     """
-    super(AbstractGANTraining, self).__init__()
-
-    self.verbose = verbose
-    self.report_interval = report_interval
-    self.checkpoint_interval = checkpoint_interval
-    self.checkpoint_path = f"{path_prefix}/{network_name}"
+    super(AbstractGANTraining, self).__init__(**kwargs)
 
     self.n_critic = n_critic
     self.n_actor = n_actor
@@ -74,7 +62,7 @@ class AbstractGANTraining(Training):
     self.generator_names = []
     for network in generators:
       self.generator_names.append(network)
-      network_object = generators[network].to(device)
+      network_object = generators[network].to(self.device)
       setattr(self, network, network_object)
       generator_netlist.extend(list(network_object.parameters()))
 
@@ -82,22 +70,13 @@ class AbstractGANTraining(Training):
     self.discriminator_names = []
     for network in discriminators:
       self.discriminator_names.append(network)
-      network_object = discriminators[network].to(device)
+      network_object = discriminators[network].to(self.device)
       setattr(self, network, network_object)
       discriminator_netlist.extend(list(network_object.parameters()))
 
     self.data = data
     self.train_data = None
-    self.max_epochs = max_epochs
-    self.batch_size = batch_size
-    self.device = device
-
     self.current_losses = {}
-    self.network_name = network_name
-    self.writer = SummaryWriter(network_name)
-
-    self.epoch_id = 0
-    self.step_id = 0
 
     if generator_optimizer_kwargs is None:
       generator_optimizer_kwargs = {"lr" : 5e-4}
@@ -113,8 +92,13 @@ class AbstractGANTraining(Training):
       **discriminator_optimizer_kwargs
     )
 
-  def save_path(self):
-    return f"{self.checkpoint_path}-save.torch"
+    self.checkpoint_names = dict({
+      name: getattr(self, name)
+      for name in self.discriminator_names
+    }, **{
+      name: getattr(self, name)
+      for name in self.generator_names
+    })
 
   def generator_loss(self, *args):
     """Abstract method. Computes the generator loss."""
@@ -202,26 +186,6 @@ class AbstractGANTraining(Training):
       self.generator_step(next(data))
     self.each_step()
 
-  def checkpoint(self):
-    """Performs a checkpoint of all generators and discriminators."""
-    for name in self.generator_names:
-      the_net = getattr(self, name)
-      if isinstance(the_net, torch.nn.DataParallel):
-        the_net = the_net.module
-      netwrite(
-        the_net,
-        f"{self.checkpoint_path}-{name}-epoch-{self.epoch_id}-step-{self.step_id}.torch"
-      )
-    for name in self.discriminator_names:
-      the_net = getattr(self, name)
-      if isinstance(the_net, torch.nn.DataParallel):
-        the_net = the_net.module
-      netwrite(
-        the_net,
-        f"{self.checkpoint_path}-{name}-epoch-{self.epoch_id}-step-{self.step_id}.torch"
-      )
-    self.each_checkpoint()
-
   def train(self):
     """Trains a GAN until the maximum number of epochs is reached."""
     for epoch_id in range(self.max_epochs):
@@ -238,8 +202,7 @@ class AbstractGANTraining(Training):
       data = iter(self.train_data)
       for _ in range(steps_per_episode):
         self.step(data)
-        if self.step_id % self.checkpoint_interval == 0:
-          self.checkpoint()
+        self.log()
         self.step_id += 1
 
     generators = [
@@ -356,6 +319,36 @@ def _gradient_norm(inputs, parameters):
   grad_sum = torch.sqrt(grad_sum + 1e-16)
   return grad_sum, out
 
+# TODO: FISHER GAN
+# class FisherGANTraining(GANTraining):
+#   def deformation(self, x, real=True):
+#     return x
+
+#   def function(self, x, real=True):
+#     return x.sigmoid().clamp(0, 1)
+
+#   def generator_loss(self, data, generated, sample):
+#     disc = self.discriminator(generated)
+#     disc = self.deformation(self.function(), real=True)
+#     loss_val = func.binary_cross_entropy_with_logits(
+#       disc - real_disc, torch.zeros(disc.size(0), 1).to(self.device)
+#     )
+
+#     return loss_val
+
+#   def discriminator_loss(self, generated, real,
+#                          generated_result, real_result):
+#     real_noise = self.smoothing * torch.ones(real_result.size(0), 1).to(self.device)
+#     generated_result = self.deformation(generated_result)
+#     generated_loss = func.binary_cross_entropy_with_logits(
+#       generated_result - real_result.mean(), torch.ones(generated_result.size(0), 1).to(self.device)
+#     )
+#     real_loss = func.binary_cross_entropy_with_logits(
+#       real_result - generated_result.mean(), torch.zeros(real_result.size(0), 1).to(self.device) + real_noise
+#     )
+
+#     return generated_loss + real_loss, None
+
 class ClassifierGANTraining():
   def __init__(self, classifier, fixed=False, autonomous=False, optimizer=torch.optim.Adam, classifier_optimizer_kwargs=None):
     self.checkpoint_parameters += [
@@ -372,6 +365,9 @@ class ClassifierGANTraining():
       **classifier_optimizer_kwargs
     )
     self.discriminator_names.append("classifier")
+    self.checkpoint_names.update(dict(
+      classifier=self.classifier
+    ))
 
   def classifier_loss(self, result, label):
     if isinstance(result, (list, tuple)):

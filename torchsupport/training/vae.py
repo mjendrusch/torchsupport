@@ -25,14 +25,7 @@ class AbstractVAETraining(Training):
   def __init__(self, networks, data, valid=None,
                optimizer=torch.optim.Adam,
                optimizer_kwargs=None,
-               max_epochs=50,
-               batch_size=128,
-               device="cpu",
-               path_prefix=".",
-               network_name="network",
-               report_interval=10,
-               checkpoint_interval=1000,
-               verbose=False):
+               **kwargs):
     """Generic training setup for variational autoencoders.
 
     Args:
@@ -47,20 +40,20 @@ class AbstractVAETraining(Training):
       network_name (string): identifier of the network architecture.
       verbose (bool): log all events and losses?
     """
-    super(AbstractVAETraining, self).__init__()
-
-    self.verbose = verbose
-    self.checkpoint_path = f"{path_prefix}/{network_name}"
-    self.report_interval = report_interval
-    self.checkpoint_interval = checkpoint_interval
+    super(AbstractVAETraining, self).__init__(**kwargs)
 
     self.data = data
     self.valid = valid
     self.train_data = None
     self.valid_data = None
-    self.max_epochs = max_epochs
-    self.batch_size = batch_size
-    self.device = device
+
+    self.valid_iter = None
+    if self.valid is not None:
+      self.valid_data = DataLoader(
+        self.valid, batch_size=self.batch_size, num_workers=8,
+        shuffle=True
+      )
+      self.valid_iter = iter(self.valid_data)
 
     netlist = []
     self.network_names = []
@@ -71,11 +64,6 @@ class AbstractVAETraining(Training):
       netlist.extend(list(network_object.parameters()))
 
     self.current_losses = {}
-    self.network_name = network_name
-    self.writer = SummaryWriter(network_name)
-
-    self.epoch_id = 0
-    self.step_id = 0
 
     if optimizer_kwargs is None:
       optimizer_kwargs = {"lr" : 5e-4}
@@ -84,9 +72,10 @@ class AbstractVAETraining(Training):
       netlist,
       **optimizer_kwargs
     )
-
-  def save_path(self):
-    return f"{self.checkpoint_path}-save.torch"
+    self.checkpoint_names = {
+      name: getattr(self, name)
+      for name in self.network_names
+    }
 
   def divergence_loss(self, *args):
     """Abstract method. Computes the divergence loss."""
@@ -160,22 +149,21 @@ class AbstractVAETraining(Training):
 
     return float(loss_val)
 
-  def checkpoint(self):
-    """Performs a checkpoint for all encoders and decoders."""
-    for name in self.network_names:
-      the_net = getattr(self, name)
-      if isinstance(the_net, torch.nn.DataParallel):
-        the_net = the_net.module
-      netwrite(
-        the_net,
-        f"{self.checkpoint_path}-{name}-epoch-{self.epoch_id}-step-{self.step_id}.torch"
-      )
-    self.each_checkpoint()
-
   def validate(self, data):
     loss = self.valid_step(data)
     self.writer.add_scalar("valid loss", loss, self.step_id)
     self.each_validate()
+
+  def run_report(self):
+    if self.valid is not None:
+      vdata = None
+      try:
+        vdata = next(self.valid_iter)
+      except StopIteration:
+        self.valid_iter = iter(self.valid_data)
+        vdata = next(self.valid_iter)
+      vdata = to_device(vdata, self.device)
+      self.validate(vdata)
 
   def train(self):
     """Trains a VAE until the maximum number of epochs is reached."""
@@ -186,26 +174,9 @@ class AbstractVAETraining(Training):
         self.data, batch_size=self.batch_size, num_workers=8,
         shuffle=True
       )
-      valid_iter = None
-      if self.valid is not None:
-        self.valid_data = DataLoader(
-          self.valid, batch_size=self.batch_size, num_workers=8,
-          shuffle=True
-        )
-        valid_iter = iter(self.valid_data)
       for data in self.train_data:
         self.step(data)
-        if self.step_id % self.checkpoint_interval == 0:
-          self.checkpoint()
-        if self.valid is not None and self.step_id % self.report_interval == 0:
-          vdata = None
-          try:
-            vdata = next(valid_iter)
-          except StopIteration:
-            valid_iter = iter(self.valid_data)
-            vdata = next(valid_iter)
-          vdata = to_device(vdata, self.device)
-          self.validate(vdata)
+        self.log()
         self.step_id += 1
 
     netlist = [
@@ -325,8 +296,7 @@ class LaggingInference(ABC):
           self.aggressive_update(data)
         else:
           self.step(data)
-        if self.step_id % self.checkpoint_interval == 0:
-          self.checkpoint()
+        self.log()
         self.step_id += 1
       valid_data = DataLoader(self.valid, batch_size=self.batch_size, shuffle=True)
       new_mi = self.compute_mi(next(iter(valid_data)))
@@ -409,7 +379,7 @@ class IntroVAETraining(VAETraining):
       encoder, decoder, data,
       optimizer=optimizer,
       optimizer_kwargs=optimizer_kwargs,
-      **kwargs 
+      **kwargs
     )
     self.alpha = alpha
     self.beta = beta
@@ -474,7 +444,7 @@ class IntroVAETraining(VAETraining):
   def step(self, data):
     data = to_device(data, self.device)
     data, *netargs = self.preprocess(data)
-    
+
     self.critic_optimizer.zero_grad()
     pass_through, *critic_args = self.run_critic(data, *netargs)
     loss_val = self.critic_loss(*critic_args)
@@ -570,14 +540,8 @@ class FactorVAETraining(JointVAETraining):
   """Training setup for FactorVAE - VAE with disentangled latent space."""
   def __init__(self, encoder, decoder, discriminator, data,
                optimizer=torch.optim.Adam,
-               loss=nn.CrossEntropyLoss(),
-               max_epochs=50,
-               batch_size=128,
-               device="cpu",
-               network_name="network",
-               ctarget=50,
-               dtarget=5,
-               gamma=1000):
+               optimizer_kwargs=None,
+               **kwargs):
     """Training setup for FactorVAE - VAE with disentangled latent space.
 
     Args:
@@ -597,21 +561,19 @@ class FactorVAETraining(JointVAETraining):
     super(FactorVAETraining, self).__init__(
       encoder, decoder, data,
       optimizer=optimizer,
-      loss=loss,
-      max_epochs=max_epochs,
-      batch_size=batch_size,
-      device=device,
-      network_name=network_name,
-      ctarget=ctarget,
-      dtarget=dtarget,
-      gamma=gamma
+      **kwargs
     )
     self.discriminator = discriminator.to(device)
 
+    optimizer_kwargs = optimizer_kwargs or {"lr": 1e-4}
     self.discriminator_optimizer = optimizer(
       self.discriminator.parameters(),
-      lr=1e-4
+      **optimizer_kwargs
     )
+    self.checkpoint_parameters.append(NetState("discriminator"))
+    self.checkpoint_names.update(dict(
+      discriminator=self.discriminator
+    ))
 
   def sample(self, mean, logvar):
     distribution = Normal(mean, torch.exp(0.5 * logvar))

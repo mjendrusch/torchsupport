@@ -5,21 +5,10 @@ import torch.nn.functional as func
 from torchsupport.training.training import Training
 
 class InteractingTraining(Training):
-  def __init__(self, tasks, valid_tasks=None,
-               max_steps=1_000_000,
-               checkpoint_interval=10,
-               network_name="network",
-               path_prefix=".",
-               report_interval=1000,
-               verbose=True):
-    self.max_steps = max_steps
-    self.checkpoint_interval = checkpoint_interval
-    self.report_interval = report_interval
-    self.step_id = 0
-    self.verbose = verbose
+  def __init__(self, tasks, valid_tasks=None, **kwargs):
+    super().__init__(**kwargs)
     self.tasks = tasks
     self.valid_tasks = valid_tasks or []
-    self.checkpoint_path = f"{path_prefix}/{network_name}-checkpoint"
     for task in self.tasks:
       task.register_training(self)
 

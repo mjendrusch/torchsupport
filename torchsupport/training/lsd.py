@@ -50,6 +50,10 @@ class LSDTraining(AbstractEnergyTraining):
     self.n_critic = n_critic
     self.decay = decay
     self.integrator = integrator
+    self.checkpoint_names.update({
+      name: getattr(self, name)
+      for name in self.critic_names
+    })
 
   def step(self, data):
     for critic_data in islice(self.critic_data, self.n_critic):
@@ -91,18 +95,20 @@ class LSDTraining(AbstractEnergyTraining):
     return -result + self.decay * l2_loss
 
   def energy_loss(self, data, score, critic):
+    score = score.view(score.size(0), -1)
+    critic = critic.view(critic.size(0), -1)
     vectors = self.noise_vectors(critic)
     grad_score = ag.grad(
       score, data,
       grad_outputs=torch.ones_like(score),
       create_graph=True
-    )[0]
-    jacobian = ag.grad(
-      critic, data,
-      grad_outputs=vectors,
-      create_graph=True
-    )[0]
-    jacobian_term = (vectors * jacobian).view(score.size(0), -1).sum(dim=-1)
+    )[0].view(score.size(0), -1)
+    jacobian_v = ag.grad(
+      (critic * vectors).mean(dim=0).sum(), data, create_graph=True
+    )[0].view(score.size(0), -1)
+    v_jacobian_v = (vectors * jacobian_v).sum(dim=-1)
+    jacobian_term = v_jacobian_v
+
     critic_term = (grad_score * critic).view(score.size(0), -1).sum(dim=-1)
 
     penalty_term = (score ** 2).mean()

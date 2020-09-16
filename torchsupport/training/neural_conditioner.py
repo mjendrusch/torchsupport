@@ -53,12 +53,6 @@ class NeuralConditionerTraining(RothGANTraining):
 
     return penalty, out
 
-  #def discriminator_loss(self, data, fake, fake_res, real_res):
-  #  loss, out = GANTraining.discriminator_loss(self, data, fake, fake_res, real_res)
-  #  regularizer = 0.5 * (fake_res.sigmoid().mean(dim=0) + real_res.sigmoid().mean(dim=0))
-  #  loss += regularizer.mean(dim=0)
-  #  return loss, out
-
   def generator_loss(self, inputs, generated, available, requested):
     discriminator_result = self._run_discriminator_aux(
       inputs, generated, available, requested

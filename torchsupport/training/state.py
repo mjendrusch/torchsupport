@@ -62,7 +62,7 @@ class NetNameListState(NetState):
 class TrainingState(State):
   training_parameters = ["epoch_id", "step_id"]
   def __init__(self):
-    pass
+    super().__init__("training_state")
 
   def read_action(self, training, data):
     for name in self.training_parameters:

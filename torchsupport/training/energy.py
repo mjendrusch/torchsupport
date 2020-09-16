@@ -28,14 +28,7 @@ class AbstractEnergyTraining(Training):
   def __init__(self, scores, data,
                optimizer=torch.optim.Adam,
                optimizer_kwargs=None,
-               max_epochs=50,
-               batch_size=128,
-               device="cpu",
-               path_prefix=".",
-               network_name="network",
-               verbose=False,
-               report_interval=10,
-               checkpoint_interval=1000):
+               **kwargs):
     """Generic training setup for energy/score based models.
 
     Args:
@@ -50,33 +43,20 @@ class AbstractEnergyTraining(Training):
       network_name (string): identifier of the network architecture.
       verbose (bool): log all events and losses?
     """
-    super(AbstractEnergyTraining, self).__init__()
-
-    self.verbose = verbose
-    self.report_interval = report_interval
-    self.checkpoint_interval = checkpoint_interval
-    self.checkpoint_path = f"{path_prefix}/{network_name}"
+    super(AbstractEnergyTraining, self).__init__(**kwargs)
 
     netlist = []
     self.names = []
     for network in scores:
       self.names.append(network)
-      network_object = scores[network].to(device)
+      network_object = scores[network].to(self.device)
       setattr(self, network, network_object)
       netlist.extend(list(network_object.parameters()))
 
     self.data = data
     self.train_data = None
-    self.max_epochs = max_epochs
-    self.batch_size = batch_size
-    self.device = device
 
     self.current_losses = {}
-    self.network_name = network_name
-    self.writer = SummaryWriter(network_name)
-
-    self.epoch_id = 0
-    self.step_id = 0
 
     if optimizer_kwargs is None:
       optimizer_kwargs = {"lr" : 5e-4}
@@ -86,8 +66,10 @@ class AbstractEnergyTraining(Training):
       **optimizer_kwargs
     )
 
-  def save_path(self):
-    return f"{self.checkpoint_path}-save.torch"
+    self.checkpoint_names = {
+      name: getattr(self, name)
+      for name in self.names
+    }
 
   def energy_loss(self, *args):
     """Abstract method. Computes the score function loss."""
@@ -141,18 +123,6 @@ class AbstractEnergyTraining(Training):
     self.energy_step(data)
     self.each_step()
 
-  def checkpoint(self):
-    """Performs a checkpoint of all generators and discriminators."""
-    for name in self.names:
-      the_net = getattr(self, name)
-      if isinstance(the_net, torch.nn.DataParallel):
-        the_net = the_net.module
-      netwrite(
-        the_net,
-        f"{self.checkpoint_path}-{name}-epoch-{self.epoch_id}-step-{self.step_id}.torch"
-      )
-    self.each_checkpoint()
-
   def train(self):
     """Trains an EBM until the maximum number of epochs is reached."""
     for epoch_id in range(self.max_epochs):
@@ -165,8 +135,7 @@ class AbstractEnergyTraining(Training):
 
       for data in self.train_data:
         self.step(data)
-        if self.step_id % self.checkpoint_interval == 0:
-          self.checkpoint()
+        self.log()
         self.step_id += 1
 
     scores = [

@@ -29,45 +29,29 @@ class OffPolicyTraining(Training):
   ]
   def __init__(self, policy, agent, environment,
                auxiliary_networks=None,
-               max_steps=1_000_000,
                buffer_size=100_000,
                piecewise_append=False,
                policy_steps=1,
                auxiliary_steps=1,
                n_workers=8,
-               batch_size=64,
                discount=0.99,
                double=False,
-               checkpoint_interval=10,
                optimizer=torch.optim.Adam,
                optimizer_kwargs=None,
                aux_optimizer=torch.optim.Adam,
                aux_optimizer_kwargs=None,
-               device="cpu",
-               network_name="network",
-               path_prefix=".",
-               report_interval=1000,
-               verbose=True):
-    self.epoch_id = 0
-    self.max_steps = max_steps
+               **kwargs):
+    super().__init__(**kwargs)
     self.policy_steps = policy_steps
     self.auxiliary_steps = auxiliary_steps
-    self.checkpoint_interval = checkpoint_interval
-    self.report_interval = report_interval
-    self.step_id = 0
-    self.verbose = verbose
-    self.checkpoint_path = f"{path_prefix}/{network_name}-checkpoint"
 
     self.current_losses = {}
-    self.writer = SummaryWriter(f"{path_prefix}/{network_name}")
 
     self.statistics = ExperienceStatistics()
     self.discount = discount
-    self.device = device
-    self.batch_size = batch_size
     self.environment = environment
     self.agent = agent
-    self.policy = policy.to(device)
+    self.policy = policy.to(self.device)
     self.collector = EnvironmentCollector(environment, agent, discount=discount)
     self.distributor = DefaultDistributor()
     self.data_collector = ExperienceCollector(
@@ -87,7 +71,7 @@ class OffPolicyTraining(Training):
     self.auxiliary_names = []
     for network in auxiliary_networks:
       self.auxiliary_names.append(network)
-      network_object = auxiliary_networks[network].to(device)
+      network_object = auxiliary_networks[network].to(self.device)
       setattr(self, network, network_object)
       auxiliary_netlist.extend(list(network_object.parameters()))
 
@@ -96,8 +80,13 @@ class OffPolicyTraining(Training):
       auxiliary_netlist, **aux_optimizer_kwargs
     )
 
-  def save_path(self):
-    return self.checkpoint_path + "-save"
+    self.checkpoint_names = dict(
+      policy=self.policy,
+      **{
+        name: getattr(self, name)
+        for name in self.auxiliary_names
+      }
+    )
 
   def run_policy(self, sample):
     raise NotImplementedError("Abstract.")
@@ -157,16 +146,6 @@ class OffPolicyTraining(Training):
 
     self.each_step()
 
-  def checkpoint(self):
-    the_net = self.policy
-    if isinstance(self.policy, torch.nn.DataParallel):
-      the_net = the_net.module
-    netwrite(
-      the_net,
-      f"{self.checkpoint_path}-step-{self.step_id}.torch"
-    )
-    self.each_checkpoint()
-
   def validate(self):
     pass # TODO
 
@@ -183,10 +162,7 @@ class OffPolicyTraining(Training):
     self.initialize()
     for _ in range(self.max_steps):
       self.step()
-      if self.step_id % self.report_interval == 0:
-        self.validate()
-      if self.step_id % self.checkpoint_interval == 0:
-        self.checkpoint()
+      self.log()
       self.step_id += 1
 
     self.finalize()

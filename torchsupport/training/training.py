@@ -26,8 +26,30 @@ class Training(object):
   save_interval = 600
   last_tick = 0
 
-  def __init__(self):
-    pass
+  def __init__(self,
+               max_epochs=50,
+               max_steps=int(1e7),
+               batch_size=128,
+               device="cpu",
+               path_prefix=".",
+               network_name="network",
+               verbose=False,
+               report_interval=10,
+               checkpoint_interval=1000):
+    self.max_epochs = max_epochs
+    self.max_steps = max_steps
+    self.batch_size = batch_size
+    self.device = device
+    self.path_prefix = path_prefix
+    self.network_name = network_name
+    self.full_path = f"{self.path_prefix}/{self.network_name}"
+    self.verbose = verbose
+    self.report_interval = report_interval
+    self.checkpoint_interval = checkpoint_interval
+    self.checkpoint_names = {}
+    self.step_id = 0
+    self.epoch_id = 0
+    self.writer = SummaryWriter(self.full_path)
 
   def each_step(self):
     self.save_tick()
@@ -48,7 +70,32 @@ class Training(object):
     pass
 
   def save_path(self):
-    raise NotImplementedError("Abstract.")
+    return f"{self.full_path}-save.torch"
+
+  def run_checkpoint(self):
+    for name, the_net in self.checkpoint_names.items():
+      if isinstance(the_net, torch.nn.DataParallel):
+        the_net = the_net.module
+      netwrite(
+        the_net,
+        f"{self.full_path}-{name}-epoch-{self.epoch_id}-step-{self.step_id}.torch"
+      )
+    self.each_checkpoint()
+
+  def run_report(self):
+    pass
+
+  def checkpoint(self):
+    if self.step_id % self.checkpoint_interval == 0:
+      self.run_checkpoint()
+
+  def report(self):
+    if self.step_id % self.report_interval == 0:
+      self.run_report()
+
+  def log(self):
+    self.checkpoint()
+    self.report()
 
   def write(self, path):
     data = {}
@@ -117,20 +164,11 @@ class SupervisedTraining(Training):
   def __init__(self, net, train_data, validate_data, losses,
                optimizer=torch.optim.Adam,
                schedule=None,
-               max_epochs=50,
-               batch_size=128,
                accumulate=None,
-               device="cpu",
-               network_name="network",
-               path_prefix=".",
-               report_interval=10,
-               checkpoint_interval=1000,
-               valid_callback=lambda x: None):
-    super(SupervisedTraining, self).__init__()
-    self.valid_callback = valid_callback
-    self.network_name = network_name
-    self.writer = SummaryWriter(network_name)
-    self.device = device
+               valid_callback=None,
+               **kwargs):
+    super(SupervisedTraining, self).__init__(**kwargs)
+    self.valid_callback = valid_callback or (lambda x, y, z: None)
     self.accumulate = accumulate
     self.optimizer = optimizer(net.parameters())
     if schedule is None:
@@ -139,34 +177,18 @@ class SupervisedTraining(Training):
       self.schedule = schedule
     self.losses = losses
     self.train_data = DataLoader(
-      train_data, batch_size=batch_size, num_workers=8, shuffle=True, drop_last=True
+      train_data, batch_size=self.batch_size, num_workers=8, shuffle=True, drop_last=True
     )
     self.validate_data = DataLoader(
-      validate_data, batch_size=batch_size, num_workers=8, shuffle=True, drop_last=True
+      validate_data, batch_size=self.batch_size, num_workers=8, shuffle=True, drop_last=True
     )
+    self.valid_iter = iter(self.validate_data)
     self.net = net.to(self.device)
-    self.max_epochs = max_epochs
-    self.checkpoint_path = f"{path_prefix}/{network_name}-checkpoint"
-    self.report_interval = report_interval
-    self.checkpoint_interval = checkpoint_interval
-    self.step_id = 0
-    self.epoch_id = 0
+
+    self.checkpoint_names = dict(checkpoint=self.net)
     self.validation_losses = [0 for _ in range(len(self.losses))]
     self.training_losses = [0 for _ in range(len(self.losses))]
     self.best = None
-
-  def save_path(self):
-    return self.checkpoint_path + "-save.torch"
-
-  def checkpoint(self):
-    the_net = self.net
-    if isinstance(the_net, torch.nn.DataParallel):
-      the_net = the_net.module
-    netwrite(
-      self.net,
-      f"{self.checkpoint_path}-epoch-{self.epoch_id}-step-{self.step_id}.torch"
-    )
-    self.each_checkpoint()
 
   def run_networks(self, data):
     inputs, *labels = data
@@ -231,24 +253,23 @@ class SupervisedTraining(Training):
       self.writer.add_scalar(f"validation loss {idx}", loss, self.step_id)
     self.writer.add_scalar(f"validation loss total", sum(self.validation_losses), self.step_id)
 
+  def run_report(self):
+    vdata = None
+    try:
+      vdata = next(self.valid_iter)
+    except StopIteration:
+      self.valid_iter = iter(self.validate_data)
+      vdata = next(self.valid_iter)
+    vdata = to_device(vdata, self.device)
+    self.validate(vdata)
+
   def train(self):
     for epoch_id in range(self.max_epochs):
       self.epoch_id = epoch_id
-      valid_iter = iter(self.validate_data)
       for data in self.train_data:
         data = to_device(data, self.device)
         self.step(data)
-        if self.step_id % self.report_interval == 0:
-          vdata = None
-          try:
-            vdata = next(valid_iter)
-          except StopIteration:
-            valid_iter = iter(self.validate_data)
-            vdata = next(valid_iter)
-          vdata = to_device(vdata, self.device)
-          self.validate(vdata)
-        if self.step_id % self.checkpoint_interval == 0:
-          self.checkpoint()
+        self.log()
         self.step_id += 1
       self.schedule_step()
       self.each_epoch()
@@ -264,28 +285,10 @@ class MaskedSupervisedTraining(SupervisedTraining):
 
 class FewShotTraining(SupervisedTraining):
   def __init__(self, net, train_data, validate_data, losses,
-               optimizer=torch.optim.Adam,
-               schedule=None,
-               max_epochs=50,
-               batch_size=128,
-               device="cpu",
-               network_name="network",
-               path_prefix=".",
-               report_interval=10,
-               checkpoint_interval=1000,
-               valid_callback=lambda x: None):
+               **kwargs):
     super(FewShotTraining, self).__init__(
       net, train_data, validate_data, losses,
-      optimizer=optimizer,
-      schedule=schedule,
-      max_epochs=max_epochs,
-      batch_size=batch_size,
-      device=device,
-      network_name=network_name,
-      path_prefix=path_prefix,
-      report_interval=report_interval,
-      checkpoint_interval=checkpoint_interval,
-      valid_callback=valid_callback
+      **kwargs
     )
 
     support_data = copy(train_data)
@@ -324,11 +327,10 @@ class FewShotTraining(SupervisedTraining):
     self.optimizer.step()
     self.each_step()  
 
-  def validate(self):
+  def validate(self, data):
     with torch.no_grad():
       self.net.eval()
-      vit = iter(self.validate_data)
-      inputs, *label = next(vit)
+      inputs, *label = data
       inputs, label = inputs.to(self.device), list(map(lambda x: x.to(self.device), label))
       support, support_label = next(self.valid_support_loader)
       support = support[0].to(self.device)
