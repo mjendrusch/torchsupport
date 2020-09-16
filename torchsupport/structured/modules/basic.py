@@ -8,9 +8,30 @@ from torchsupport.structured.structures import (
 from .. import scatter
 
 def flatten_message(message):
+  r"""Flattens the batch and neighbourhood dimensions of an input message.
+
+  Args:
+    message (torch.Tensor): batch of messages.
+
+  Shape:
+    - Message: :math:`(N, N_{neighbours}, ...)`
+    - Output: :math:`(N * N_{neighbours}, ...)`
+  """
   return message.view(-1, *message.shape[2:])
 
 def unflatten_message(output, message):
+  r"""Reverses a flatten operation given the original neighbourhood dimension.
+
+  Args:
+    output (torch.Tensor): result of a computation on a flattened neighbourhood.
+    message (torch.Tensor): original neighbourhood tensor to extract neighbourhood
+      dimensions from.
+
+  Shape:
+    - Output: :math:`(N * N_{neighbours}, B...)`
+    - Message: :math:`(N, N_{neighbours}, A...)`
+    - Result: :math:`(N, N_{neighbours}, B...)`
+  """
   return output.view(*message.shape[:2], *output.shape[1:])
 
 class ConnectedModule(nn.Module):
@@ -23,6 +44,20 @@ class ConnectedModule(nn.Module):
     raise NotImplementedError("Abstract")
 
   def reduce_scatter(self, own_data, source_message, indices, node_count):
+    r"""Aggregates neighbourhood information using scatter operations on
+    ragged tensors. Ragged tensors are represented by a data tensor coupled
+    with an index tensor encoding variable-size chunks on which to operate
+    (LINK).
+
+    Args:
+      own_data (torch.Tensor): tensor containing target features for each node.
+      source_message (torch.Tensor): tensor containing neighbourhood features
+        for each node neighbourhood.
+      indices (torch.Tensor): long tensor of indices. Features of each neighbourhood
+        are marked with a unique neighbourhood index.
+      node_count (int): total number of nodes in the graph. Used to fill up features
+        of nodes for which the neighbourhood is empty.
+    """
     raise NotImplementedError("Abstract")
 
   def forward(self, source, target, structure):
