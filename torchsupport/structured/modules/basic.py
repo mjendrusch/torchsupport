@@ -79,6 +79,24 @@ class ConnectedModule(nn.Module):
     return torch.cat(results, dim=0)
 
 class NeighbourLinear(ConnectedModule):
+  r"""Aggregates neighbourhood information using a linear transformation of
+  source and target features, followed by averaging. Corresponds to a standard
+  GNN layer.
+
+  Args:
+    source_channels (int): number of neighbour features.
+    target_channels (int): number of target node features.
+    normalization (callable): weight normalization applied to the learned
+      linear transformation (e.g. spectral normalization).
+
+  Shape:
+    - Source: :math:`(\sum_i M_{i}, C_{source})`
+    - Target: :math:`(\sum_i N_{i}, C_{target})`
+    - Structure: ScatterStructure with :math:`\sum_i N_i` nodes
+        or ConstantStructure with :math:`(\sum_i N_i, N_{neighbours})` nodes
+        and neighbours.
+    - Output: :math:`(\sum_i N_i, C_{target})`
+  """
   def __init__(self, source_channels, target_channels, normalization=lambda x: x):
     super(NeighbourLinear, self).__init__(has_scatter=True)
     self.linear = normalization(nn.Linear(source_channels, target_channels))
@@ -95,15 +113,28 @@ class NeighbourLinear(ConnectedModule):
     return own_data + func.relu(out).mean(dim=1)
 
 class NeighbourAssignment(ConnectedModule):
+  r"""Aggregates neighbourhood information using a neighbour-weighted sum of
+  linear maps, approximating convolution on irregular graphs (FeaStNet).
+
+  Args:
+    source_channels (int): number of neighbour features.
+    target_channels (int): number of target node features.
+    out_channels (int): number of output feature maps.
+    size (int): number of linear maps to be aggregated per neighbourhood.
+      Roughly corresponds to the size of a convolution kernel.
+    normalization (callable): weight normalization applied to the learned
+      linear transformation (e.g. spectral normalization).
+
+  Shape:
+    - Source: :math:`(\sum_i N_{i}, C_{source})`
+    - Target: :math:`(\sum_i N_{i}, C_{target})`
+    - Structure: ScatterStructure with :math:`\sum_i N_i` nodes
+        or ConstantStructure with :math:`(\sum_i N_i, N_{neighbours})` nodes
+        and neighbours.
+    - Output: :math:`(\sum_i N_i, C_{out})`
+  """
   def __init__(self, source_channels, target_channels, out_channels, size,
                normalization=lambda x: x):
-    """Aggregates a node neighbourhood using soft weight assignment. (FeaStNet)
-
-    Args:
-      in_channels (int): number of input features.
-      out_channels (int): number of output features.
-      size (int): number of distinct weight matrices (equivalent to kernel size).
-    """
     super(NeighbourAssignment, self).__init__(has_scatter=True)
     self.linears = nn.ModuleList([
       normalization(nn.Linear(source_channels, out_channels, bias=False))
@@ -139,6 +170,27 @@ class NeighbourAssignment(ConnectedModule):
     return result + self.bias
 
 class NeighbourAttention(ConnectedModule):
+  r"""Aggregates neighbourhood information using pairwise attention with a
+  user-defined softmax kernel. Common kernel choices include dot-product and
+  :math:`L^2` attention. The resulting kernel has the form
+  :math:`softmax_i(attend(K_i, Q_i))`, where
+  :math:`softmax_i(x_i) := \frac{\exp(x_i)}{\sum_i \exp(x\i)}` is the softmax
+  function and :math:`attend(K, Q)` is a user-defined kernel.
+
+  Args:
+    in_size (int): number of neighbour features.
+    out_size (int): number of output features.
+    query_size (int): number of target node features.
+    attention_size (int): number of feature maps used in the attention kernel.
+
+  Shape:
+    - Source: :math:`(\sum_i N_{i}, C_{in})`
+    - Target: :math:`(\sum_i N_{i}, C_{query})`
+    - Structure: ScatterStructure with :math:`\sum_i N_i` nodes
+        or ConstantStructure with :math:`(\sum_i N_i, N_{neighbours})` nodes
+        and neighbours.
+    - Output: :math:`(\sum_i N_i, C_{out})`
+  """
   def __init__(self, in_size, out_size, query_size=None, attention_size=None):
     """Aggregates a node neighbourhood using a pairwise dot-product attention mechanism.
     Args:
@@ -152,6 +204,18 @@ class NeighbourAttention(ConnectedModule):
     self.value = nn.Linear(in_size, out_size)
 
   def attend(self, query, data):
+    r"""Compares query and data features defining an attention kernel.
+    Common choices include the dot-product, addition and :math:`L^p` norms.
+
+    Args:
+      query (torch.Tensor): tensor containing query information.
+      data (torch.Tensor): tensor containing key information.
+
+    Shape:
+      - Query: :math:`(\sum_i N_i^2, C)`
+      - Data: :math:`(\sum_i N_i^2, C)`
+      - Output: :math:`\sum_i N_i^2`
+    """
     raise NotImplementedError("Abstract.")
 
   def reduce_scatter(self, own_data, source_message, indices, node_count):
@@ -179,20 +243,82 @@ class NeighbourAttention(ConnectedModule):
     return result
 
 class NeighbourDotAttention(NeighbourAttention):
+  r"""Aggregates neighbourhood information pairwise dot-product attention.
+  The attention kernel is :math:`softmax_j(\sum_i K^T_{ji} Q_{ji})`, where
+  :math:`softmax_i(x_i) := \frac{\exp(x_i)}{\sum_i \exp(x\i)}` is the softmax
+  function.
+
+  Args:
+    in_size (int): number of neighbour features.
+    out_size (int): number of output features.
+    query_size (int): number of target node features.
+    attention_size (int): number of feature maps used in the attention kernel.
+
+  Shape:
+    - Source: :math:`(\sum_i N_{i}, C_{in})`
+    - Target: :math:`(\sum_i N_{i}, C_{query})`
+    - Structure: ScatterStructure with :math:`\sum_i N_i` nodes
+        or ConstantStructure with :math:`(\sum_i N_i, N_{neighbours})` nodes
+        and neighbours.
+    - Output: :math:`(\sum_i N_i, C_{out})`
+  """
   def attend(self, query, data):
     return (query * data).sum(dim=-1)
 
 class NeighbourAddAttention(NeighbourAttention):
+  r"""Aggregates neighbourhood information using pairwise additive attention.
+  The attention kernel is :math:`softmax_j(\sum_i Q_{ji} + K_{ji})`, where
+  :math:`softmax_i(x_i) := \frac{\exp(x_i)}{\sum_i \exp(x\i)}` is the softmax
+  function.
+
+  Args:
+    in_size (int): number of neighbour features.
+    out_size (int): number of output features.
+    query_size (int): number of target node features.
+    attention_size (int): number of feature maps used in the attention kernel.
+
+  Shape:
+    - Source: :math:`(\sum_i N_{i}, C_{in})`
+    - Target: :math:`(\sum_i N_{i}, C_{query})`
+    - Structure: ScatterStructure with :math:`\sum_i N_i` nodes
+        or ConstantStructure with :math:`(\sum_i N_i, N_{neighbours})` nodes
+        and neighbours.
+    - Output: :math:`(\sum_i N_i, C_{out})`
+  """
   def attend(self, query, data):
     return (query + data).sum(dim=-1)
 
 class NeighbourMultiHeadAttention(ConnectedModule):
+  r"""Aggregates neighbourhood information using pairwise multi-head attention
+  with a user-defined softmax kernel. Common kernel choices include dot-product
+  and :math:`L^2` attention. The resulting kernel has the form
+  :math:`softmax_i(attend(K_i, Q_i))`, where
+  :math:`softmax_i(x_i) := \frac{\exp(x_i)}{\sum_i \exp(x\i)}` is the softmax
+  function and :math:`attend(K, Q)` is a user-defined kernel.
+  The attention operation is replicated across a number of independent heads
+  which are then aggregated into a set of common output feature maps.
+
+  Args:
+    in_size (int): number of neighbour features.
+    out_size (int): number of output features.
+    attention_size (int): number of feature maps used in the attention kernel.
+    query_size (int): number of target node features.
+    heads (int): number of parallel attention heads. The final number of
+      feature maps is calculated as
+      :math:`\texttt{attention_size} \cdot \texttt{heads}`.
+    normalization (callable): weight normalization applied to the learned
+      linear transformation (e.g. spectral normalization).
+
+  Shape:
+    - Source: :math:`(\sum_i N_{i}, C_{in})`
+    - Target: :math:`(\sum_i N_{i}, C_{query})`
+    - Structure: ScatterStructure with :math:`\sum_i N_i` nodes
+        or ConstantStructure with :math:`(\sum_i N_i, N_{neighbours})` nodes
+        and neighbours.
+    - Output: :math:`(\sum_i N_i, C_{out})`
+  """
   def __init__(self, in_size, out_size, attention_size, query_size=None, heads=64,
                normalization=lambda x: x):
-    """Aggregates a node neighbourhood using a pairwise dot-product attention mechanism.
-    Args:
-      size (int): size of the attention embedding.
-    """
     super(NeighbourMultiHeadAttention, self).__init__(has_scatter=True)
     query_size = query_size if query_size is not None else in_size
     self.query_size = query_size
@@ -205,6 +331,18 @@ class NeighbourMultiHeadAttention(ConnectedModule):
     self.output = normalization(nn.Linear(heads * attention_size, out_size))
 
   def attend(self, query, data):
+    r"""Compares query and data features defining an attention kernel.
+    Common choices include the dot-product, addition and :math:`L^p` norms.
+
+    Args:
+      query (torch.Tensor): tensor containing query information.
+      data (torch.Tensor): tensor containing key information.
+
+    Shape:
+      - Query: :math:`(\sum_i N_i^2, C)`
+      - Data: :math:`(\sum_i N_i^2, C)`
+      - Output: :math:`\sum_i N_i^2`
+    """
     raise NotImplementedError("Abstract.")
 
   def reduce_scatter(self, own_data, source_message, indices, node_count):
@@ -234,11 +372,65 @@ class NeighbourMultiHeadAttention(ConnectedModule):
     return result
 
 class NeighbourDotMultiHeadAttention(NeighbourMultiHeadAttention):
+  r"""Aggregates neighbourhood information using pairwise multi-head attention
+  with a dot-product kernel. The resulting kernel has the form
+  :math:`softmax_j(\sum_i K_{jhi} \cdot Q_{jhi}))`, where
+  :math:`softmax_i(x_i) := \frac{\exp(x_i)}{\sum_i \exp(x\i)}` is the softmax
+  function.
+  The attention operation is replicated across a number of independent heads
+  :math:`h` which are then aggregated into a set of common output feature maps.
+
+  Args:
+    in_size (int): number of neighbour features.
+    out_size (int): number of output features.
+    attention_size (int): number of feature maps used in the attention kernel.
+    query_size (int): number of target node features.
+    heads (int): number of parallel attention heads. The final number of
+      feature maps is calculated as
+      :math:`\texttt{attention_size} \cdot \texttt{heads}`.
+    normalization (callable): weight normalization applied to the learned
+      linear transformation (e.g. spectral normalization).
+
+  Shape:
+    - Source: :math:`(\sum_i N_{i}, C_{in})`
+    - Target: :math:`(\sum_i N_{i}, C_{query})`
+    - Structure: ScatterStructure with :math:`\sum_i N_i` nodes
+        or ConstantStructure with :math:`(\sum_i N_i, N_{neighbours})` nodes
+        and neighbours.
+    - Output: :math:`(\sum_i N_i, C_{out})`
+  """
   def attend(self, query, data):
     scaling = torch.sqrt(torch.tensor(self.attention_size, dtype=torch.float))
     return (query * data).sum(dim=-2) / scaling
 
 class NeighbourAddMultiHeadAttention(NeighbourMultiHeadAttention):
+  r"""Aggregates neighbourhood information using pairwise multi-head attention
+  with a dot-product kernel. The resulting kernel has the form
+  :math:`softmax_j(\sum_i K_{jhi} + Q_{jhi}))`, where
+  :math:`softmax_i(x_i) := \frac{\exp(x_i)}{\sum_i \exp(x\i)}` is the softmax
+  function.
+  The attention operation is replicated across a number of independent heads
+  :math:`h` which are then aggregated into a set of common output feature maps.
+
+  Args:
+    in_size (int): number of neighbour features.
+    out_size (int): number of output features.
+    attention_size (int): number of feature maps used in the attention kernel.
+    query_size (int): number of target node features.
+    heads (int): number of parallel attention heads. The final number of
+      feature maps is calculated as
+      :math:`\texttt{attention_size} \cdot \texttt{heads}`.
+    normalization (callable): weight normalization applied to the learned
+      linear transformation (e.g. spectral normalization).
+
+  Shape:
+    - Source: :math:`(\sum_i N_{i}, C_{in})`
+    - Target: :math:`(\sum_i N_{i}, C_{query})`
+    - Structure: ScatterStructure with :math:`\sum_i N_i` nodes
+        or ConstantStructure with :math:`(\sum_i N_i, N_{neighbours})` nodes
+        and neighbours.
+    - Output: :math:`(\sum_i N_i, C_{out})`
+  """
   def attend(self, query, data):
     return (query + data).sum(dim=-2)
 
@@ -271,15 +463,15 @@ class NeighbourMedian(NeighbourReducer):
     super(NeighbourMedian, self).__init__(torch.median)
 
 class GraphResBlock(nn.Module):
+  """Residual block for graph networks.
+
+  Args:
+    channels (int): number of input and output features.
+    aggregate (:class:`ConnectedModule`): neighbourhood aggregation function.
+    activation (nn.Module): activation function. Defaults to ReLU.
+  """
   def __init__(self, channels, aggregate=NeighbourMax,
                activation=nn.ReLU()):
-    """Residual block for graph networks.
-
-    Args:
-      channels (int): number of input and output features.
-      aggregate (nn.Module): neighbourhood aggregation function.
-      activation (nn.Module): activation function. Defaults to ReLU.
-    """
     super(GraphResBlock, self).__init__()
     self.activation = activation
     self.aggregate = aggregate
