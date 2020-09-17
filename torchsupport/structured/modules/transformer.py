@@ -98,5 +98,5 @@ class Halting(nn.Module):
       state = weights * new_state + (1 - weights) * state
       if not running.any():
         break
-    
+
     return state

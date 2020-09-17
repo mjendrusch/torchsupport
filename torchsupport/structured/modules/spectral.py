@@ -2,16 +2,54 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as func
 
-from torchsupport.structured.modules import basic as snn
+from torchsupport.structured.modules.basic import ConnectedModule
+from torchsupport.structured import scatter
 
-class AdjacencyAction(snn.ConnectedModule):
+class AdjacencyAction(ConnectedModule):
+  r"""Computes the action of the adjacency matrix defined by a given
+  structure in the framework of message-passing neural networks.
+
+  Args:
+    normalized (bool): normalize contribution of the central node to its
+      neighbours?
+  """
+  def __init__(self, normalized=False):
+    super().__init__(has_scatter=True)
+
+  def reduce_scatter(self, own_data, source_message, indices, node_count):
+    _, counts = indices.unique(return_counts=True)
+    message_size = torch.repeat_interleave(counts, counts).float()
+    own_norm = message_size * (message_size + 1)
+    return scatter.add(
+      own_data / own_norm + source_message / (message_size + 1),
+      indices, dim_size=node_count
+    )
+
   def reduce(self, data, message):
     return (data + message.sum(dim=0)) / (message.size(0) + 1)
 
-class LaplacianAction(snn.ConnectedModule):
+class LaplacianAction(ConnectedModule):
+  r"""Computes the action of the graph Laplacian defined by a given
+  structure in the framework of message-passing neural networks.
+
+  Args:
+    normalized (bool): normalize contribution of the central node to its
+      neighbours?
+  """
   def __init__(self, normalized=False):
-    super(LaplacianAction, self).__init__()
+    super(LaplacianAction, self).__init__(has_scatter=True)
     self.normalized = normalized
+
+  def reduce_scatter(self, own_data, source_message, indices, node_count):
+    _, counts = indices.unique(return_counts=True)
+    message_size = torch.repeat_interleave(counts, counts).float()
+    factor = 1
+    if self.normalized:
+      factor = 1 / message_size
+    return scatter.add(
+      (own_data - source_message) * factor,
+      indices, dim_size=node_count
+    )
 
   def reduce(self, data, message):
     factor = 1
@@ -20,6 +58,22 @@ class LaplacianAction(snn.ConnectedModule):
     return factor * (message.size(0) * data - message.sum(dim=0))
 
 class GCN(nn.Module):
+  r"""Standard Graph Convolutional Neural Network (GCN).
+  Transforms graph features by applying a non-linear transformation to
+  all node features, followed by acting with the adjacency matrix, resulting
+  in the following transformation:
+  :math:`GCN(X, S) := A_S^d \sigma(wX + \mathbf{b})`
+  where :math:`\sigma` is a nonlinear activation function, :math:`w` and
+  :math:`b` the weights of an affine transformation, :math:`A_S` the
+  adjacency matrix corresponding to the structure :math:`S` and
+  :math:`d` the depth parameter of the GCN.
+
+  Args:
+    in_size (int): number of input feature maps.
+    out_size (int): number of output feature maps.
+    depth (int): exponent of the adjacency matrix action. Default: 1.
+    activation (callable): nonlinear activation function.
+  """
   def __init__(self, in_size, out_size, depth=1, activation=func.relu):
     super(GCN, self).__init__()
     self.linear = nn.Linear(in_size, out_size)
@@ -34,6 +88,17 @@ class GCN(nn.Module):
     return self.activation(out)
 
 class Chebyshev(nn.Module):
+  r"""Chebyshev Graph Convolutional Neural Network.
+  Transforms graph features by applying a non-linear transformation to
+  all node features, followed by repeatedly acting with the graph Laplacian
+  matrix.
+
+  Args:
+    in_size (int): number of input feature maps.
+    out_size (int): number of output feature maps.
+    depth (int): order of the Chebyshev polynomial approximation. Default: 1.
+    activation (callable): nonlinear activation function.
+  """
   def __init__(self, in_size, out_size, depth=1, activation=func.relu):
     super(Chebyshev, self).__init__()
     self.linear = nn.Linear(in_size, out_size)
@@ -53,6 +118,23 @@ class Chebyshev(nn.Module):
     return self.activation(out)
 
 class ConvSkip(nn.Module):
+  r"""Graph Convolutional Neural Network with skip connections.
+  Transforms graph features by applying a non-linear transformation to
+  all node features, followed by acting with the adjacency matrix or graph
+  Laplacian and adding node features through a skip connection:
+  :math:`Skip(X, Y, S) := \sigma(A_S f(X) + g(Y))`
+  where :math:`\sigma` is a nonlinear activation function, :math:`f` and
+  :math:`g` learnable affine transformations and :math:`A_S` the
+  adjacency matrix corresponding to the structure :math:`S`.
+
+  Args:
+    in_size (int): number of input feature maps.
+    out_size (int): number of output feature maps.
+    merge_size (int): number of feature maps in the skip connection.
+    activation (callable): nonlinear activation function.
+    connected (:class:ConnectedModule): module computing the action
+      of the adjacency matrix or graph Laplacian on transformed node features.
+  """
   def __init__(self, in_size, out_size,
                merge_size, activation=func.relu,
                connected=LaplacianAction(normalized=True)):
