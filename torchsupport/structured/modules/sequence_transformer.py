@@ -49,7 +49,7 @@ class SequenceMultiHeadAttention(nn.Module):
   def forward(self, inputs, index):
     key = self.key(inputs).view(inputs.size(0), self.heads, self.attention_size)
     query = self.query(inputs).view(inputs.size(0), self.heads, self.attention_size)
-    value = self.value(inputs).view(inputs.size(0), self.heads, self.value_size)
+    value = self.value(inputs).view(inputs.size(0), self.heads, self.hidden_size)
     key, _, indices, _ = pad(key, index)
     query, _, indices, _ = pad(query, index)
     value, _, indices, _ = pad(value, index)
@@ -92,7 +92,7 @@ class SequenceLinearAttention(SequenceMultiHeadAttention):
   def forward(self, inputs, index):
     key = self.key(inputs).view(inputs.size(0), self.heads, self.attention_size)
     query = self.query(inputs).view(inputs.size(0), self.heads, self.attention_size)
-    value = self.value(inputs).view(inputs.size(0), self.heads, self.value_size)
+    value = self.value(inputs).view(inputs.size(0), self.heads, self.hidden_size)
     key, _, indices, _ = pad(self.sim(key), index)
     query, _, indices, _ = pad(self.sim(query), index)
     value, _, indices, _ = pad(value, index)
