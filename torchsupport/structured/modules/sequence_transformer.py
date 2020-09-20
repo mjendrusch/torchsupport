@@ -37,6 +37,9 @@ class SequenceMultiHeadAttention(nn.Module):
                hidden_size=128, attention_size=128,
                heads=8, similarity=None):
     super().__init__()
+    self.attention_size = attention_size
+    self.hidden_size = hidden_size
+    self.heads = heads
     self.sim = similarity or dot_attention
     self.key = nn.Linear(in_size, attention_size * heads, bias=False)
     self.query = nn.Linear(in_size, attention_size * heads, bias=False)
@@ -44,9 +47,9 @@ class SequenceMultiHeadAttention(nn.Module):
     self.out = nn.Linear(hidden_size * heads, out_size, bias=False)
 
   def forward(self, inputs, index):
-    key = self.key(inputs).view(inputs.size(0), self.heads, self.D)
-    query = self.query(inputs).view(inputs.size(0), self.heads, self.D)
-    value = self.value(inputs).view(inputs.size(0), self.heads, self.V)
+    key = self.key(inputs).view(inputs.size(0), self.heads, self.attention_size)
+    query = self.query(inputs).view(inputs.size(0), self.heads, self.attention_size)
+    value = self.value(inputs).view(inputs.size(0), self.heads, self.value_size)
     key, _, indices, _ = pad(key, index)
     query, _, indices, _ = pad(query, index)
     value, _, indices, _ = pad(value, index)
@@ -87,9 +90,9 @@ class SequenceLinearAttention(SequenceMultiHeadAttention):
     )
 
   def forward(self, inputs, index):
-    key = self.key(inputs).view(inputs.size(0), self.heads, self.D)
-    query = self.query(inputs).view(inputs.size(0), self.heads, self.D)
-    value = self.value(inputs).view(inputs.size(0), self.heads, self.V)
+    key = self.key(inputs).view(inputs.size(0), self.heads, self.attention_size)
+    query = self.query(inputs).view(inputs.size(0), self.heads, self.attention_size)
+    value = self.value(inputs).view(inputs.size(0), self.heads, self.value_size)
     key, _, indices, _ = pad(self.sim(key), index)
     query, _, indices, _ = pad(self.sim(query), index)
     value, _, indices, _ = pad(value, index)
