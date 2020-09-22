@@ -57,12 +57,12 @@ class SequenceMultiHeadAttention(nn.Module):
 
     # mask bad values
     mask = torch.ones_like(sim, dtype=torch.bool)
-    mask.view(-1, *mask.shape[1:])[indices] = False
+    mask.view(-1, *mask.shape[2:])[indices] = False
     sim[mask] = -float("inf")
     sim = sim.softmax(dim=1)
 
     result = (value[:, :, None] * sim).sum(dim=1)
-    result = result.view(result.shape[:-2], -1)
+    result = result.view(*result.shape[:-2], -1)
     result = unpad(result, indices)
     result = self.out(result)
     return result
