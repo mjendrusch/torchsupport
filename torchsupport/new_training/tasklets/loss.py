@@ -1,4 +1,3 @@
-from torchsupport.new_training.composable import nominal, Update
 
 def join(*names, **weighted_names):
   complete_names = {
@@ -7,8 +6,7 @@ def join(*names, **weighted_names):
   }
   complete_names.update(weighted_names)
 
-  @nominal(Update)
-  def join_helper(loss, context) -> ("loss", "context"):
+  def join_helper(loss, context):
     result = 0.0
     for key in complete_names:
       if key in context.losses.dict:

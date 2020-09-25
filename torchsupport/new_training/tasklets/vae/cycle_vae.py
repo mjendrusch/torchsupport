@@ -3,7 +3,7 @@ from typing import List
 from functools import partial
 from collections import namedtuple
 
-from torchsupport.new_training.tasklets.tasklet import tasklet, Tasklet
+from torchsupport.new_training.tasklets.tasklet import Tasklet
 from torchsupport.new_training.tasklets.encoder import KLEncoder, Encoder
 from torchsupport.new_training.tasklets.generator import Decoder
 from torchsupport.new_training.tasklets.matching import match
@@ -13,15 +13,15 @@ class CycleVAE(Tasklet):
   @staticmethod
   def mode(prior, encoder, decoder, match, beta=1.0):
     return CycleMode(
-      encoder=KLEncoder(encoder, prior).func,
-      decoder=Decoder(decoder, match).func,
+      encoder=KLEncoder(encoder, prior),
+      decoder=Decoder(decoder, match),
       beta=beta
     )
 
   def __init__(self, modes: List[CycleMode]):
     self.modes = modes
 
-  def run(self, inputs, args) -> "recoding_map":
+  def run(self, inputs, args):
     table = {}
     for idx, (data, mode) in enumerate(zip(inputs, self.modes)):
       code = mode.encoder.run(mode, args)
@@ -32,9 +32,7 @@ class CycleVAE(Tasklet):
         table[idx, idy] = (reconstruction, other_data, code, recode)
     return table
 
-  def loss(self, recoding_map, args) -> (
-    "cycle_vae_loss", "recode_losses", "match_losses", "cycle_losses"
-  ):
+  def loss(self, recoding_map, args):
     cycle_losses = []
     match_losses = []
     recode_losses = []
@@ -49,4 +47,9 @@ class CycleVAE(Tasklet):
       recode_losses.append(recode_loss.detach())
       match_losses.append(match_loss.detach())
       cycle_losses.append(cycle_loss.detach())
-    return total_loss, recode_losses, match_losses, cycle_losses
+    self.store(
+      recode_losses=recode_losses,
+      match_losses=match_losses,
+      cycle_losses=cycle_losses
+    )
+    return total_loss

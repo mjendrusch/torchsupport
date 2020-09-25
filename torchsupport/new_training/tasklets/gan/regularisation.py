@@ -12,22 +12,18 @@ from torchsupport.new_training.tasklets.loss import join
 from torchsupport.new_training.tasklets.gan.gan import GANGenerator, GANDiscriminator
 
 class GeneratorRegularisation(Tasklet):
-  def run(self, inputs, args, fake, decision) -> []:
+  def run(self, inputs, args, fake, decision):
     pass
 
-  def loss(self, inputs, args, fake, decision) -> (
-    "regularisation_loss"
-  ):
+  def loss(self, inputs, args, fake, decision):
     return 0.0
 
 class DiscriminatorRegularisation(Tasklet):
-  def run(self, inputs, args, fake_inputs, fake_args) -> []:
+  def run(self, inputs, args, fake_inputs, fake_args):
     pass
 
   def loss(self, inputs, args, fake_inputs, fake_args,
-           real_decision, fake_decision) -> (
-    "regularisation_loss"
-  ):
+           real_decision, fake_decision):
     return 0.0
 
 # class DiscriminatorGradientPenalty(Tasklet):

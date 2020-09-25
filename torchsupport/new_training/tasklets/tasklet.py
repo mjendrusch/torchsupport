@@ -1,40 +1,42 @@
 from functools import partial
 
+from .storage import Storage
+from torchsupport.data.namedtuple import NamedTuple
 from torchsupport.new_training.composable import nominal, Run, Loss, Composable
 
-class TaskletMeta(type):
-  def __new__(cls, name, bases, attr):
-    if "run" in attr:
-      attr["run_impl"] = attr["run"]
-      attr["run"] = nominal(Run)(attr["run"])
-    if "loss" in attr:
-      attr["loss_impl"] = attr["loss"]
-      attr["loss"] = nominal(Loss)(attr["loss"])
-    return super(TaskletMeta, cls).__new__(cls, name, bases, attr)
+class Tasklet:
+  def __init__(self):
+    self.storage = Storage()
+    self.parameter_dict = {}
 
-class StructuralTasklet:
-  def __init__(self, run, loss):
-    self.run = run.function
-    self.loss = loss.function
+  def __setattr__(self, name, value):
+    if isinstance(value, Tasklet):
+      value.link_storage(self, name)
+    object.__setattr__(self, name, value)
 
-class Tasklet(metaclass=TaskletMeta):
-  @property
-  def func(self):
-    return StructuralTasklet(self.run, self.loss)
+  def store(self, **kwargs):
+    for name, data in kwargs.items():
+      self.storage[name] = data
 
-  def run(self, ctx) -> []:
+  def link_storage(self, target, name):
+    target.storage[name] = self.storage
+
+  def parameters(self):
+    pass #TODO
+
+  def log(self):
+    return NamedTuple(**self.storage)
+
+  def run(self, *args, **kwargs):
     return None
 
-  def loss(self, ctx) -> []:
+  def loss(self, *args, **kwargs):
+    return None
+
+  def step(self, *args, **kwargs):
     return None
 
 class FuncTasklet(Tasklet):
   def __init__(self, run, loss):
     self.run = run
     self.loss = loss
-
-def tasklet_impl(function, *args, **kwargs):
-  return FuncTasklet(*function(*args, **kwargs))
-
-def tasklet(function):
-  return partial(tasklet_impl, function)

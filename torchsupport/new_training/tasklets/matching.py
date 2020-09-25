@@ -3,8 +3,6 @@ from functools import partial
 import torch
 from torch.distributions import kl_divergence, Distribution
 
-from torchsupport.new_training.composable import nominal, Loss
-
 class Matchable:
   def match(self, other):
     raise NotImplementedError("Abstract.")
@@ -26,14 +24,11 @@ def match(p, q):
     return q.rmatch(p)
   raise ValueError(f"Neither p nor q admit a matching operation.")
 
-@nominal(Loss)
 def match_l2(x, y) -> "L2_matching_loss":
   return match_lp(x, y, p=2)
 
-@nominal(Loss)
 def match_l1(x, y) -> "L1_matching_loss":
   return match_lp(x, y, p=1)
 
-@nominal(Loss)
 def match_any(p, q) -> "matching_loss":
   return match(p, q)
