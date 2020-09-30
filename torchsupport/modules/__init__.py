@@ -13,7 +13,7 @@ from torchsupport.modules.recurrent import *
 from torchsupport.modules.reduction import *
 from torchsupport.modules.refine import *
 from torchsupport.modules.residual import *
-# from torchsupport.modules.reversible import *
+from torchsupport.modules.invertible import *
 from torchsupport.modules.routing import *
 from torchsupport.modules.separable import *
 from torchsupport.modules.vector_quantisation import *
