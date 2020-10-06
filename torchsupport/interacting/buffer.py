@@ -337,7 +337,7 @@ class CombinedBuffer(AbstractBuffer):
     nuke_next_n = max(nukes)
     return position, nuke_next_n
 
-  def prepare_append(self, position, nuke_next_n):
+  def prepare_for_append(self, position, nuke_next_n):
     for key in self.buffers:
       buffer = self.buffers[key]
       if isinstance(buffer, NoneBuffer):
@@ -347,7 +347,7 @@ class CombinedBuffer(AbstractBuffer):
   def _append_single(self, data):
     data, _ = self.data_size(data)
     position, nuke_next_n = self.position_for_append(data)
-    self.prepare_append(position, nuke_next_n)
+    self.prepare_for_append(position, nuke_next_n)
     self.raw_append(data)
 
   def append(self, data):
