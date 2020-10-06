@@ -3,7 +3,7 @@ import random
 import torch
 from torch.distributions import Categorical
 
-from torchsupport.data.namedtuple import namedtuple
+from torchsupport.data.namedtuple import namedtuple, NamedTuple
 
 from torchsupport.interacting.policies.policy import Policy, ModulePolicy
 
@@ -30,7 +30,13 @@ class RandomPolicy(Policy):
 
 class CategoricalPolicy(ModulePolicy):
   def forward(self, state, hidden=None):
-    state = state.unsqueeze(0)
+    if isinstance(state, (list, tuple, NamedTuple)):
+      state = [
+        item.unsqueeze(0)
+        for item in state
+      ]
+    else:
+      state = state.unsqueeze(0)
     hidden = hidden.unsqueeze(0) if hidden else None
     logits = self.policy(
       state, hidden=hidden
