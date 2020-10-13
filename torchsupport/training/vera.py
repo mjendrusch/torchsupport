@@ -9,32 +9,71 @@ from torchsupport.data.collate import DataLoader, default_collate
 from torchsupport.training.energy import AbstractEnergyTraining
 
 class VERAPosterior(nn.Module):
-  def __init__(self, shape):
+  def __init__(self):
     super().__init__()
     self.standard_deviation = nn.Parameter(
-      (torch.ones(*shape) * 0.1).log()
+      torch.tensor(0.01).log()
     )
+
+  def posterior(self, latent):
+    return Normal(latent, self.standard_deviation.exp())
 
   def forward(self):
     return self.standard_deviation.exp()
+
+class VERAGenerator(nn.Module):
+  def __init__(self, generator, latent_shape=None):
+    super().__init__()
+    self.generator = generator
+    self.latent_shape = latent_shape or [64]
+    self.log_conditional_variance = nn.Parameter(
+      torch.tensor(0.01).log()
+    )
+
+  @property
+  def prior(self):
+    return Normal(
+      torch.zeros(self.latent_shape),
+      torch.ones(self.latent_shape)
+    )
+
+  def sample(self, *args, sample_shape=None):
+    sample_shape = sample_shape or []
+    if not isinstance(sample_shape, (list, tuple, torch.Size)):
+      sample_shape = [sample_shape]
+    sample_shape = torch.Size(sample_shape)
+    total = sample_shape.numel()
+
+    latents = self.prior.sample((total,))
+    result = self(latents, *args)
+    result = result.view(*sample_shape, *result.shape[1:])
+    latents = latents.view(*sample_shape, *latents.shape[1:])
+    return latents, result
+
+  def conditional(self, mean):
+    return Normal(mean, self.log_conditional_variance.exp())
+
+  def forward(self, *args, **kwargs):
+    return self.generator.forward(*args, **kwargs)
 
 class VERATraining(AbstractEnergyTraining):
   def __init__(self, score, generator, *args,
                gradient_decay=0.1, hessian_decay=0.001, k=20,
                entropy_weight=100,
+               latent_shape=64,
                integrator=None,
                optimizer=torch.optim.Adam,
                generator_optimizer_kwargs=None,
-               standard_deviation_optimizer_kwargs=None,
+               posterior_optimizer_kwargs=None,
                **kwargs):
     self.score = ...
     self.generator = ...
-    self.standard_deviation = ...
+    self.posterior = ...
     super().__init__(
       {"score": score}, *args, optimizer=optimizer, **kwargs
     )
 
-    generators = {"generator": generator}
+    generators = {"generator": VERAGenerator(generator, latent_shape=latent_shape)}
     self.generator_names, netlist = self.collect_netlist(generators)
 
     if generator_optimizer_kwargs is None:
@@ -45,15 +84,15 @@ class VERATraining(AbstractEnergyTraining):
       **generator_optimizer_kwargs
     )
 
-    posterior = {"standard_deviation": VERAPosterior(self.score.sample(1).shape)}
+    posterior = {"posterior": VERAPosterior()}
     self.posterior_names, netlist = self.collect_netlist(posterior)
 
-    if standard_deviation_optimizer_kwargs is None:
-      standard_deviation_optimizer_kwargs = {"lr": 5e-4}
+    if posterior_optimizer_kwargs is None:
+      posterior_optimizer_kwargs = {"lr": 5e-4}
 
-    self.standard_deviation_optimizer = optimizer(
+    self.posterior_optimizer = optimizer(
       netlist,
-      **standard_deviation_optimizer_kwargs
+      **posterior_optimizer_kwargs
     )
 
     self.k = k
@@ -67,32 +106,29 @@ class VERATraining(AbstractEnergyTraining):
     data = to_device(data, self.device)
     real, *args = self.data_key(data)
     latent, fake = self.posterior_step(real, args)
-    fake_result = self.energy_step(real, fake, args)
-    self.generator_step(latent, fake, args, fake_result)
-    super().step(data)
+    self.energy_step(real, fake, args)
+    self.generator_step(latent, fake, args)
+    self.each_step()
 
-  def run_posterior(self, latent, data, args):
-    latent_distribution = Normal(0.0, 1.0)
-    mean = self.generator(latent, args)
-    conditional_distribution = Normal(mean, self.generator.standard_deviation())
-    posterior_distribution = Normal(latent.detach(), self.standard_deviation())
-    joint_log_probability = latent_distribution.log_prob(latent).sum(dim=1) \
-      + conditional_distribution.log_prob(data).flatten(start_dim=1).sum(dim=1)
-    posterior_entropy = posterior_distribution.entropy().sum(dim=1)
-    return mean, joint_log_probability, posterior_entropy
+  def run_posterior(self, data, args):
+    latent, mean = self.generator.sample(*args, sample_shape=(self.batch_size,))
+    prior = self.generator.prior.log_prob(latent).sum(dim=1)
+    conditional = self.generator.conditional(mean).log_prob(data).flatten(start_dim=1).sum(dim=1)
+    posterior_entropy = self.posterior.posterior(latent.detach()).entropy().sum(dim=1)
+    joint_log_probability = prior + conditional
+    return latent, mean, joint_log_probability, posterior_entropy
 
-  def posterior_loss(self, mean, joint, entropy):
+  def posterior_loss(self, joint, entropy):
     result = -(joint.mean() + entropy.mean())
     self.current_losses["posterior"] = float(result)
     return result
 
   def posterior_step(self, real, args):
-    self.standard_deviation_optimizer.zero_grad()
-    latent = self.generator.sample(self.batch_size)
-    mean, *args = self.run_posterior(latent, real, args)
-    loss = self.posterior_loss(mean, *args)
+    self.posterior_optimizer.zero_grad()
+    latent, mean, *args = self.run_posterior(real, args)
+    loss = self.posterior_loss(*args)
     loss.backward(retain_graph=True)
-    self.standard_deviation_optimizer.step()
+    self.posterior_optimizer.step()
     return latent, mean
 
   def run_energy(self, real, fake, args):
@@ -100,7 +136,7 @@ class VERATraining(AbstractEnergyTraining):
     real_result = self.score(real, *args)
     grad = ag.grad(
       real_result, real,
-      grad_outputs=torch.ones_like(real),
+      grad_outputs=torch.ones_like(real_result),
       create_graph=True,
       retain_graph=True
     )[0]
@@ -111,7 +147,7 @@ class VERATraining(AbstractEnergyTraining):
     return real_result, fake_result, grad_norm
 
   def energy_loss(self, real, fake, grad):
-    result = real.mean() - fake.mean() + self.gradient_decay * grad.mean()
+    result = -real.mean() + fake.mean() + self.gradient_decay * grad.mean()
     self.current_losses["energy"] = float(result)
     return result
 
@@ -121,51 +157,67 @@ class VERATraining(AbstractEnergyTraining):
     loss = self.energy_loss(real_result, fake_result, grad_norm)
     loss.backward(retain_graph=True)
     self.optimizer.step()
-    return fake_result
 
   def run_generator(self, latent, fake, args):
-    posterior = Normal(
-      latent[None].repeat_interleave(self.k, dim=0),
-      self.standard_deviation()
-    )
-    latent_distribution = Normal(0.0, 1.0)
-    new_latents = posterior.sample()
-    log_posterior = posterior.log_prob(new_latents).sum(dim=2)
-    new_latents = new_latents.view(-1, latent.shape[1:])
-    new_fake = self.generator(new_latents, args)
+    posterior = self.posterior.posterior(latent)
+    new_latents = posterior.sample(sample_shape=(self.k,))
+    new_latents = new_latents.view(-1, *latent.shape[1:])
+    new_fake = self.generator(new_latents, *args)
 
-    distribution = Normal(new_fake, self.generator.standard_deviation())
-    log_conditional = distribution.log_prob(
-      fake[None].repeat_interleave(self.k, dim=0)
+    # compute importance weights
+    log_conditional = self.generator.conditional(new_fake).log_prob(
+      fake.repeat_interleave(self.k, dim=0)
     ).view(self.k, latent.size(0), -1).sum(dim=2)
-    log_prior = latent_distribution.log_prob(new_latents).sum(dim=2)
+    new_latents = new_latents.view(self.k, -1, *new_latents.shape[1:])
+    log_prior = self.generator.prior.log_prob(new_latents).sum(dim=2)
+    log_posterior = posterior.log_prob(new_latents).sum(dim=2)
     weight = log_prior + log_conditional - log_posterior
     weight = weight.softmax(dim=0)
-    value = fake[None] - new_fake.view(self.k, *fake.shape)
-    value = value / self.generator.standard_deviation() ** 2
-    value = value.flatten(start_dim=2)
-    score = (weight[:, :, None] * value).sum(dim=0).detach()
+
+    # compute score function estimator:
+    grad = fake[None] - new_fake.view(self.k, *fake.shape)
+    grad = grad / self.generator.log_conditional_variance.exp() ** 2
+    grad = grad.flatten(start_dim=2)
+    score = (weight[:, :, None] * grad).sum(dim=0).detach()
+
+    # compute entropy gradient
     entropy_gradient = (score * fake.flatten(start_dim=1)).sum(dim=1).mean()
-    return entropy_gradient
+    fake_result = self.score(fake, *args)
+    return fake_result, entropy_gradient
 
   def generator_loss(self, fake_result, entropy):
-    result = fake_result.mean() - self.entropy_weight * entropy
+    result = -(fake_result.mean() + self.entropy_weight * entropy)
     self.current_losses["generator"] = float(result)
     return result
 
-  def generator_step(self, latent, fake, args, fake_result):
+  def generator_step(self, latent, fake, args):
     self.generator_optimizer.zero_grad()
-    entropy = self.run_generator(latent, fake, args)
+    fake_result, entropy = self.run_generator(latent, fake, args)
     loss = self.generator_loss(fake_result, entropy)
+    self.log_statistics(float(loss))
     loss.backward()
     self.generator_optimizer.step()
 
+  def sample(self):
+    batch = next(iter(self.train_data))
+    _, *args = self.data_key(batch)
+    _, fake = self.generator.sample(*args, sample_shape=self.batch_size)
+    improved = self.integrator.integrate(self.score, fake, *args).detach()
+    return (fake, improved, *args)
+
   def each_step(self):
     super().each_step()
-    # TODO
-    # if self.step_id % self.report_interval == 0 and self.step_id != 0:
-    #   data, *args = self.sample()
-    #   self.each_generate(data, *args)
+    if self.step_id % self.report_interval == 0 and self.step_id != 0:
+      data, *args = self.sample()
+      self.each_generate(data, *args)
+
+  def each_generate(self, fake, improved, *args):
+    fake = fake - fake.min()
+    fake = fake / fake.max()
+    improved = improved - improved.min()
+    improved = improved / improved.max()
+    self.writer.add_images("model", fake[:, None].repeat_interleave(3, dim=1), self.step_id)
+    self.writer.add_images("energy", improved[:, None].repeat_interleave(3, dim=1), self.step_id)
 
   def data_key(self, data):
     result, *args = data
