@@ -50,6 +50,30 @@ class Training(object):
     self.step_id = 0
     self.epoch_id = 0
     self.writer = SummaryWriter(self.full_path)
+    self.current_losses = {}
+
+  def collect_netlist(self, networks):
+    netlist = []
+    names = []
+    for name, network in networks.items():
+      names.append(name)
+      network_object = network.to(self.device)
+      setattr(self, name, network_object)
+      netlist.extend(list(network_object.parameters()))
+    return names, netlist
+
+  def get_netlist(self, netlist):
+    return {
+      name: getattr(self, name)
+      for name in netlist
+    }
+
+  def log_statistics(self, loss_val, prefix="", suffix=" loss", name="total loss"):
+    if self.verbose:
+      for loss_name in self.current_losses:
+        loss_float = self.current_losses[loss_name]
+        self.writer.add_scalar(f"{prefix}{loss_name}{suffix}", loss_float, self.step_id)
+    self.writer.add_scalar(name, float(loss_val), self.step_id)
 
   def each_step(self):
     self.save_tick()
