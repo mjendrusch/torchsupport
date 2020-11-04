@@ -1,3 +1,4 @@
+from copy import deepcopy
 import numpy as np
 
 import torch
@@ -31,7 +32,7 @@ class DenoisingDiffusionIntegrator:
         # print(data.min(), data.max(), data.mean(), data.std())
         step = a_1.sqrt() * ((((1 - a_1) / a_1).sqrt() - ((1 - a_0) / a_0).sqrt()))
         scale = (a_1 / a_0).sqrt()
-        time = idx * torch.ones(data.size(0)).to(data.device)
+        time = len(noise_weights) - idx * torch.ones(data.size(0)).to(data.device) - 1
         data = scale * data + step * score(data, time, *args)
       return data
 
@@ -41,12 +42,15 @@ class DenoisingDiffusionTraining(AbstractEnergyTraining):
                noise_weights=None,
                timesteps=1000,
                skipsteps=1,
+               mu=0.9999,
                optimizer=torch.optim.Adam,
                **kwargs):
     self.score = ...
     super().__init__(
       {"score": score}, *args, optimizer=optimizer, **kwargs
     )
+    self.mu = mu
+    self.score_clone = deepcopy(self.score)
     self.integrator = integrator or DenoisingDiffusionIntegrator(step_factor=skipsteps)
     self.noise_weights = noise_weights
     self.skipsteps = skipsteps
@@ -60,6 +64,12 @@ class DenoisingDiffusionTraining(AbstractEnergyTraining):
     betas = torch.cat((torch.zeros(1), betas), dim=0)
     alphas = (1 - betas).cumprod(dim=0)
     return alphas[1:]
+
+  def ema(self):
+    with torch.no_grad():
+      for source, target in zip(self.score.parameters(), self.score_clone.parameters()):
+        target *= (1 - self.mu)
+        target += self.mu * source
 
   def step(self, data):
     data = to_device(data, self.device)
@@ -90,15 +100,16 @@ class DenoisingDiffusionTraining(AbstractEnergyTraining):
     self.log_statistics(float(loss))
     loss.backward()
     self.optimizer.step()
+    self.ema()
 
   def sample(self):
-    self.score.eval()
+    self.score_clone.eval()
     batch = next(iter(self.train_data))
     data, *args = self.data_key(to_device(batch, self.device))
     data = torch.randn_like(data)
 
-    improved = self.integrator.integrate(self.score, data, *args).detach()
-    self.score.train()
+    improved = self.integrator.integrate(self.score_clone, data, *args).detach()
+    self.score_clone.train()
     return (improved, *args)
 
   def each_step(self):
