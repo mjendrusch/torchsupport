@@ -249,7 +249,7 @@ class VAETraining(AbstractVAETraining):
     kld_prior = self.divergence_loss(detach(posterior), prior)
     loss_val = self.reconstruction_weight * ce + self.divergence_weight * (kld - kld.detach() + kld_prior)
     self.current_losses["reconstruction-log-likelihood"] = float(ce)
-    self.current_losses["kullback-leibler-divergence"] = float(kld)
+    self.current_losses["kullback-leibler-divergence"] = float(kld_prior)
     return loss_val
 
   def sample(self, distribution):
