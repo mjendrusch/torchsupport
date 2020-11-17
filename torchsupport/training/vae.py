@@ -1,18 +1,18 @@
+from copy import deepcopy
 from abc import ABC, abstractmethod
 import numpy as np
 import torch
-from torch import nn
-from torch.nn import functional as func
-from torch.distributions import Normal, RelaxedOneHotCategorical
-
-from tensorboardX import SummaryWriter
+import torch.nn as nn
+import torch.nn.functional as func
+from torch.distributions import Normal
 
 from torchsupport.training.state import (
   TrainingState, NetNameListState, NetState
 )
 from torchsupport.training.training import Training
+from torchsupport.data.match import match
 import torchsupport.modules.losses.vae as vl
-from torchsupport.data.io import netwrite, to_device
+from torchsupport.data.io import to_device, detach
 from torchsupport.data.collate import DataLoader
 
 class AbstractVAETraining(Training):
@@ -25,6 +25,8 @@ class AbstractVAETraining(Training):
   def __init__(self, networks, data, valid=None,
                optimizer=torch.optim.Adam,
                optimizer_kwargs=None,
+               gradient_clip=200.0,
+               gradient_skip=400.0,
                **kwargs):
     """Generic training setup for variational autoencoders.
 
@@ -46,6 +48,8 @@ class AbstractVAETraining(Training):
     self.valid = valid
     self.train_data = None
     self.valid_data = None
+    self.gradient_clip = gradient_clip
+    self.gradient_skip = gradient_skip
 
     self.valid_iter = None
     if self.valid is not None:
@@ -55,15 +59,7 @@ class AbstractVAETraining(Training):
       )
       self.valid_iter = iter(self.valid_data)
 
-    netlist = []
-    self.network_names = []
-    for network in networks:
-      self.network_names.append(network)
-      network_object = networks[network].to(self.device)
-      setattr(self, network, network_object)
-      netlist.extend(list(network_object.parameters()))
-
-    self.current_losses = {}
+    self.network_names, netlist = self.collect_netlist(networks)
 
     if optimizer_kwargs is None:
       optimizer_kwargs = {"lr" : 5e-4}
@@ -72,10 +68,9 @@ class AbstractVAETraining(Training):
       netlist,
       **optimizer_kwargs
     )
-    self.checkpoint_names = {
-      name: getattr(self, name)
-      for name in self.network_names
-    }
+    self.checkpoint_names.update(
+      self.get_netlist(self.network_names)
+    )
 
   def divergence_loss(self, *args):
     """Abstract method. Computes the divergence loss."""
@@ -101,6 +96,9 @@ class AbstractVAETraining(Training):
     """Takes and partitions input data into VAE data and args."""
     return data
 
+  def each_generate(self, *args):
+    pass
+
   def step(self, data):
     """Performs a single step of VAE training.
 
@@ -114,13 +112,22 @@ class AbstractVAETraining(Training):
     loss_val = self.loss(*args)
 
     if self.verbose:
+      if self.step_id % self.report_interval == 0:
+        self.each_generate(*args)
       for loss_name in self.current_losses:
         loss_float = self.current_losses[loss_name]
         self.writer.add_scalar(f"{loss_name} loss", loss_float, self.step_id)
     self.writer.add_scalar("total loss", float(loss_val), self.step_id)
 
     loss_val.backward()
-    self.optimizer.step()
+    parameters = [
+      param
+      for key, val in self.get_netlist(self.network_names).items()
+      for param in val.parameters()
+    ]
+    gn = nn.utils.clip_grad_norm_(parameters, self.gradient_clip)
+    if (not torch.isnan(gn).any()) and (gn < self.gradient_skip).all():
+      self.optimizer.step()
     self.each_step()
 
     return float(loss_val)
@@ -179,154 +186,31 @@ class AbstractVAETraining(Training):
         self.log()
         self.step_id += 1
 
-    netlist = [
-      getattr(self, name)
-      for name in self.network_names
-    ]
+    netlist = self.get_netlist(self.network_names)
 
     return netlist
 
-class LaggingInference(ABC):
-  """Mixin replacing the training method of a VAE training
-  approach with the one detailed in "Lagging Inference Networks
-  and Posterior Collapse in Variational Autoencoders"."""
-  data = ...
-  batch_size = ...
-  encoder = ...
-  decoder = ...
-  device = ...
-  max_epochs = ...
-  valid = ...
-  network_names = ...
+class Prior(nn.Module):
+  def __init__(self, distribution):
+    super().__init__()
+    self.distribution = distribution
 
-  @abstractmethod
-  def step(self, data):
-    pass
+  def sample(self, prototype, *args, **kwargs):
+    return self.distribution.sample(sample_shape=[prototype.size(0)])
 
-  @abstractmethod
-  def sample(self, *inputs):
-    pass
-
-  @abstractmethod
-  def checkpoint(self):
-    pass
-
-  def aggressive_update(self, data):
-    inner_data = DataLoader(
-      self.data, batch_size=self.batch_size, num_workers=8,
-      shuffle=True
-    )
-    for parameter in self.decoder:
-      parameter.requires_grad = False
-    last_ten = [None] * 10
-    for idx, data_p in enumerate(inner_data):
-      loss = self.step(data_p)
-      last_ten[idx % 10] = loss
-      if last_ten[-1] is not None and last_ten[-1] >= last_ten[0]:
-        break
-    for parameter in self.decoder:
-      parameter.requires_grad = True
-    for parameter in self.encoder:
-      parameter.requires_grad = False
-    self.step(data)
-    for parameter in self.encoder:
-      parameter.requires_grad = True
-
-  def log_sum_exp(self, value, dim=None, keepdim=False):
-    if dim is not None:
-      m, _ = torch.max(value, dim=dim, keepdim=True)
-      value0 = value - m
-      if keepdim is False:
-        m = m.squeeze(dim)
-      return m + torch.log(torch.sum(torch.exp(value0), dim=dim, keepdim=keepdim))
-    else:
-      m = torch.max(value)
-      sum_exp = torch.sum(torch.exp(value - m))
-    return m + torch.log(sum_exp)
-
-  def compute_mi(self, x):
-    """Approximate the mutual information between x and z
-    I(x, z) = E_xE_{q(z|x)}log(q(z|x)) - E_xE_{q(z|x)}log(q(z))
-    Returns: Float
-    """
-    if isinstance(data, (list, tuple)):
-      data = [
-        point.to(self.device)
-        for point in data
-      ]
-    elif isinstance(data, dict):
-      data = {
-        key : data[key].to(self.device)
-        for key in data
-      }
-    else:
-      data = data.to(self.device)
-
-    with torch.no_grad():
-      mu, logvar = self.encoder.forward(x)
-      x_batch, nz = mu.size()
-      neg_entropy = (-0.5 * nz * np.log(2 * np.pi) - 0.5 * (1 + logvar).sum(-1)).mean()
-
-      z_samples = self.sample(mu, logvar)
-      z_samples = z_samples[:, None, :]
-      mu, logvar = mu[None], logvar[None]
-      var = logvar.exp()
-
-      dev = z_samples - mu
-      log_density = -0.5 * ((dev ** 2) / var).sum(dim=-1) - \
-          0.5 * (nz * np.log(2 * np.pi) + logvar.sum(-1))
-      log_qz = self.log_sum_exp(log_density, dim=1) - torch.log(x_batch)
-
-      return (neg_entropy - log_qz.mean(-1)).item()
-
-  def train(self):
-    aggressive = True
-    old_mi = 0
-    new_mi = 0
-    self.step_id = 0
-    for epoch_id in range(self.max_epochs):
-      self.epoch_id = epoch_id
-      self.train_data = None
-      self.train_data = DataLoader(
-        self.data, batch_size=self.batch_size, num_workers=8,
-        shuffle=True
-      )
-      for data in self.train_data:
-        if aggressive:
-          self.aggressive_update(data)
-        else:
-          self.step(data)
-        self.log()
-        self.step_id += 1
-      valid_data = DataLoader(self.valid, batch_size=self.batch_size, shuffle=True)
-      new_mi = self.compute_mi(next(iter(valid_data)))
-      aggressive = new_mi > old_mi
-
-    netlist = [
-      getattr(self, name)
-      for name in self.network_names
-    ]
-
-    return netlist
-
-class AETraining(AbstractVAETraining):
-  """Plain autoencoder training setup."""
-  def __init__(self, autoencoder, data, **kwargs):
-    self.autoencoder = ...
-    super(AETraining, self).__init__({
-      "autoencoder": autoencoder
-    }, data, **kwargs)
-
-  def loss(self, reconstruction, target):
-    return vl.reconstruction_bce(reconstruction, target)
-
-  def run_networks(self, data):
-    reconstruction, *_ = self.autoencoder(data)
-    return reconstruction, data
+  def forward(self, *args, **kwargs):
+    return self.distribution
 
 class VAETraining(AbstractVAETraining):
   """Standard VAE training setup."""
-  def __init__(self, encoder, decoder, data, **kwargs):
+  checkpoint_parameters = AbstractVAETraining.checkpoint_parameters + [
+    NetState("prior_target")
+  ]
+  def __init__(self, encoder, decoder, prior, data,
+               prior_mu=0.0, generate=True,
+               reconstruction_weight=1.0,
+               divergence_weight=1.0,
+               **kwargs):
     """Standard VAE training setup, training a pair of
     encoder and decoder to maximize the evidence lower
     bound.
@@ -340,35 +224,90 @@ class VAETraining(AbstractVAETraining):
     """
     self.encoder = ...
     self.decoder = ...
+    self.prior = ...
     super(VAETraining, self).__init__({
       "encoder": encoder,
-      "decoder": decoder
+      "decoder": decoder,
+      "prior": prior,
     }, data, **kwargs)
+    self.generate = generate
+    self.prior_mu = prior_mu
+    self.prior_target = deepcopy(self.prior)
+    self.reconstruction_weight = reconstruction_weight
+    self.divergence_weight = divergence_weight
+    self.checkpoint_names.update(dict(prior_target=self.prior_target))
 
   def reconstruction_loss(self, reconstruction, target):
-    return vl.reconstruction_bce(reconstruction, target)
+    return match(reconstruction, target)
 
-  def divergence_loss(self, mean, logvar):
-    return vl.normal_kl_loss(mean, logvar)
+  def divergence_loss(self, posterior, prior):
+    return match(posterior, prior)
 
-  def loss(self, mean, logvar, reconstruction, target):
+  def loss(self, posterior, prior, prior_target, reconstruction, target, args):
     ce = self.reconstruction_loss(reconstruction, target)
-    kld = self.divergence_loss(mean, logvar)
-    loss_val = ce + kld
-    self.current_losses["cross-entropy"] = float(ce)
-    self.current_losses["kullback-leibler"] = float(kld)
+    kld = self.divergence_loss(posterior, prior_target)
+    kld_prior = self.divergence_loss(detach(posterior), prior)
+    loss_val = self.reconstruction_weight * ce + self.divergence_weight * (kld - kld.detach() + kld_prior)
+    self.current_losses["reconstruction-log-likelihood"] = float(ce)
+    self.current_losses["kullback-leibler-divergence"] = float(kld)
     return loss_val
 
-  def sample(self, mean, logvar):
-    distribution = Normal(mean, torch.exp(0.5 * logvar))
-    sample = distribution.rsample()
-    return sample
+  def sample(self, distribution):
+    return distribution.rsample()
 
   def run_networks(self, data, *args):
-    _, mean, logvar = self.encoder(data, *args)
-    sample = self.sample(mean, logvar)
-    reconstruction = self.decoder(sample, *args)
-    return mean, logvar, reconstruction, data
+    posterior, *other = self.encoder(data, *args)
+    prior = self.prior(*other, *args)
+    with torch.no_grad():
+      prior_target = self.prior(*other, *args)
+    sample = self.sample(posterior)
+    reconstruction = self.decoder(sample, *other, *args)
+    return posterior, prior, prior_target, reconstruction, data, args
+
+  def ema(self):
+    with torch.no_grad():
+      for target, source in zip(
+        self.prior_target.parameters(),
+        self.prior.parameters()
+      ):
+        target *= self.prior_mu
+        target += (1 - self.prior_mu) * source
+
+  def each_step(self):
+    self.ema()
+    super().each_step()
+
+  def shape_adjust(self, data):
+    if data.size(1) == 1:
+      data = torch.repeat_interleave(data, 3, dim=1)
+    return data
+
+  def generate_samples(self):
+    sample, args = self.prior.sample(self.batch_size)
+    return self.decoder.display(self.decoder(sample, *args))
+
+  def each_generate(self, posterior, prior, prior_target, reconstruction, target, args):
+    if self.generate:
+      with torch.no_grad():
+        generated = self.generate_samples()
+      self.writer.add_images("generated", self.shape_adjust(generated), self.step_id)
+    self.writer.add_images("target", self.shape_adjust(target), self.step_id)
+    self.writer.add_images("reconstruction", self.shape_adjust(self.decoder.display(reconstruction)), self.step_id)
+
+class AETraining(AbstractVAETraining):
+  """Plain autoencoder training setup."""
+  def __init__(self, autoencoder, data, **kwargs):
+    self.autoencoder = ...
+    super(AETraining, self).__init__({
+      "autoencoder": autoencoder
+    }, data, **kwargs)
+
+  def loss(self, reconstruction, target):
+    return match(reconstruction, target)
+
+  def run_networks(self, data):
+    reconstruction, *_ = self.autoencoder(data)
+    return reconstruction, data
 
 class IntroVAETraining(VAETraining):
   def __init__(self, encoder, decoder, data,
@@ -449,6 +388,9 @@ class IntroVAETraining(VAETraining):
     pass_through, *critic_args = self.run_critic(data, *netargs)
     loss_val = self.critic_loss(*critic_args)
     loss_val.backward(retain_graph=True)
+    nn.utils.clip_grad_norm_(self.decoder.parameters(), 1.0)
+    nn.utils.clip_grad_norm_(self.encoder.parameters(), 1.0)
+    nn.utils.clip_grad_norm_(self.prior.parameters(), 1.0)
     self.writer.add_scalar("critic loss", float(loss_val), self.step_id)
     self.critic_optimizer.step()
 
@@ -563,7 +505,7 @@ class FactorVAETraining(JointVAETraining):
       optimizer=optimizer,
       **kwargs
     )
-    self.discriminator = discriminator.to(device)
+    self.discriminator = discriminator.to(kwargs.get("device", "cpu"))
 
     optimizer_kwargs = optimizer_kwargs or {"lr": 1e-4}
     self.discriminator_optimizer = optimizer(
@@ -845,3 +787,126 @@ class IndependentConditionalRecurrentCanvasVAETraining(IndependentConditionalVAE
       approximation = reconstruction + approximation
 
     return parameters, approximation, target
+
+class LaggingInference(ABC):
+  """Mixin replacing the training method of a VAE training
+  approach with the one detailed in "Lagging Inference Networks
+  and Posterior Collapse in Variational Autoencoders"."""
+  data = ...
+  batch_size = ...
+  encoder = ...
+  decoder = ...
+  device = ...
+  max_epochs = ...
+  valid = ...
+  network_names = ...
+
+  @abstractmethod
+  def step(self, data):
+    pass
+
+  @abstractmethod
+  def sample(self, *inputs):
+    pass
+
+  @abstractmethod
+  def checkpoint(self):
+    pass
+
+  def aggressive_update(self, data):
+    inner_data = DataLoader(
+      self.data, batch_size=self.batch_size, num_workers=8,
+      shuffle=True
+    )
+    for parameter in self.decoder:
+      parameter.requires_grad = False
+    last_ten = [None] * 10
+    for idx, data_p in enumerate(inner_data):
+      loss = self.step(data_p)
+      last_ten[idx % 10] = loss
+      if last_ten[-1] is not None and last_ten[-1] >= last_ten[0]:
+        break
+    for parameter in self.decoder:
+      parameter.requires_grad = True
+    for parameter in self.encoder:
+      parameter.requires_grad = False
+    self.step(data)
+    for parameter in self.encoder:
+      parameter.requires_grad = True
+
+  def log_sum_exp(self, value, dim=None, keepdim=False):
+    if dim is not None:
+      m, _ = torch.max(value, dim=dim, keepdim=True)
+      value0 = value - m
+      if keepdim is False:
+        m = m.squeeze(dim)
+      return m + torch.log(torch.sum(torch.exp(value0), dim=dim, keepdim=keepdim))
+    else:
+      m = torch.max(value)
+      sum_exp = torch.sum(torch.exp(value - m))
+    return m + torch.log(sum_exp)
+
+  def compute_mi(self, x):
+    """Approximate the mutual information between x and z
+    I(x, z) = E_xE_{q(z|x)}log(q(z|x)) - E_xE_{q(z|x)}log(q(z))
+    Returns: Float
+    """
+    if isinstance(data, (list, tuple)):
+      data = [
+        point.to(self.device)
+        for point in data
+      ]
+    elif isinstance(data, dict):
+      data = {
+        key : data[key].to(self.device)
+        for key in data
+      }
+    else:
+      data = data.to(self.device)
+
+    with torch.no_grad():
+      mu, logvar = self.encoder.forward(x)
+      x_batch, nz = mu.size()
+      neg_entropy = (-0.5 * nz * np.log(2 * np.pi) - 0.5 * (1 + logvar).sum(-1)).mean()
+
+      z_samples = self.sample(mu, logvar)
+      z_samples = z_samples[:, None, :]
+      mu, logvar = mu[None], logvar[None]
+      var = logvar.exp()
+
+      dev = z_samples - mu
+      log_density = -0.5 * ((dev ** 2) / var).sum(dim=-1) - \
+          0.5 * (nz * np.log(2 * np.pi) + logvar.sum(-1))
+      log_qz = self.log_sum_exp(log_density, dim=1) - torch.log(x_batch)
+
+      return (neg_entropy - log_qz.mean(-1)).item()
+
+  def train(self):
+    aggressive = True
+    old_mi = 0
+    new_mi = 0
+    self.step_id = 0
+    for epoch_id in range(self.max_epochs):
+      self.epoch_id = epoch_id
+      self.train_data = None
+      self.train_data = DataLoader(
+        self.data, batch_size=self.batch_size, num_workers=8,
+        shuffle=True
+      )
+      for data in self.train_data:
+        if aggressive:
+          self.aggressive_update(data)
+        else:
+          self.step(data)
+        self.log()
+        self.step_id += 1
+      valid_data = DataLoader(self.valid, batch_size=self.batch_size, shuffle=True)
+      new_mi = self.compute_mi(next(iter(valid_data)))
+      aggressive = new_mi > old_mi
+
+    netlist = [
+      getattr(self, name)
+      for name in self.network_names
+    ]
+
+    return netlist
