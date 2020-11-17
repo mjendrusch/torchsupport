@@ -1,3 +1,6 @@
+import ctypes
+from copy import deepcopy
+
 from skimage import io
 import torch
 import numpy as np
@@ -106,6 +109,10 @@ class DeviceMovable():
   def move_to(self, device):
     raise NotImplementedError("Abstract.")
 
+class Detachable():
+  def detach(self):
+    raise NotImplementedError("Abstract.")
+
 def to_device(data, device):
   if isinstance(data, torch.Tensor):
     return data.to(device)
@@ -127,20 +134,20 @@ def to_device(data, device):
     return data.move_to(device)
   return data
 
+class _MemoDictDetach(dict):
+  def get(self, key, default=None):
+    result = super().get(key, default)
+    if result is default:
+      old = ctypes.cast(key, ctypes.py_object).value
+      if isinstance(old, (Detachable, torch.Tensor)):
+        result = old.detach()
+        self[key] = result
+
+    return result
+
 def detach(data):
-  if isinstance(data, torch.Tensor):
-    return data.detach()
-  if isinstance(data, (list, tuple)):
-    return [
-      detach(point)
-      for point in data
-    ]
-  if isinstance(data, dict):
-    return {
-      key : detach(data[key])
-      for key in data
-    }
-  raise ValueError("cannot be detached.")
+  memo = _MemoDictDetach()
+  return deepcopy(data, memo)
 
 def make_differentiable(data, toggle=True):
   if torch.is_tensor(data) and data.is_floating_point():
