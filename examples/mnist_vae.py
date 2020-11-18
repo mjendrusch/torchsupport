@@ -2,11 +2,14 @@ import torch
 import torch.nn as nn
 from torch.nn.utils import spectral_norm
 from torch.utils.data import Dataset
+from torch.distributions import Normal, Categorical, Distribution
 
 from torchvision.datasets import MNIST
 from torchvision.transforms import ToTensor
 
-from torchsupport.training.vae import VAETraining
+from torchsupport.distributions.standard import StandardNormal
+from torchsupport.data.match import MatchTensor, match_l2, match_bce
+from torchsupport.training.vae import VAETraining, Prior
 
 def normalize(image):
   return (image - image.min()) / (image.max() - image.min())
@@ -17,7 +20,7 @@ class VAEDataset(Dataset):
 
   def __getitem__(self, index):
     data, label = self.data[index]
-    return (data,)
+    return (MatchTensor(data, match=match_bce),)
 
   def __len__(self):
     return len(self.data)
@@ -42,7 +45,47 @@ class Encoder(nn.Module):
     features = self.encoder(inputs)
     mean = self.mean(features)
     logvar = self.logvar(features)
-    return features, mean, logvar
+    return (Normal(mean, logvar.exp()), )
+
+class GMM(Distribution):
+  def __init__(self, logits, locs, scales):
+    self.logits = logits.clone()
+    self.locs = locs.clone()
+    self.scales = scales.clone()
+
+  def log_prob(self, x):
+    normal = Normal(self.locs, self.scales)
+    prob = self.logits.log_softmax(dim=0)[None, :, None]
+    normal_logprob = normal.log_prob(x[:, None])
+    normal_logprob = normal_logprob.view(*normal_logprob.shape[:2], -1)
+    total = (prob + normal_logprob).logsumexp(dim=1)
+    return total
+
+  def rsample(self, sample_shape=torch.Size()):
+    cat = Categorical(logits=self.logits).sample(sample_shape=sample_shape)
+    loc = self.locs[cat]
+    scale = self.scales[cat]
+    dist = Normal(loc, scale)
+    return dist.sample()
+
+  def sample(self, sample_shape=torch.Size()):
+    with torch.no_grad():
+      return self.rsample(sample_shape=sample_shape)
+
+class CustomPrior(nn.Module):
+  def __init__(self, z=32, mixture=10):
+    super().__init__()
+    self.logits = nn.Parameter(torch.zeros(mixture))
+    self.mean = nn.Parameter(torch.zeros(mixture, z))
+    self.logvar = nn.Parameter(torch.zeros(mixture, z))
+
+  def sample(self, prototype, *args, **kwargs):
+    size = prototype.size(0)
+    result = self.forward(*args, **kwargs)
+    return result.sample(sample_shape=(size,))
+
+  def forward(self, *args, **kwargs):
+    return GMM(self.logits, self.mean, self.logvar.exp())
 
 class Decoder(nn.Module):
   def __init__(self, z=32):
@@ -59,26 +102,23 @@ class Decoder(nn.Module):
   def forward(self, sample):
     return self.decoder(sample).view(-1, 1, 28, 28)
 
-class MNISTVAETraining(VAETraining):
-  def run_networks(self, data, *args):
-    mean, logvar, reconstruction, data = super().run_networks(data, *args)
-    self.writer.add_image("target", normalize(data[0]), self.step_id)
-    self.writer.add_image("reconstruction", normalize(reconstruction[0].sigmoid()), self.step_id)
-    return mean, logvar, reconstruction, data
-
 if __name__ == "__main__":
   mnist = MNIST("examples/", download=False, transform=ToTensor())
   data = VAEDataset(mnist)
 
-  encoder = Encoder(z=32)
-  decoder = Decoder(z=32)
+  z = 32
 
-  training = MNISTVAETraining(
-    encoder, decoder, data,
-    network_name="mnist-vae",
+  encoder = Encoder(z=z)
+  decoder = Decoder(z=z)
+
+  training = VAETraining(
+    encoder, decoder,
+    CustomPrior(z, mixture=100), data,
+    network_name="mnist-vae-new/prior-gmm-11",
     device="cpu",
     batch_size=64,
     max_epochs=1000,
+    prior_mu=0.0,
     verbose=True
   )
 
