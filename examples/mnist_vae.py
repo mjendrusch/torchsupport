@@ -79,10 +79,9 @@ class CustomPrior(nn.Module):
     self.mean = nn.Parameter(torch.zeros(mixture, z))
     self.logvar = nn.Parameter(torch.zeros(mixture, z))
 
-  def sample(self, prototype, *args, **kwargs):
-    size = prototype.size(0)
+  def sample(self, size, *args, **kwargs):
     result = self.forward(*args, **kwargs)
-    return result.sample(sample_shape=(size,))
+    return (result.sample(sample_shape=(size,)), [])
 
   def forward(self, *args, **kwargs):
     return GMM(self.logits, self.mean, self.logvar.exp())
@@ -99,11 +98,14 @@ class Decoder(nn.Module):
       nn.Linear(256, 28 * 28)
     )
 
+  def display(self, data):
+    return data.sigmoid()
+
   def forward(self, sample):
     return self.decoder(sample).view(-1, 1, 28, 28)
 
 if __name__ == "__main__":
-  mnist = MNIST("examples/", download=False, transform=ToTensor())
+  mnist = MNIST("examples/", download=True, transform=ToTensor())
   data = VAEDataset(mnist)
 
   z = 32
