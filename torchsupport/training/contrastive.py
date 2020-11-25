@@ -302,3 +302,50 @@ class ScoreBYOCTraining(BYOCTraining):
     result = result.mean()
     self.current_losses["score matching"] = float(result)
     return self.score_matching_scale * result
+
+class SimSiamTraining(AbstractContrastiveTraining):
+  def __init__(self, net, predictor, data, **kwargs):
+    r"""Trains a network in a self-supervised manner following the method outlined
+    in "Exploring Simple Siamese Representation Learning".
+
+    Args:
+      net (nn.Module): network to be trained.
+      predictor (nn.Module): predictor to transform representations from different
+        data views.
+      data (Dataset): dataset to perform training on.
+    """
+    self.net = ...
+    self.predictor = ...
+    super().__init__({
+      "net": net,
+      "predictor": predictor
+    }, data, **kwargs)
+
+  def similarity(self, x, y):
+    r"""Computes the mutual similarity between a batch of data representations.
+
+    Args:
+      x (torch.Tensor): batch of data to compute similarities of.
+      y (torch.Tensor): batch of data to compute similarities of.
+    """
+    x = x / x.norm(dim=2, keepdim=True)
+    y = y / y.norm(dim=2, keepdim=True)
+    sim = (x[None, :] * y[:, None]).view(x.size(0), x.size(0), x.size(1), -1)
+    sim = sim.sum(dim=-1)
+    sim = sim.view(-1, x.size(1)).mean(dim=0)
+    return sim
+
+  def run_networks(self, data):
+    data = list(map(lambda x: x.unsqueeze(0), data))
+    inputs = torch.cat(data, dim=0).view(-1, *data[0].shape[2:])
+    features = self.net(inputs)
+    predictions = self.predictor(features)
+    shape = features.shape[1:]
+    features = features.view(len(data), -1, *shape)
+    predictions = predictions.view(len(data), -1, *shape)
+    return features.detach(), predictions
+
+  def contrastive_loss(self, features, predictions):
+    result = -self.similarity(predictions, features).mean()
+    self.current_losses["contrastive"] = float(result)
+    return result
