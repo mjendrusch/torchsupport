@@ -20,6 +20,7 @@ class AbstractContrastiveTraining(Training):
   def __init__(self, networks, data,
                optimizer=torch.optim.Adam,
                optimizer_kwargs=None,
+               num_workers=8,
                **kwargs):
     """Generic training setup for energy/score based models.
 
@@ -37,6 +38,7 @@ class AbstractContrastiveTraining(Training):
 
     self.data = data
     self.train_data = None
+    self.num_workers = num_workers
 
     self.current_losses = {}
 
@@ -99,7 +101,7 @@ class AbstractContrastiveTraining(Training):
       self.epoch_id = epoch_id
       self.train_data = None
       self.train_data = DataLoader(
-        self.data, batch_size=self.batch_size, num_workers=8,
+        self.data, batch_size=self.batch_size, num_workers=self.num_workers,
         shuffle=True, drop_last=True
       )
 
