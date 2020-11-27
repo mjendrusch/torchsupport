@@ -3,6 +3,7 @@ from copy import deepcopy
 import torch
 import torch.nn as nn
 import torch.nn.functional as func
+from torch.distributions import OneHotCategorical
 
 from torchsupport.training.state import (
   NetNameListState, TrainingState
@@ -363,3 +364,29 @@ class SimSiamTraining(AbstractContrastiveTraining):
     self.current_losses["contrastive"] = float(result)
     return result
 
+class ClassifierSimSiamTraining(SimSiamTraining):
+  def __init__(self, *args, hard=False, **kwargs):
+    r"""Trains a network in a self-supervised manner following the method outlined
+    in "Exploring Simple Siamese Representation Learning" using cross entropy loss
+    in a pseudo labelling pretext task.
+
+    Args:
+      net (nn.Module): network to be trained.
+      predictor (nn.Module): predictor to transform representations from different
+        data views.
+      data (Dataset): dataset to perform training on.
+      hard (bool): use hard pseudolabels?
+    """
+    super().__init__(*args, **kwargs)
+    self.hard = hard
+
+  def similarity(self, x, y):
+    logits = x.log_softmax(dim=2)
+    if self.hard:
+      cat = OneHotCategorical(logits=y).sample()
+    else:
+      cat = y.softmax(dim=2)
+    sim = (logits[None, :] * cat[:, None]).view(x.size(0), x.size(0), x.size(1), -1)
+    sim = sim.sum(dim=-1)
+    sim = sim.view(-1, x.size(1)).mean(dim=0)
+    return sim
