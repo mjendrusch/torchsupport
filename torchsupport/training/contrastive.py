@@ -69,12 +69,18 @@ class AbstractContrastiveTraining(Training):
     """Abstract method. Runs networks at each step."""
     raise NotImplementedError("Abstract")
 
+  def visualize(self, data):
+    pass
+
   def contrastive_step(self, data):
     """Performs a single step of contrastive training.
 
     Args:
       data: data points used for training.
     """
+    if self.step_id % self.report_interval == 0:
+      self.visualize(data)
+
     self.optimizer.zero_grad()
     data = to_device(data, self.device)
     make_differentiable(data)
@@ -337,6 +343,10 @@ class SimSiamTraining(AbstractContrastiveTraining):
     sim = sim.view(-1, x.size(1)).mean(dim=0)
     return sim
 
+  def visualize(self, data):
+    self.writer.add_images("variant 1", data[0], self.step_id)
+    self.writer.add_images("variant 2", data[1], self.step_id)
+
   def run_networks(self, data):
     data = list(map(lambda x: x.unsqueeze(0), data))
     inputs = torch.cat(data, dim=0).view(-1, *data[0].shape[2:])
@@ -349,5 +359,7 @@ class SimSiamTraining(AbstractContrastiveTraining):
 
   def contrastive_loss(self, features, predictions):
     result = -self.similarity(predictions, features).mean()
+    self.current_losses["std"] = float(features.std())
     self.current_losses["contrastive"] = float(result)
     return result
+
