@@ -313,7 +313,7 @@ class ScoreBYOCTraining(BYOCTraining):
     return self.score_matching_scale * result
 
 class SimSiamTraining(AbstractContrastiveTraining):
-  def __init__(self, net, predictor, data, **kwargs):
+  def __init__(self, net, predictor, data, momentum=None, **kwargs):
     r"""Trains a network in a self-supervised manner following the method outlined
     in "Exploring Simple Siamese Representation Learning".
 
@@ -329,6 +329,10 @@ class SimSiamTraining(AbstractContrastiveTraining):
       "net": net,
       "predictor": predictor
     }, data, **kwargs)
+    self.momentum = momentum
+    if self.momentum is not None:
+      self.target = deepcopy(self.net)
+      self.target = self.target.eval()
 
   def similarity(self, x, y):
     r"""Computes the mutual similarity between a batch of data representations.
@@ -348,11 +352,22 @@ class SimSiamTraining(AbstractContrastiveTraining):
     self.writer.add_images("variant 1", data[0], self.step_id)
     self.writer.add_images("variant 2", data[1], self.step_id)
 
+  def contrastive_step(self, data):
+    super().contrastive_step(data)
+    if self.momentum is not None:
+      with torch.no_grad():
+        for parameter, target in zip(self.target.parameters(), self.net.parameters()):
+          parameter *= self.momentum
+          parameter += (1 - self.momentum) * target
+
   def run_networks(self, data):
     data = list(map(lambda x: x.unsqueeze(0), data))
     inputs = torch.cat(data, dim=0).view(-1, *data[0].shape[2:])
     features = self.net(inputs)
     predictions = self.predictor(features)
+    if self.momentum is not None:
+      with torch.no_grad():
+        features = self.target(inputs)
     shape = features.shape[1:]
     features = features.view(len(data), -1, *shape)
     predictions = predictions.view(len(data), -1, *shape)
@@ -360,7 +375,11 @@ class SimSiamTraining(AbstractContrastiveTraining):
 
   def contrastive_loss(self, features, predictions):
     result = -self.similarity(predictions, features).mean()
-    self.current_losses["std"] = float(features.std())
+    features = predictions
+    norm_features = features
+    norm_features = features / features.norm(dim=2, keepdim=True)
+    norm_features = norm_features.view(-1, features.size(2)).std(dim=0).mean()
+    self.current_losses["std"] = float(norm_features)
     self.current_losses["contrastive"] = float(result)
     return result
 
@@ -388,5 +407,8 @@ class ClassifierSimSiamTraining(SimSiamTraining):
       cat = y.softmax(dim=2)
     sim = (logits[None, :] * cat[:, None]).view(x.size(0), x.size(0), x.size(1), -1)
     sim = sim.sum(dim=-1)
-    sim = sim.view(-1, x.size(1)).mean(dim=0)
+    ind = torch.arange(sim.size(0), dtype=torch.long, device=sim.device)
+    sim[ind, ind] = 0.0
+    count = sim.size(0) ** 2 - sim.size(0)
+    sim = sim.view(-1, x.size(1)).sum(dim=0) / count
     return sim
