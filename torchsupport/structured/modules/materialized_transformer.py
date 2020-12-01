@@ -25,33 +25,35 @@ class MaterializedMultiHeadAttention(nn.Module):
     super().__init__()
     self.heads = heads
     self.attention_size = attention_size
-    self.query = nn.Conv1d(node_in_size, attention_size * heads, 1)
-    self.key = nn.Conv2d(node_in_size + edge_in_size, attention_size * heads, 1)
-    self.value = nn.Conv2d(node_in_size + edge_in_size, value_size * heads, 1)
+    self.query = nn.Conv1d(node_in_size, attention_size * heads, 1, bias=False)
+    self.key = nn.Conv2d(node_in_size + edge_in_size, attention_size * heads, 1, bias=False)
+    self.value = nn.Conv2d(node_in_size + edge_in_size, value_size * heads, 1, bias=False)
     self.out = nn.Conv1d(value_size * heads, node_out_size, 1, bias=False)
     self.edge_out = nn.Conv2d(2 * value_size * heads + edge_in_size, edge_out_size, 1, bias=False)
 
   def forward(self, nodes, edges, mask):
     query = self.query(nodes)[:, :, :, None]
-    node_edges = torch.cat((nodes[:, :, :, None], edges), dim=1)
+    node_edges = torch.cat((nodes[:, :, :, None].expand(*nodes.shape, edges.shape[-1]), edges), dim=1)
     key = self.key(node_edges)
     value = self.value(node_edges)
-    value = value.view(value.size(0), self.heads, self.value_size, *value.shape[2:])
+    value = value.view(value.size(0), self.heads, -1, *value.shape[2:])
 
     sim = (query * key).view(key.size(0), self.heads, self.attention_size, *key.shape[2:])
     sim = sim.sum(dim=2) / torch.tensor(self.attention_size, dtype=torch.float).sqrt()
 
     mask = mask[:, None, None, :] * mask[:, None, :, None]
-    sim[~mask.expand_as(sim)] = -float("inf")
-    sim = torch.softmax(dim=-1)
+    sim[~mask.expand_as(sim)] = -1e6
+    sim = sim.softmax(dim=-1)
+    value[~mask[:, None].expand_as(value)] = 0.0
 
     node_features = (sim[:, :, None] * value).sum(dim=-1)
-    node_out = self.out(node_features.view(query.size(0), -1, *query.shape[2:]))
+    node_out = self.out(node_features.view(query.size(0), -1, query.shape[2]))
 
     edge_features = node_features.unsqueeze(-1).repeat_interleave(key.size(-1), dim=-1)
+    edge_features = edge_features.view(key.size(0), -1, *key.shape[2:])
     edge_features_t = edge_features.transpose(-1, -2)
     edge_features = torch.cat((edge_features, edge_features_t, edges), dim=1)
-    edge_out = self.edge_out(edge_features.view(key.size(0), -1, *key.shape[2:]))
+    edge_out = self.edge_out(edge_features)
 
     return node_out, edge_out
 
@@ -86,8 +88,14 @@ class MaterializedTransformerBlock(nn.Module):
       node_in_size, node_out_size, edge_in_size, edge_out_size,
       attention_size=attention_size, heads=heads, value_size=value_size
     )
-    self.project_node = nn.Conv1d(node_in_size, node_out_size, 1, bias=False)
-    self.project_edge = nn.Conv1d(edge_in_size, edge_out_size, 1, bias=False)
+    if node_in_size != node_out_size:
+      self.project_node = nn.Conv1d(node_in_size, node_out_size, 1, bias=False)
+    else:
+      self.project_node = nn.Identity()
+    if edge_in_size != edge_out_size:
+      self.project_edge = nn.Conv2d(edge_in_size, edge_out_size, 1, bias=False)
+    else:
+      self.project_edge = nn.Identity()
     self.zero_node = nn.ModuleList([ReZero(node_out_size), ReZero(node_out_size)])
     self.zero_edge = nn.ModuleList([ReZero(edge_out_size), ReZero(edge_out_size)])
 
