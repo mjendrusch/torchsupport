@@ -42,7 +42,7 @@ class MaterializedMultiHeadAttention(nn.Module):
     sim = sim.sum(dim=2) / torch.tensor(self.attention_size, dtype=torch.float).sqrt()
 
     mask = mask[:, None, None, :] * mask[:, None, :, None]
-    sim[mask.expand_as(sim)] = -float("inf")
+    sim[~mask.expand_as(sim)] = -float("inf")
     sim = torch.softmax(dim=-1)
 
     node_features = (sim[:, :, None] * value).sum(dim=-1)
@@ -124,7 +124,7 @@ class MaterializedTransformerBlock(nn.Module):
     edges = self.dropout(self.zero_edge[1](self.project_edge(edges), edge_features))
 
     mask = mask[:, None]
-    nodes[mask.expand_as(nodes)] = 0.0
+    nodes[~mask.expand_as(nodes)] = 0.0
     mask = mask[:, :, None, :] * mask[:, :, :, None]
-    edges[mask.expand_as(edges)] = 0.0
+    edges[~mask.expand_as(edges)] = 0.0
     return nodes, edges
