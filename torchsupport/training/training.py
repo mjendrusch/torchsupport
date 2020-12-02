@@ -130,7 +130,9 @@ class Training(object):
     data["_random_rng_state"] = random.getstate()
     for param in self.checkpoint_parameters:
       param.write_action(self, data)
-    torch.save(data, path)
+    torch.save(data, path + ".tmp")
+    os.rename(path, path + ".old")
+    os.rename(path + ".tmp", path)
 
   def read(self, path):
     data = torch.load(path)
