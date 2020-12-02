@@ -30,6 +30,7 @@ class Training(object):
                max_epochs=50,
                max_steps=int(1e7),
                batch_size=128,
+               num_workers=8,
                device="cpu",
                path_prefix=".",
                network_name="network",
@@ -39,6 +40,7 @@ class Training(object):
     self.max_epochs = max_epochs
     self.max_steps = max_steps
     self.batch_size = batch_size
+    self.num_workers = num_workers
     self.device = device
     self.path_prefix = path_prefix
     self.network_name = network_name
