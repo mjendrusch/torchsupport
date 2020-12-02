@@ -131,7 +131,8 @@ class Training(object):
     for param in self.checkpoint_parameters:
       param.write_action(self, data)
     torch.save(data, path + ".tmp")
-    os.rename(path, path + ".old")
+    if os.path.isfile(path):
+      os.rename(path, path + ".old")
     os.rename(path + ".tmp", path)
 
   def read(self, path):
