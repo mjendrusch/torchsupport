@@ -8,7 +8,7 @@ import torch
 
 from tensorboardX import SummaryWriter
 
-from torchsupport.data.io import netwrite, to_device
+from torchsupport.data.io import netread, netwrite, to_device
 from torchsupport.data.episodic import SupportData
 from torchsupport.data.collate import DataLoader
 
@@ -106,6 +106,19 @@ class Training(object):
       )
     self.each_checkpoint()
 
+  def emergency_read_checkpoint(self):
+    import glob
+    for name, the_net in self.checkpoint_names.items():
+      if isinstance(the_net, torch.nn.DataParallel):
+        the_net = the_net.module
+      files = glob.glob(f"{self.full_path}-{name}-epoch-*.torch")
+      files = sorted(files, key=lambda x: int(x.split("-")[-1].split(".")[0]))
+      target = files[-1]
+      netread(
+        the_net,
+        target
+      )
+
   def run_report(self):
     pass
 
@@ -159,9 +172,13 @@ class Training(object):
         random.setstate(random_rng_state)
 
   def load(self, path=None):
-    path = path or self.save_path()
-    if os.path.isfile(path):
-      self.read(path)
+    try:
+      path = path or self.save_path()
+      if os.path.isfile(path):
+        self.read(path)
+    except Exception:
+      print("Something went wrong! Trying to read latest network checkpoints...")
+      self.emergency_read_checkpoint()
     return self
 
 class SupervisedTraining(Training):
