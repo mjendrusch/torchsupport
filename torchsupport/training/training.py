@@ -260,24 +260,53 @@ class SupervisedTraining(Training):
     self.training_losses = training_cache
     return loss_val
 
+  def chunk(self, data, split):
+    if torch.is_tensor(data):
+      return data.split(len(data) // split)
+    elif isinstance(data, (list, tuple)):
+      result = [
+        [] for idx in range(split)
+      ]
+      for item in data:
+        for target, part in zip(result, self.chunk(item, split)):
+          target.append(part)
+      return result
+    elif isinstance(data, dict):
+      result = [
+        {}
+        for idx in range(split)
+      ]
+      for name in data:
+        for dd, part in zip(result, self.chunk(data[name], split)):
+          dd[name] = part
+      return result
+    else:
+      return data
+
   def step(self, data):
-    if self.accumulate is None:
-      self.optimizer.zero_grad()
-    outputs = self.run_networks(data)
-    loss_val = self.loss(outputs)
-    loss_val.backward()
+    self.optimizer.zero_grad()
+    if self.accumulate is not None:
+      points = self.chunk(data, self.accumulate)
+      for point in points:
+        outputs = self.run_networks(point)
+        loss_val = self.loss(outputs) / self.accumulate
+        loss_val.backward()
+    else:
+      outputs = self.run_networks(data)
+      loss_val = self.loss(outputs)
+      loss_val.backward()
     torch.nn.utils.clip_grad_norm_(self.net.parameters(), 5.0)
-    if self.accumulate is None:
-      self.optimizer.step()
-    elif self.step_id % self.accumulate == 0:
-      self.optimizer.step()
-      self.optimizer.zero_grad()
+    self.optimizer.step()
     self.each_step()
 
   def validate(self, data):
     with torch.no_grad():
       self.net.eval()
-      outputs = self.run_networks(data)
+      if self.accumulate is not None:
+        point = self.chunk(data, self.accumulate)[0]
+        outputs = self.run_networks(point)
+      else:
+        outputs = self.run_networks(data)
       self.valid_loss(outputs)
       self.each_validate()
       self.valid_callback(
