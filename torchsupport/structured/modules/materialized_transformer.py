@@ -41,11 +41,14 @@ class MaterializedMultiHeadAttention(nn.Module):
     sim = (query * key).view(key.size(0), self.heads, self.attention_size, *key.shape[2:])
     sim = sim.sum(dim=2) / torch.tensor(self.attention_size, dtype=torch.float).sqrt()
 
-    mask = mask[:, None, None, :] * mask[:, None, :, None]
-    sim[~mask.expand_as(sim)] = -1e6
+    mm = mask[:, None, None, :]
+    sim[~mm.expand_as(sim)] = -float("inf")
     sim = sim.softmax(dim=-1)
-    value[~mask[:, None].expand_as(value)] = 0.0
+    
+    mm = mask[:, None, None, :] * mask[:, None, :, None]
+    sim = sim * mm.expand_as(sim).float()
 
+    value = value * mm[:, None].expand_as(value).float()
     node_features = (sim[:, :, None] * value).sum(dim=-1)
     node_out = self.out(node_features.view(query.size(0), -1, query.shape[2]))
 
