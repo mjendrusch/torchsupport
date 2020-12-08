@@ -2,85 +2,56 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as func
 
-class DynamicOp(nn.Module):
-  r"""General operation with dynamically generated weights.
+def _dynamic_convnd(inputs, weight, bias=None, N=2, **kwargs):
+  conv = getattr(func, f"conv{N}d")
+  batch_size = weight.size(0)
+  inputs = inputs.view(-1, *inputs.shape[2:])
+  weight = weight.view(-1, *weight.shape[2:])
+  if bias:
+    bias = bias.view(-1)
+  result = conv(inputs, weight, bias=bias, groups=batch_size, **kwargs)
+  result = result.view(batch_size, -1, *result.shape[1:])
+  return result
+
+def dynamic_conv1d(inputs, weight, bias=None, **kwargs):
+  r"""Dynamic 1d convolution. For details, see `torch.nn.functional.conv1d`
 
   Args:
-    op (nn.Module): the operation in question.
-    generator (nn.Module): weight generating network.
+    inputs (torch.Tensor :math:`(B, C_i, W)`): input tensor.
+    weight (torch.Tensor :math:`(B, C_o, C_i, K)`): batch of weight tensors.
+    bias (torch.Tensor :math:`B, C_o`): batch of bias tensors.
   """
-  def __init__(self, op, generator):
-    super(DynamicOp, self).__init__()
-    self.generator = generator
-    self.op = op
+  return _dynamic_convnd(inputs, weight, bias=bias, N=1, **kwargs)
 
-  def forward(self, input, generation_input):
-    weight = self.generator(generation_input)
-    size = input.size()
-    batch_size = size[0]
-    result = torch.Tensor(*size)
-    for idx in range(size(0)):
-      self.op.weight = weight[idx]
-      result[idx, :, :, :] = self.op(input[idx, :, :, :])
-    return result
-
-class DynamicConv2d(nn.Module):
-  r"""Performs an efficient dynamic convolution using grouped convs.
+def dynamic_conv2d(inputs, weight, bias=None, **kwargs):
+  r"""Dynamic 2d convolution. For details, see `torch.nn.functional.conv2d`
 
   Args:
-    generator (nn.Module): weight generating network, returning weights
-      of the shape `(batch_size, output_channels, input_channels, width, height)`.
-    kernel_size (int): convolution kernel size.
-    stride (int): convolution stride.
-    padding (int): convolution padding.
-    dilation (int): convolution dilation.
+    inputs (torch.Tensor :math:`(B, C_i, H, W)`): input tensor.
+    weight (torch.Tensor :math:`(B, C_o, C_i, K_H, K_W)`): batch of weight tensors.
+    bias (torch.Tensor :math:`B, C_o`): batch of bias tensors.
   """
-  def __init__(self, generator, kernel_size, stride=1,
-               padding=0, dilation=1):
-    self.generator = generator
-    self.kernel_size = kernel_size
-    self.stride = stride
-    self.padding = padding
-    self.dilation = dilation
+  return _dynamic_convnd(inputs, weight, bias=bias, N=2, **kwargs)
 
-  def forward(self, input, generation_input):
-    size = input.size()
-    batch_size = size[0]
-    channels = size[1]
+def dynamic_conv3d(inputs, weight, bias=None, **kwargs):
+  r"""Dynamic 3d convolution. For details, see `torch.nn.functional.conv3d`
 
-    weights = self.generator(generation_input)
-    weight_size = weights.size()
-    weights.reshape(batch_size * weight_size[0], weight_size[1], weight_size[2], weight_size[3])
-    weight_size = weights.size()
+  Args:
+    inputs (torch.Tensor :math:`(B, C_i, X, Y, Z)`): input tensor.
+    weight (torch.Tensor :math:`(B, C_o, C_i, K_X, K_Y, K_Z)`): batch of weight tensors.
+    bias (torch.Tensor :math:`B, C_o`): batch of bias tensors.
+  """
+  return _dynamic_convnd(inputs, weight, bias=bias, N=3, **kwargs)
 
-    # weight size resolution:
-    assert(weight_size[0] % batch_size == 0, "Filter size not an integer multiple of the batch size!")
-    out_channels = weight_size[0] // batch_size
-    filters = weight_size[1]
-    width = weight_size[2]
-    height = weight_size[3]
+def dynamic_linear(inputs, weight, bias=None):
+  r"""Dynamic linear layer. For details, see `torch.nn.functional.linear`
 
-    filters = weight_size[1]
-    debatched = input.reshape(channels * batch_size, *size[2:])
-    result = func.conv2d(debatched[None], weights,
-                         stride=self.stride,
-                         padding=self.padding,
-                         dilation=self.dilation,
-                         groups=batch_size)
-    result = result.reshape(batch_size, filters, result.size()[2], result.size()[3])
-    return result
-
-class ParametricOp(nn.Module):
-  def __init__(self, op):
-    self.op = op
-
-  def forward(self, input, generator_input):
-    return self.op(input, generator_input)
-
-class Merge(nn.Module):
-  def __init__(self, operation=lambda x, shape: x):
-    self.operation = operation
-
-  def forward(self, x, y):
-    new_y = self.operation(y, x.shape)
-    return torch.cat(x, new_y)
+  Args:
+    inputs (torch.Tensor :math:`(B, C_i, W)`): input tensor.
+    weight (torch.Tensor :math:`(B, C_o, C_i)`): batch of weight tensors.
+    bias (torch.Tensor :math:`B, C_o`): batch of bias tensors.
+  """
+  result = torch.bmm(inputs[:, None], weight.transpose(1, 2))[:, 0]
+  if bias:
+    result = result + bias
+  return result
