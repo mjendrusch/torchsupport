@@ -1,3 +1,5 @@
+import random
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as func
@@ -28,8 +30,10 @@ class Mapping(nn.Module):
 
   def forward(self, latent, condition=None):
     out = self.normalize_latent(latent, condition=condition)
+    out = self.project_in(out)
     for block in self.blocks:
       out = self.activation(block(out))
+    out = self.project_out(out)
     return out
 
 class ResidualMapping(Mapping):
@@ -42,8 +46,10 @@ class ResidualMapping(Mapping):
 
   def forward(self, latent, condition=None):
     out = self.normalize_latent(latent, condition=condition)
+    out = self.project_in(out)
     for zero, block in zip(self.blocks, self.zeros):
       out = zero(out, self.activation(block(out)))
+    out = self.project_out(out)
     return out
 
 class StyleGAN2ConvBlock(nn.Module):
@@ -65,17 +71,17 @@ class StyleGAN2ConvBlock(nn.Module):
       )
     ])
     self.noise_scale = nn.ParameterList([
-      torch.randn(in_size)
+      nn.Parameter(torch.randn(in_size, requires_grad=True))
       for idx in range(depth - 1)
     ] + [
-      torch.randn(out_size)
+      nn.Parameter(torch.randn(out_size, requires_grad=True))
     ])
     self.rgb = nn.Conv2d(out_size, 3, 1)
 
   def forward(self, inputs, condition):
     out = inputs
     for block, cond, scale in zip(
-        self.blocks, self.conds, self.scales
+        self.blocks, self.conds, self.noise_scale
     ):
       out = block(out, cond(condition))
       noise = torch.randn_like(out)
@@ -106,11 +112,14 @@ class StyleGAN2GeneratorBackbone(nn.Module):
       ))
     ])
 
-  def forward(self, condition):
+  def forward(self, condition, mix=None):
     out = self.base_map.repeat_interleave(condition.size(0), dim=0)
     rgb = self.base_rgb.repeat_interleave(condition.size(0), dim=0)
+    cond = condition
     for idx, block in enumerate(self.blocks):
-      out, rgb_update = block(out, condition)
+      if mix is not None:
+        cond = random.choice((condition, mix))
+      out, rgb_update = block(out, cond)
       rgb = rgb + rgb_update
       if idx < len(self.blocks) - 1:
         out = func.interpolate(out, scale_factor=2)
@@ -134,7 +143,8 @@ class StyleGAN2DiscriminatorBlock(nn.Module):
     if out.size(1) > inputs.size(1):
       difference = out.size(1) - inputs.size(1)
       padding = torch.zeros(
-        inputs.size(0), difference, *inputs.shape[2:]
+        inputs.size(0), difference, *inputs.shape[2:],
+        dtype=out.dtype, device=out.device
       )
       inputs = torch.cat((inputs, padding), dim=1)
     return self.zero(inputs, out)
@@ -159,7 +169,7 @@ class StyleGAN2DiscriminatorBackbone(nn.Module):
 
   def forward(self, inputs):
     out = self.project(inputs)
-    for idx, block in self.blocks:
+    for idx, block in enumerate(self.blocks):
       out = block(out)
       if idx < len(self.blocks) - 1:
         out = func.interpolate(
