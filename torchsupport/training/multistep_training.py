@@ -126,6 +126,7 @@ class MultistepTraining(Training, metaclass=StepRegistry):
     return data_point
 
   def step(self):
+    total_loss = 0.0
     for step_name in self.step_order:
       descriptor = self.step_descriptors[step_name]
       if self.step_id % descriptor.every_value == 0:
@@ -140,6 +141,8 @@ class MultistepTraining(Training, metaclass=StepRegistry):
             loss.backward()
           for optimizer in self.optimizers[step_name]:
             optimizer.step()
+        total_loss += float(loss)
+    self.log_statistics(total_loss)
     self.each_step()
 
   def train(self):

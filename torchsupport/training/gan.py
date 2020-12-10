@@ -646,7 +646,7 @@ class RothGANTraining(GANTraining):
 
 class RGANTraining(RothGANTraining):
   def __init__(self, *args, r1=True, r2=False, **kwargs):
-    super(RGANTraining, self).__init__(args, **kwargs)
+    super(RGANTraining, self).__init__(*args, **kwargs)
     self.r1 = r1
     self.r2 = r2
 

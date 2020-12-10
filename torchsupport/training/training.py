@@ -36,7 +36,8 @@ class Training(object):
                network_name="network",
                verbose=False,
                report_interval=10,
-               checkpoint_interval=1000):
+               checkpoint_interval=1000,
+               **kwargs):
     self.max_epochs = max_epochs
     self.max_steps = max_steps
     self.batch_size = batch_size
