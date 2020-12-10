@@ -4,13 +4,15 @@ import torch.nn.functional as func
 
 def _dynamic_convnd(inputs, weight, bias=None, N=2, **kwargs):
   conv = getattr(func, f"conv{N}d")
+  if weight.dim() == N + 2:
+    return conv(inputs, weight, bias=bias, **kwargs)
   batch_size = weight.size(0)
-  inputs = inputs.view(-1, *inputs.shape[2:])
+  inputs = inputs.view(-1, *inputs.shape[2:])[None]
   weight = weight.view(-1, *weight.shape[2:])
-  if bias:
+  if bias is not None:
     bias = bias.view(-1)
   result = conv(inputs, weight, bias=bias, groups=batch_size, **kwargs)
-  result = result.view(batch_size, -1, *result.shape[1:])
+  result = result.view(batch_size, -1, *result.shape[2:])
   return result
 
 def dynamic_conv1d(inputs, weight, bias=None, **kwargs):
@@ -51,7 +53,9 @@ def dynamic_linear(inputs, weight, bias=None):
     weight (torch.Tensor :math:`(B, C_o, C_i)`): batch of weight tensors.
     bias (torch.Tensor :math:`B, C_o`): batch of bias tensors.
   """
+  if weight.dim() == 2:
+    return func.linear(inputs, weight, bias=bias)
   result = torch.bmm(inputs[:, None], weight.transpose(1, 2))[:, 0]
-  if bias:
+  if bias is not None:
     result = result + bias
   return result
