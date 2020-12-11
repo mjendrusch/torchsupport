@@ -24,13 +24,19 @@ class IndependentStyleGAN2Block(nn.Module):
         nn.Conv2d(in_size, out_size, 1)
       )
     ])
-    self.noise_scale = nn.ParameterList([
-      nn.Parameter(torch.zeros(in_size, requires_grad=True))
-      for idx in range(depth - 1)
-    ] + [
-      nn.Parameter(torch.zeros(out_size, requires_grad=True))
-    ])
+    self._noise_scale = []
+    for idx in range(depth):
+      self._noise_scale.append(idx)
+      size = in_size if idx < depth - 1 else out_size
+      setattr(self, f"noise_scale_{idx}", nn.Parameter(torch.zeros(size, requires_grad=True)))
     self.rgb = lr_equal(nn.Conv2d(out_size, 3, 1))
+
+  @property
+  def noise_scale(self):
+    return [
+      getattr(self, f"noise_scale_{scale}")
+      for scale in self._noise_scale
+    ]
 
   def forward(self, inputs, condition):
     out = inputs
