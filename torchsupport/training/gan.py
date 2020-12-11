@@ -192,7 +192,7 @@ class AbstractGANTraining(Training):
       self.epoch_id = epoch_id
       self.train_data = None
       self.train_data = DataLoader(
-        self.data, batch_size=self.batch_size, num_workers=8,
+        self.data, batch_size=self.batch_size, num_workers=self.num_workers,
         shuffle=True, drop_last=True
       )
 
