@@ -40,7 +40,7 @@ class PathNet(MultiscaleNet):
       # main branch
       task, (prior, sample, policy) = net(inp[0], mask=msk, sample=sample)
       # side branch
-      if inp.size(1) > 1:
+      if inp.size(0) > 1:
         inp = inp[1:].reshape(-1, *inp.shape[2:])
         _, (_, s_sample, _) = net(inp, mask=None, sample=None)
         sample = torch.cat((sample, s_sample), dim=0)
@@ -65,12 +65,18 @@ class MultiscaleTraining(MultistepTraining):
   def __init__(self, net, separate_data, stack_data, path_data,
                optimizer=None, optimizer_kwargs=None,
                network_options=None, mapping_options=None,
-               data_options=None, **kwargs):
+               data_options=None, task_weight=1.0,
+               prior_weight=1e-3, policy_weight=1e-3,
+               **kwargs):
     optimizer = optimizer or torch.optim.AdamW
     optimizer_kwargs = optimizer_kwargs or {}
     network_options = network_options or {}
     mapping_options = mapping_options or {}
     data_options = data_options or {}
+
+    self.task_weight = task_weight
+    self.prior_weight = prior_weight
+    self.policy_weight = policy_weight
 
     self.net = ...
     self.value = ...
@@ -137,7 +143,9 @@ class MultiscaleTraining(MultistepTraining):
     self.current_losses["prior"] = float(prior_loss)
     policy_loss = self.policy_loss(task_args, scale_args)
     self.current_losses["policy"] = float(policy_loss)
-    result = task_loss + 0.001 * prior_loss + 0.001 * policy_loss
+    result = self.task_weight * task_loss
+    result = result + self.prior_weight * prior_loss
+    result = result + self.policy_weight * policy_loss
     return result
 
   def run_path(self, data):
