@@ -29,7 +29,7 @@ class MaterializedMultiHeadAttention(nn.Module):
     self.key = nn.Conv2d(node_in_size + edge_in_size, attention_size * heads, 1, bias=False)
     self.value = nn.Conv2d(node_in_size + edge_in_size, value_size * heads, 1, bias=False)
     self.out = nn.Conv1d(value_size * heads, node_out_size, 1, bias=False)
-    self.edge_out = nn.Conv2d(2 * value_size * heads + edge_in_size, edge_out_size, 1, bias=False)
+    self.edge_out = nn.Conv2d(value_size * heads + edge_in_size, edge_out_size, 1, bias=False)
 
   def forward(self, nodes, edges, mask):
     query = self.query(nodes)[:, :, :, None]
@@ -55,7 +55,7 @@ class MaterializedMultiHeadAttention(nn.Module):
     edge_features = node_features.unsqueeze(-1).repeat_interleave(key.size(-1), dim=-1)
     edge_features = edge_features.view(key.size(0), -1, *key.shape[2:])
     edge_features_t = edge_features.transpose(-1, -2)
-    edge_features = torch.cat((edge_features, edge_features_t, edges), dim=1)
+    edge_features = torch.cat(((edge_features + edge_features_t) / 2, edges), dim=1)
     edge_out = self.edge_out(edge_features)
 
     return node_out, edge_out
