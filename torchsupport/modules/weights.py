@@ -35,7 +35,7 @@ class LREqualization(nn.Module):
     A wrapper module performing the forward pass of the input module with
     learning rate equalization and scaling.
   """
-  def __init__(self, module, gain=2.0, lr_scale=1.0):
+  def __init__(self, module, gain=1.0, lr_scale=1.0):
     super().__init__()
     self.lr_scale = lr_scale
     self.module = module
@@ -103,7 +103,7 @@ def get_module_kind(module):
   return function, kwargs
 
 class WeightDemodulation(LREqualization):
-  def __init__(self, module, gain=2.0, lr_scale=1.0, epsilon=1e-6):
+  def __init__(self, module, gain=1.0, lr_scale=1.0, epsilon=1e-6):
     super().__init__(module, gain=gain, lr_scale=lr_scale)
     self.epsilon = epsilon
 

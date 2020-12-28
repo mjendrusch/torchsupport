@@ -57,7 +57,7 @@ class StyleGAN2ConvBlock(nn.Module):
     super().__init__()
     self.activation = activation or nn.LeakyReLU(0.2)
     self.conds = nn.ModuleList([
-      lr_equal(nn.Linear(cond_size, in_size, bias=False))
+      lr_equal(nn.Linear(cond_size, in_size, bias=True))
       for idx in range(depth)
     ])
     self.blocks = nn.ModuleList([
@@ -74,7 +74,7 @@ class StyleGAN2ConvBlock(nn.Module):
     for idx in range(depth):
       self._noise_scale.append(idx)
       size = in_size if idx < depth - 1 else out_size
-      setattr(self, f"noise_scale_{idx}", nn.Parameter(torch.zeros(size, requires_grad=True)))
+      setattr(self, f"noise_scale_{idx}", nn.Parameter(torch.zeros(1, requires_grad=True)))
     self.rgb = nn.Conv2d(out_size, 3, 1)
 
   @property
@@ -89,7 +89,7 @@ class StyleGAN2ConvBlock(nn.Module):
     for block, cond, scale in zip(
         self.blocks, self.conds, self.noise_scale
     ):
-      out = block(out, cond(condition))
+      out = block(out, cond(condition) + 1)
       noise = torch.randn_like(out)
       noise = noise.view(*noise.shape[:2], -1) * scale[:, None]
       noise = noise.view(*out.shape)

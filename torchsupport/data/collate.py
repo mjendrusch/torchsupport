@@ -44,6 +44,8 @@ def default_collate(batch):
     return [default_collate(samples) for samples in transposed]
   elif isinstance(elem, Collatable):
     return Collatable.cat(batch)
+  elif elem is None:
+    return None
   else:
     return torch.utils.data.dataloader.default_collate(batch)
   raise TypeError(error_message_format.format(elem_type))
