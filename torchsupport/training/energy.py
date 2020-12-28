@@ -28,6 +28,7 @@ class AbstractEnergyTraining(Training):
   def __init__(self, scores, data,
                optimizer=torch.optim.Adam,
                optimizer_kwargs=None,
+               num_workers=8,
                **kwargs):
     """Generic training setup for energy/score based models.
 
@@ -53,6 +54,7 @@ class AbstractEnergyTraining(Training):
       setattr(self, network, network_object)
       netlist.extend(list(network_object.parameters()))
 
+    self.num_workers = num_workers
     self.data = data
     self.train_data = None
 
@@ -129,7 +131,7 @@ class AbstractEnergyTraining(Training):
       self.epoch_id = epoch_id
       self.train_data = None
       self.train_data = DataLoader(
-        self.data, batch_size=self.batch_size, num_workers=8,
+        self.data, batch_size=self.batch_size, num_workers=self.num_workers,
         shuffle=True, drop_last=True
       )
 
