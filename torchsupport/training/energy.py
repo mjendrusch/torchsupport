@@ -15,7 +15,7 @@ from torchsupport.training.state import (
 )
 from torchsupport.training.samplers import Langevin, AnnealedLangevin
 from torchsupport.training.training import Training
-from torchsupport.data.io import netwrite, to_device, make_differentiable
+from torchsupport.data.io import netwrite, to_device, make_differentiable, detach
 from torchsupport.data.collate import DataLoader, default_collate
 from torchsupport.modules.losses.vae import normal_kl_loss
 
@@ -235,14 +235,16 @@ class EnergyTraining(AbstractEnergyTraining):
 
     return to_device((detached, *args), self.device)
 
-  def energy_loss(self, real_result, fake_result):
+  def energy_loss(self, real_result, fake_result, fake_update_result):
     regularization = self.decay * ((real_result ** 2).mean() + (fake_result ** 2).mean())
     ebm = real_result.mean() - fake_result.mean()
+    opt = fake_update_result.mean()
     self.current_losses["real"] = float(real_result.mean())
     self.current_losses["fake"] = float(fake_result.mean())
     self.current_losses["regularization"] = float(regularization)
     self.current_losses["ebm"] = float(ebm)
-    return regularization + ebm
+    self.current_losses["opt"] = float(opt)
+    return regularization + ebm + opt
 
   def run_energy(self, data):
     make_differentiable(data)
@@ -261,8 +263,10 @@ class EnergyTraining(AbstractEnergyTraining):
     input_fake, *fake_args = self.data_key(fake)
     #self.score.eval()
     fake_result = self.score(input_fake, *fake_args)
+    fake_update = self.integrator.step(self.score, input_fake, *fake_args)
+    fake_update_result = detach(self.score)(fake_update, *fake_args)
     #self.score.train()
-    return real_result, fake_result
+    return real_result, fake_result, fake_update_result
 
 class SetVAETraining(EnergyTraining):
   def divergence_loss(self, parameters):
