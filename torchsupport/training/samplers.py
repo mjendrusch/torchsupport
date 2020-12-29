@@ -65,6 +65,21 @@ class Langevin(nn.Module):
       data = self.step(score, data, *args)
     return data
 
+class AugmentedLangevin(Langevin):
+  def __init__(self, rate=100.0, noise=0.005, steps=10, max_norm=0.01, clamp=(0,1),
+               transform_interval=50, transform=None):
+    super().__init__(rate=rate, noise=noise, steps=steps, max_norm=max_norm, clamp=clamp)
+    self.transform_interval = transform_interval
+    self.transform = transform or (lambda x: x)
+
+  def integrate(self, score, data, *args):
+    for idx in range(self.steps):
+      last_step = idx == self.steps - 1
+      if idx % self.transform_interval == 0 and not last_step:
+        data = self.transform(data)
+      data = self.step(score, data, *args)
+    return data
+
 class PackedLangevin(Langevin):
   def integrate(self, score, data, *args):
     for idx in range(self.steps):
