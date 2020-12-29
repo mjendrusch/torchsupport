@@ -27,19 +27,42 @@ class Langevin(nn.Module):
     self.max_norm = max_norm
     self.clamp = clamp
 
-  def integrate(self, score, data, *args):
-    for idx in range(self.steps):
-      make_differentiable(data)
-      make_differentiable(args)
-      energy = score(data, *args)
-      if isinstance(energy, (list, tuple)):
-        energy, *_ = energy
-      gradient = ag.grad(energy, data, torch.ones_like(energy))[0]
+  def step(self, score, data, *args):
+    make_differentiable(data)
+    make_differentiable(args)
+    noised = ...
+    if isinstance(data, (list, tuple)):
+      noised = [
+        item + noise * torch.randn_like(item)
+        for noise, item in zip(self.noise, data)
+      ]
+    else:
+      noised = data + self.noise * torch.randn_like(data)
+    energy = score(noised, *args)
+    if isinstance(energy, (list, tuple)):
+      energy, *_ = energy
+
+    gradient = ag.grad(energy, data, torch.ones_like(energy))
+    if isinstance(data, (list, tuple)):
+      data = list(data)
+      for idx, (rate, clamp, gradval) in enumerate(zip(
+        self.rate, self.clamp, gradient
+      )):
+        data[idx] = data[idx] - rate * gradval
+        if clamp is not None:
+          data[idx] = data[idx].clamp(*clamp)
+    else:
+      gradient = gradient[0]
       if self.max_norm:
         gradient = clip_grad_by_norm(gradient, self.max_norm)
-      data = data - self.rate * gradient + self.noise * torch.randn_like(data)
+      data = data - self.rate * gradient
       if self.clamp is not None:
         data = data.clamp(*self.clamp)
+    return data
+
+  def integrate(self, score, data, *args):
+    for idx in range(self.steps):
+      data = self.step(score, data, *args)
     return data
 
 class PackedLangevin(Langevin):
@@ -399,18 +422,21 @@ class AnnealedLangevin(nn.Module):
     return data
 
 class AnnealedPackedLangevin(nn.Module):
-  def __init__(self, noises, steps=10, epsilon=2e-5):
+  def __init__(self, noises, scale=1, steps=10, epsilon=2e-5):
     super(AnnealedPackedLangevin, self).__init__()
     self.noises = noises
     self.steps = steps
     self.epsilon = epsilon
+    self.scale = scale
 
   def integrate(self, score, data, *args):
-    for noise in self.noises:
+    for idx, noise in enumerate(self.noises):
       step_size = self.epsilon * (noise / self.noises[-1]) ** 2
       noise = torch.ones(data.tensor.size(0), *((data.tensor.dim() - 1) * [1])).to(data.tensor.device) * noise
-      for step in range(self.steps):
+      step_count = self.steps[idx] if isinstance(self.steps, (list, tuple)) else self.steps
+      for step in range(step_count):
+        data.tensor = data.tensor + np.sqrt(2 * step_size) * torch.randn_like(data.tensor)
         gradient = score(data, noise, *args)
-        update = step_size * gradient + np.sqrt(2 * step_size) * torch.randn_like(gradient)
-        data.tensor = (data.tensor + update) % 6.3
+        update = self.scale * step_size * gradient
+        data.tensor = (data.tensor + update)# % 6.3
     return data
