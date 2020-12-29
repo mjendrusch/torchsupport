@@ -216,6 +216,11 @@ class EnergyTraining(AbstractEnergyTraining):
     pass
 
   def decompose_batch(self, data, *args):
+    if isinstance(data, (list, tuple)):
+      return (
+        to_device(([item[idx] for item in data], *[arg[idx] for arg in args]), "cpu")
+        for idx in range(len(data[0]))
+      )
     return (
       to_device((data[idx], *[arg[idx] for arg in args]), "cpu")
       for idx in range(len(data))
@@ -225,9 +230,9 @@ class EnergyTraining(AbstractEnergyTraining):
     buffer_iter = iter(self.buffer_loader(self.buffer))
     data, *args = to_device(self.data_key(next(buffer_iter)), self.device)
     self.score.eval()
-    data = self.integrator.integrate(self.score, data, *args).detach()
+    data = detach(self.integrator.integrate(self.score, data, *args))
     self.score.train()
-    detached = to_device(data.detach(), "cpu")
+    detached = to_device(data, "cpu")
     make_differentiable(args, toggle=False)
     update = self.decompose_batch(detached, *args)
     make_differentiable(update, toggle=False)
@@ -257,7 +262,7 @@ class EnergyTraining(AbstractEnergyTraining):
 
     if self.step_id % self.report_interval == 0:
       detached, *args = self.data_key(to_device(fake, "cpu"))
-      self.each_generate(detached.detach(), *args)
+      self.each_generate(detach(detached), *args)
 
     make_differentiable(fake)
     input_fake, *fake_args = self.data_key(fake)
