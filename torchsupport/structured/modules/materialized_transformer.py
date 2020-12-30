@@ -1,11 +1,52 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as func
 
 from torchsupport.modules import ReZero
 
 class MaterializedMultiHeadAttention(nn.Module):
+  @staticmethod
+  def dot_product(query, key, mask, heads, attention_size):
+    sim = (query * key).view(key.size(0), heads, attention_size, *key.shape[2:])
+    sim = sim.sum(dim=2) / torch.tensor(attention_size, dtype=torch.float).sqrt()
+
+    mm = mask[:, None, None, :]
+    sim[~mm.expand_as(sim)] = -float("inf")
+    sim = sim.softmax(dim=-1)
+    return sim
+
+  @staticmethod
+  def l2(query, key, mask, heads, attention_size):
+    sim = ((query - key) ** 2).view(key.size(0), heads, attention_size, *key.shape[2:])
+    sim = sim.sum(dim=2) / torch.tensor(attention_size, dtype=torch.float).sqrt()
+
+    mm = mask[:, None, None, :]
+    sim[~mm.expand_as(sim)] = -float("inf")
+    sim = sim.softmax(dim=-1)
+    return sim
+
+  @staticmethod
+  def l2_linear(query, key, mask, heads, attention_size):
+    sim = ((query - key) ** 2).view(key.size(0), heads, attention_size, *key.shape[2:])
+    sim = sim.sum(dim=2) / torch.tensor(attention_size, dtype=torch.float).sqrt()
+
+    mm = mask[:, None, None, :]
+    sim[~mm.expand_as(sim)] = -float("inf")
+    sim = sim / sim.sum(dim=-1, keepdim=True)
+    return sim
+
+  @staticmethod
+  def linear(query, key, mask, heads, attention_size):
+    sim = (func.elu(query) * func.elu(key)).view(key.size(0), heads, attention_size, *key.shape[2:])
+    sim = sim.sum(dim=2) / torch.tensor(attention_size, dtype=torch.float).sqrt()
+
+    mm = mask[:, None, None, :]
+    sim[~mm.expand_as(sim)] = 0.0
+    sim = sim / sim.sum(dim=-1, keepdim=True)
+    return sim
+
   def __init__(self, node_in_size, node_out_size, edge_in_size, edge_out_size,
-               attention_size=32, heads=8, value_size=32):
+               attention_size=32, heads=8, value_size=32, full=False, similarity=None):
     r"""Self-attention with materialized attention maps and "edge-features" on these
     attention maps. Warning: Implementing this on a hunch after seeing the AlphaFold
     blogpost - this may not train or make sense at all.
@@ -23,28 +64,31 @@ class MaterializedMultiHeadAttention(nn.Module):
       value_size (int): size of the value embedding.
     """
     super().__init__()
+    self.similarity = similarity or MaterializedMultiHeadAttention.dot_product
     self.heads = heads
+    self.full = full
     self.attention_size = attention_size
     self.query = nn.Conv1d(node_in_size, attention_size * heads, 1, bias=False)
     self.key = nn.Conv2d(node_in_size + edge_in_size, attention_size * heads, 1, bias=False)
     self.value = nn.Conv2d(node_in_size + edge_in_size, value_size * heads, 1, bias=False)
     self.out = nn.Conv1d(value_size * heads, node_out_size, 1, bias=False)
     self.edge_out = nn.Conv2d(value_size * heads + edge_in_size, edge_out_size, 1, bias=False)
+    if self.full:
+      self.edge_value = nn.Conv2d(edge_in_size, value_size * heads, 1, bias=False)
+      self.edge_out = nn.Conv2d(2 * value_size * heads, edge_out_size, 1, bias=False)
 
   def forward(self, nodes, edges, mask):
     query = self.query(nodes)[:, :, :, None]
-    node_edges = torch.cat((nodes[:, :, :, None].expand(*nodes.shape, edges.shape[-1]), edges), dim=1)
+    node_edges = torch.cat((
+      nodes[:, :, :, None].expand(*nodes.shape, edges.shape[-1]),
+      edges
+    ), dim=1)
     key = self.key(node_edges)
     value = self.value(node_edges)
     value = value.view(value.size(0), self.heads, -1, *value.shape[2:])
 
-    sim = (query * key).view(key.size(0), self.heads, self.attention_size, *key.shape[2:])
-    sim = sim.sum(dim=2) / torch.tensor(self.attention_size, dtype=torch.float).sqrt()
+    sim = self.similarity(query, key, mask, self.heads, self.attention_size)
 
-    mm = mask[:, None, None, :]
-    sim[~mm.expand_as(sim)] = -float("inf")
-    sim = sim.softmax(dim=-1)
-    
     mm = mask[:, None, None, :] * mask[:, None, :, None]
     sim = sim * mm.expand_as(sim).float()
 
@@ -53,9 +97,20 @@ class MaterializedMultiHeadAttention(nn.Module):
     node_out = self.out(node_features.view(query.size(0), -1, query.shape[2]))
 
     edge_features = node_features.unsqueeze(-1).repeat_interleave(key.size(-1), dim=-1)
-    edge_features = edge_features.view(key.size(0), -1, *key.shape[2:])
-    edge_features_t = edge_features.transpose(-1, -2)
-    edge_features = torch.cat(((edge_features + edge_features_t) / 2, edges), dim=1)
+    if self.full:
+      edge_value = self.edge_value(edges)
+      edge_value = edge_value.view(edges.size(0), self.heads, -1, *edges.shape[2:])
+      # (B, H, A, X, Y)
+      edge_features_t = edge_features.transpose(-1, -2)
+      edge_features = torch.cat(((edge_features + edge_features_t) / 2, edge_value), dim=2)
+      # (B, H, 1, X, Y)
+      sim = sim[:, :, None, :, :]
+      edge_features = sim @ (edge_features @ sim.transpose(-1, -2))
+      edge_features = edge_features.view(edges.size(0), -1, *edges.shape[2:])
+    else:
+      edge_features = edge_features.view(key.size(0), -1, *key.shape[2:])
+      edge_features_t = edge_features.transpose(-1, -2)
+      edge_features = torch.cat(((edge_features + edge_features_t) / 2, edges), dim=1)
     edge_out = self.edge_out(edge_features)
 
     return node_out, edge_out
@@ -63,7 +118,8 @@ class MaterializedMultiHeadAttention(nn.Module):
 class MaterializedTransformerBlock(nn.Module):
   def __init__(self, node_in_size, node_out_size, edge_in_size, edge_out_size,
                attention_size=32, heads=8, value_size=32, dropout=0.1,
-               kernel_size=1, dilation=1, activation=nn.ReLU()):
+               kernel_size=1, dilation=1, activation=nn.ReLU(), full=False,
+               similarity=None):
     r"""Transformer block with materialized attention maps and "edge-features" on these
     attention maps. Warning: Implementing this on a hunch after seeing the AlphaFold
     blogpost - this may not train or make sense at all.
@@ -89,7 +145,8 @@ class MaterializedTransformerBlock(nn.Module):
     self.dropout = nn.Dropout(dropout)
     self.attention = MaterializedMultiHeadAttention(
       node_in_size, node_out_size, edge_in_size, edge_out_size,
-      attention_size=attention_size, heads=heads, value_size=value_size
+      attention_size=attention_size, heads=heads, value_size=value_size,
+      full=full, similarity=similarity
     )
     if node_in_size != node_out_size:
       self.project_node = nn.Conv1d(node_in_size, node_out_size, 1, bias=False)
