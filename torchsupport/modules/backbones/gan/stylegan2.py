@@ -47,7 +47,7 @@ class ResidualMapping(Mapping):
   def forward(self, latent, condition=None):
     out = self.normalize_latent(latent, condition=condition)
     out = self.project_in(out)
-    for zero, block in zip(self.blocks, self.zeros):
+    for block, zero in zip(self.blocks, self.zeros):
       out = zero(out, self.activation(block(out)))
     out = self.project_out(out)
     return out
