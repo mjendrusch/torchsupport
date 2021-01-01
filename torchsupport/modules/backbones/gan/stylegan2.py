@@ -94,6 +94,7 @@ class StyleGAN2ConvBlock(nn.Module):
       noise = noise.view(*noise.shape[:2], -1) * scale[:, None]
       noise = noise.view(*out.shape)
       out = out + noise
+      out = self.activation(out)
     rgb = self.rgb(out)
     return out, rgb
 
