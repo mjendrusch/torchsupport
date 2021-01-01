@@ -1,4 +1,5 @@
 import random
+from copy import deepcopy
 
 import numpy as np
 
@@ -187,6 +188,7 @@ class EnergyTraining(AbstractEnergyTraining):
     super(EnergyTraining, self).__init__(
       {"score": score}, *args, **kwargs
     )
+    self.target_score = deepcopy(score).eval()
     self.reset_threshold = reset_threshold
     self.oos_penalty = oos_penalty
     self.decay = decay
@@ -198,6 +200,14 @@ class EnergyTraining(AbstractEnergyTraining):
     self.buffer_loader = lambda x: DataLoader(
       x, batch_size=self.batch_size, shuffle=True, drop_last=True
     )
+
+  def update_target(self):
+    with torch.no_grad():
+      for (target, source) in zip(
+          self.target_score.parameters(),
+          self.score.parameters()
+      ):
+        target.set_(source)
 
   def data_key(self, data):
     result, *args = data
@@ -269,7 +279,8 @@ class EnergyTraining(AbstractEnergyTraining):
     #self.score.eval()
     fake_result = self.score(input_fake, *fake_args)
     fake_update = self.integrator.step(self.score, input_fake, *fake_args)
-    fake_update_result = detach(self.score)(fake_update, *fake_args)
+    self.update_target()
+    fake_update_result = self.target_score(fake_update, *fake_args)
     #self.score.train()
     return real_result, fake_result, fake_update_result
 
