@@ -147,24 +147,47 @@ class AbstractEnergyTraining(Training):
     return scores
 
 class SampleBuffer(Dataset):
-  def __init__(self, owner, buffer_size=10000, buffer_probability=0.95):
+  def __init__(self, owner, buffer_size=10000,
+               buffer_probability=0.95,
+               accept_probability=1.0):
     self.samples = []
     self.current_size = 0
     self.owner = owner
     self.current = 0
+    self.seen = 0
     self.buffer_size = buffer_size
     self.buffer_probability = buffer_probability
+    self.accept_probability = accept_probability
 
   def reset(self):
     self.samples = []
+
+  def random_position(self):
+    return random.randrange(len(self.samples))
+
+  def probability(self):
+    if isinstance(self.accept_probability, float):
+      return self.accept_probability
+    return self.accept_probability(self.buffer_size, self.seen)
 
   def update(self, results):
     for result in results:
       if len(self.samples) < self.buffer_size:
         self.samples.append(result)
       else:
-        self.samples[self.current] = result
+        flip = random.random()
+        if flip <= self.probability():
+          self.samples[self.random_position()] = result
+      self.seen += 1
       self.current = (self.current + 1) % self.buffer_size
+
+  def sample(self, count):
+    result = [
+      self.samples[random.randrange(len(self.samples))]
+      for idx in range(count)
+    ]
+    result = default_collate(result)
+    return result
 
   def __getitem__(self, idx):
     initialized = len(self.samples) > self.owner.batch_size
@@ -183,11 +206,14 @@ class EnergyTraining(AbstractEnergyTraining):
   ]
   def __init__(self, score, *args, buffer_size=10000, buffer_probability=0.95,
                sample_steps=10, decay=1, reset_threshold=1000, integrator=None,
-               oos_penalty=True, **kwargs):
+               oos_penalty=True, accept_probability=1.0, sampler_likelihood=1.0,
+               maximum_entropy=0.3, **kwargs):
     self.score = ...
     super(EnergyTraining, self).__init__(
       {"score": score}, *args, **kwargs
     )
+    self.sampler_likelihood = sampler_likelihood
+    self.maximum_entropy = maximum_entropy
     self.target_score = deepcopy(score).eval()
     self.reset_threshold = reset_threshold
     self.oos_penalty = oos_penalty
@@ -195,7 +221,9 @@ class EnergyTraining(AbstractEnergyTraining):
     self.integrator = integrator if integrator is not None else Langevin()
     self.sample_steps = sample_steps
     self.buffer = SampleBuffer(
-      self, buffer_size=buffer_size, buffer_probability=buffer_probability
+      self, buffer_size=buffer_size,
+      buffer_probability=buffer_probability,
+      accept_probability=accept_probability
     )
     self.buffer_loader = lambda x: DataLoader(
       x, batch_size=self.batch_size, shuffle=True, drop_last=True
@@ -250,16 +278,42 @@ class EnergyTraining(AbstractEnergyTraining):
 
     return to_device((detached, *args), self.device)
 
-  def energy_loss(self, real_result, fake_result, fake_update_result):
+  def compare(self, source, target):
+    result = 0.0
+    if isinstance(source, (list, tuple)):
+      for s_part, t_part in zip(source, target):
+        result += self.compare(s_part, t_part)
+    else:
+      ind = torch.arange(
+        source.size(0), dtype=torch.long,
+        device=source.device
+      )
+      diff = (source[:, None] - target[None, :])
+      diff = diff.view(*diff.shape[:2], -1)
+      diff = diff.norm(dim=-1)
+      diff[ind, ind] = diff.max().detach()
+      result = diff.min(dim=1)[0]
+    return result
+
+  def energy_loss(self, real_result, fake_result, fake_update_result, comparison):
     regularization = self.decay * ((real_result ** 2).mean() + (fake_result ** 2).mean())
     ebm = real_result.mean() - fake_result.mean()
-    opt = fake_update_result.mean()
+
+    opt = 0.0
+    if self.sampler_likelihood:
+      opt = fake_update_result.mean()
+      self.current_losses["opt"] = float(opt)
+
+    ent = 0.0
+    if self.maximum_entropy:
+      ent = comparison.log().mean()
+      self.current_losses["ent"] = float(ent)
+
     self.current_losses["real"] = float(real_result.mean())
     self.current_losses["fake"] = float(fake_result.mean())
     self.current_losses["regularization"] = float(regularization)
     self.current_losses["ebm"] = float(ebm)
-    self.current_losses["opt"] = float(opt)
-    return regularization + ebm + opt
+    return regularization + ebm + self.sampler_likelihood * opt - self.maximum_entropy * ent
 
   def run_energy(self, data):
     make_differentiable(data)
@@ -276,13 +330,27 @@ class EnergyTraining(AbstractEnergyTraining):
 
     make_differentiable(fake)
     input_fake, *fake_args = self.data_key(fake)
-    #self.score.eval()
-    fake_result = self.score(input_fake, *fake_args)
-    fake_update = self.integrator.step(self.score, input_fake, *fake_args)
-    self.update_target()
-    fake_update_result = self.target_score(fake_update, *fake_args)
-    #self.score.train()
-    return real_result, fake_result, fake_update_result
+
+    self.score.eval()
+    fake_update_result = None
+    if self.sampler_likelihood:
+      # Sampler log likelihood:
+      fake_result = self.score(input_fake, *fake_args)
+      fake_update = self.integrator.step(self.score, input_fake, *fake_args)
+      self.update_target()
+      fake_update_result = self.target_score(fake_update, *fake_args)
+
+    comparison = None
+    if self.maximum_entropy:
+      # Sampler entropy:
+      compare_update = fake_update
+      compare_target = to_device(self.data_key(self.buffer.sample(100))[0], compare_update.device)
+      if hasattr(self.score, "embed"):
+        compare_update = self.target_score.embedding(compare_update)
+        compare_target = self.target_score.embedding(compare_target)
+      comparison = self.compare(compare_update, compare_target.detach())
+    self.score.train()
+    return real_result, fake_result, fake_update_result, comparison
 
 class SetVAETraining(EnergyTraining):
   def divergence_loss(self, parameters):
