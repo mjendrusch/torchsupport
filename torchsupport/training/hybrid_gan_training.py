@@ -114,7 +114,7 @@ class HybridALAE(HybridGenerativeTraining):
     data = dict(
       encoder_step=data,
       decoder_step=None,
-      prior_step=None,
+      prior_step=data,
       regularizer_step=data,
       classifier_step=classifier_data
     )
@@ -132,17 +132,21 @@ class HybridALAE(HybridGenerativeTraining):
   def classify(self, data):
     return self.classifier(data)
 
+  def each_generate(self, data):
+    self.writer.add_images("generated", data.detach().cpu(), self.step_id)
+
   def run_encoder(self, data):
     codes = self.encode(data)
     real_result = self.discriminator(data, *codes)
     prior_codes = self.prior.sample(self.batch_size)
     generator_result = self.decoder(*prior_codes)
+    # self.each_generate(generator_result)
     generated_codes = self.encode(generator_result)
     fake_result = self.discriminator(generator_result, *generated_codes)
     return real_result, fake_result
 
   def encoder_loss(self, real_result, fake_result):
-    result = func.softplus(real_result).mean() + func.softplus(-fake_result).mean()
+    result = func.softplus(fake_result).mean() + func.softplus(-real_result).mean()
     self.current_losses["encoder"] = float(result)
     return result
 
@@ -151,7 +155,7 @@ class HybridALAE(HybridGenerativeTraining):
     generator_result = self.decoder(*prior_codes)
     generated_codes = self.encode(generator_result)
     fake_result = self.discriminator(generator_result, *generated_codes)
-    return fake_result
+    return (fake_result,)
 
   def decoder_loss(self, fake_result):
     result = func.softplus(-fake_result).mean()
@@ -159,14 +163,24 @@ class HybridALAE(HybridGenerativeTraining):
     return result
 
   def run_prior(self, data):
+    real_codes = self.encode(data)
     prior_codes = self.prior.sample(self.batch_size)
+    prior_codes = list(map(lambda x: torch.cat(x, dim=0), zip(real_codes, prior_codes)))
     generator_result = self.decoder(*prior_codes)
     generated_codes = self.encode(generator_result)
+    reconstruction = self.decoder(*generated_codes)
+    self.each_generate((generator_result, reconstruction))
+    print((prior_codes[1].argmax(dim=1) == generated_codes[1].argmax(dim=1)).float().mean())
     return generated_codes, prior_codes
 
   def prior_loss(self, generated_codes, prior_codes):
-    result = match(generated_codes, prior_codes).mean()
-    self.current_losses["prior"] = float(result)
+    result = 0.0
+    for idx, (c_generated, c_prior) in enumerate(zip(generated_codes, prior_codes)):
+      this_loss = ((c_generated - c_prior) ** 2).mean()
+      result = result + this_loss
+      self.current_losses[f"prior {idx}"] = float(this_loss)
+    # result = match(generated_codes, prior_codes).mean()
+    self.current_losses["prior total"] = float(result)
     return result
 
   def run_regularizer(self, data):
@@ -177,13 +191,15 @@ class HybridALAE(HybridGenerativeTraining):
       discriminator_result, self.mixing_key(data),
       grad_outputs=torch.ones_like(discriminator_result),
       create_graph=True, retain_graph=True
-    )
+    )[0]
     gradient = gradient.view(gradient.size(0), -1)
     gradient = (gradient ** 2).sum(dim=1)
-    return gradient
+    return (gradient,)
 
   def regularizer_loss(self, gradient):
-    return self.gamma * gradient.mean() / 2
+    reg = self.gamma * gradient.mean() / 2
+    self.current_losses["regularizer"] = float(reg)
+    return reg
 
 class HybridVAE(HybridALAE):
   def __init__(self, *args, mapping_options=None, **kwargs):
