@@ -11,6 +11,8 @@ from torchsupport.training.state import (
 )
 from torchsupport.training.training import Training
 from torchsupport.data.match import match
+from torchsupport.data.io import to_device
+from torchsupport.distributions import DistributionList
 import torchsupport.modules.losses.vae as vl
 from torchsupport.data.io import to_device, detach
 from torchsupport.data.collate import DataLoader
@@ -126,6 +128,7 @@ class AbstractVAETraining(Training):
       for param in val.parameters()
     ]
     gn = nn.utils.clip_grad_norm_(parameters, self.gradient_clip)
+    print(gn)
     if (not torch.isnan(gn).any()) and (gn < self.gradient_skip).all():
       self.optimizer.step()
     self.each_step()
@@ -193,13 +196,16 @@ class AbstractVAETraining(Training):
 class Prior(nn.Module):
   def __init__(self, distribution):
     super().__init__()
+    self.indicator = nn.Parameter(torch.zeros(1, requires_grad=False))
     self.distribution = distribution
 
-  def sample(self, prototype, *args, **kwargs):
-    return self.distribution.sample(sample_shape=[prototype.size(0)])
+  def sample(self, size, *args, **kwargs):
+    result = self.distribution.sample(sample_shape=(size,))
+    result = to_device(result, self.indicator.device)
+    return result, []
 
   def forward(self, *args, **kwargs):
-    return self.distribution
+    return to_device(self.distribution, self.indicator.device)
 
 class VAETraining(AbstractVAETraining):
   """Standard VAE training setup."""
@@ -241,6 +247,16 @@ class VAETraining(AbstractVAETraining):
     return match(reconstruction, target)
 
   def divergence_loss(self, posterior, prior):
+    if isinstance(posterior, DistributionList):
+      result = 0.0
+      scalars = {}
+      for idx, (s, o) in enumerate(zip(posterior.items, prior.items)):
+        match_result = match(s, o)
+        scalars[f"layer {idx}"] = float(match_result)
+        result = result + match_result
+      self.writer.add_scalars("layer kld", scalars, self.step_id)
+      return result
+
     return match(posterior, prior)
 
   def loss(self, posterior, prior, prior_target, reconstruction, target, args):
@@ -249,7 +265,8 @@ class VAETraining(AbstractVAETraining):
     kld_prior = self.divergence_loss(detach(posterior), prior)
     loss_val = self.reconstruction_weight * ce + self.divergence_weight * (kld - kld.detach() + kld_prior)
     self.current_losses["reconstruction-log-likelihood"] = float(ce)
-    self.current_losses["kullback-leibler-divergence"] = float(kld_prior)
+    self.current_losses["kullback-leibler-divergence-prior"] = float(kld_prior)
+    self.current_losses["kullback-leibler-divergence"] = float(kld)
     return loss_val
 
   def sample(self, distribution):
