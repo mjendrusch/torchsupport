@@ -11,9 +11,6 @@ class DistributionList(Matchable, Distribution):
 
   def match(self, other):
     result = 0.0
-
-    # print(self.items[0].loc, other.items[0].loc)
-    # print(self.items[0].scale, other.items[0].scale)
     for s, o in zip(self.items, other.items):
       match_result = match(s, o)
       result = result + match_result
@@ -33,6 +30,6 @@ class DistributionList(Matchable, Distribution):
 
   def rsample(self, sample_shape=torch.Size()):
     return [
-      dist.sample(sample_shape=sample_shape)
+      dist.rsample(sample_shape=sample_shape)
       for dist in self.items
     ]
