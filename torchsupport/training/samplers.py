@@ -57,7 +57,10 @@ class Langevin(nn.Module):
         gradient = clip_grad_by_norm(gradient, self.max_norm)
       data = data - self.rate * gradient
       if self.clamp is not None:
-        data = data.clamp(*self.clamp)
+        if isinstance(self.clamp, (list, tuple)):
+          data = data.clamp(*self.clamp)
+        else:
+          data = self.clamp(data)
     return data
 
   def integrate(self, score, data, *args):
