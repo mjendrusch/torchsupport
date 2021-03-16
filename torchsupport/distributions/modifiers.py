@@ -15,3 +15,5 @@ def hardened(distribution):
     return replace_gradient(dist.harden(result), result)
   distribution.rsample = types.MethodType(harden_sample, distribution)
   distribution.sample = types.MethodType(harden_sample, distribution)
+  return distribution
+
