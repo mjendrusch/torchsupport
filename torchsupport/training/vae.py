@@ -247,7 +247,7 @@ class VAETraining(AbstractVAETraining):
     return match(reconstruction, target)
 
   def divergence_loss(self, posterior, prior):
-    if isinstance(posterior, DistributionList):
+    if isinstance(posterior, DistributionList) and isinstance(prior, DistributionList):
       result = 0.0
       scalars = {}
       for idx, (s, o) in enumerate(zip(posterior.items, prior.items)):
