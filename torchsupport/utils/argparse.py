@@ -14,17 +14,17 @@ def parse_options(description, **kwargs):
   for name in kwargs:
     default = kwargs[name]
     dtype = type(default)
-    kwargs = {}
+    argparse_kwargs = {}
     if isinstance(default, OptionType):
       default = default.default
       dtype = default.type
-      kwargs = default.kwargs
+      argparse_kwargs = default.kwargs
     elif isinstance(default, tuple):
       default, dtype = default
     parser.add_argument(
       f"--{name}", default=default,
       type=dtype, required=False,
-      **kwargs
+      **argparse_kwargs
     )
   return parser.parse_args()
 
