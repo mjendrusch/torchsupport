@@ -299,12 +299,15 @@ class VAETraining(AbstractVAETraining):
       data = torch.repeat_interleave(data, 3, dim=1)
     return data
 
-  def generate_samples(self):
-    sample, args = self.prior.sample(self.batch_size)
+  def display(self, data):
     decoder = self.decoder
     if isinstance(decoder, nn.DataParallel):
       decoder = decoder.module
-    return decoder.display(self.decoder(sample, *args))
+    return decoder.display(data)
+
+  def generate_samples(self):
+    sample, args = self.prior.sample(self.batch_size)
+    return self.display(self.decoder(sample, *args))
 
   def each_generate(self, posterior, prior, prior_target, reconstruction, target, args):
     if self.generate:
@@ -312,7 +315,7 @@ class VAETraining(AbstractVAETraining):
         generated = self.generate_samples()
       self.writer.add_images("generated", self.shape_adjust(generated), self.step_id)
     self.writer.add_images("target", self.shape_adjust(target), self.step_id)
-    self.writer.add_images("reconstruction", self.shape_adjust(self.decoder.display(reconstruction)), self.step_id)
+    self.writer.add_images("reconstruction", self.shape_adjust(self.display(reconstruction)), self.step_id)
 
 class AETraining(AbstractVAETraining):
   """Plain autoencoder training setup."""
