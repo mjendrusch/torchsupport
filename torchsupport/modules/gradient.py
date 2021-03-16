@@ -36,7 +36,9 @@ def replace_gradient(value, gradient_provider):
       Mind your gradients and know what you are doing.
   """
   result = value.detach()
-  return result + gradient_provider - gradient_provider.detach()
+  zero = gradient_provider - gradient_provider.detach()
+  zero = zero.clamp_min(0.0)
+  return result + zero
 
 def straight_through(op):
   r"""Replaces gradients of an operation by the gradients of
