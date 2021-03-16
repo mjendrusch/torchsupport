@@ -301,7 +301,10 @@ class VAETraining(AbstractVAETraining):
 
   def generate_samples(self):
     sample, args = self.prior.sample(self.batch_size)
-    return self.decoder.display(self.decoder(sample, *args))
+    decoder = self.decoder
+    if isinstance(decoder, nn.DataParallel):
+      decoder = decoder.module
+    return decoder.display(self.decoder(sample, *args))
 
   def each_generate(self, posterior, prior, prior_target, reconstruction, target, args):
     if self.generate:
