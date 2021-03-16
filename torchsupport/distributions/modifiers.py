@@ -11,9 +11,9 @@ def fixed(distribution, sample):
 
 def hardened(distribution):
   def harden_sample(dist, sample_shape=torch.Size()):
-    result = dist.rsample(sample_shape=sample_shape)
+    result = dist._original_rsample(sample_shape=sample_shape)
     return replace_gradient(dist.harden(result), result)
+  distribution._original_rsample = distribution.rsample
   distribution.rsample = types.MethodType(harden_sample, distribution)
   distribution.sample = types.MethodType(harden_sample, distribution)
   return distribution
-
