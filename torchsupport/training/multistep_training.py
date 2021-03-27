@@ -147,7 +147,7 @@ class MultistepTraining(Training, metaclass=StepRegistry):
 
   def train(self):
     for step_id in range(self.max_steps):
-      self.step_id = step_id
+      self.step_id += step_id
       self.step()
       self.log()
 

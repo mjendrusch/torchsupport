@@ -3,6 +3,31 @@ import argparse
 import re
 import json
 
+class OptionType:
+  def __init__(self, default, parser=None, **kwargs):
+    self.default = default
+    self.type = parser or type(self.default)
+    self.kwargs = kwargs
+
+def parse_options(description, **kwargs):
+  parser = argparse.ArgumentParser(description=description)
+  for name in kwargs:
+    default = kwargs[name]
+    dtype = type(default)
+    argparse_kwargs = {}
+    if isinstance(default, OptionType):
+      default = default.default
+      dtype = default.type
+      argparse_kwargs = default.kwargs
+    elif isinstance(default, tuple):
+      default, dtype = default
+    parser.add_argument(
+      f"--{name}", default=default,
+      type=dtype, required=False,
+      **argparse_kwargs
+    )
+  return parser.parse_args()
+
 def get_args(method):
   """
   Helper to get the arguments (positional and keywords) 

@@ -4,7 +4,7 @@ import torch.nn.functional as func
 from torch.distributions import Normal
 import torch.autograd as ag
 
-from torchsupport.data.io import to_device, make_differentiable
+from torchsupport.data.io import to_device, make_differentiable, detach
 from torchsupport.data.collate import DataLoader, default_collate
 from torchsupport.training.energy import AbstractEnergyTraining
 
@@ -16,10 +16,10 @@ class VERAPosterior(nn.Module):
     )
 
   def posterior(self, latent):
-    return Normal(latent, self.standard_deviation.exp())
+    return Normal(latent, self.standard_deviation.exp() + 0.01)
 
   def forward(self):
-    return self.standard_deviation.exp()
+    return self.standard_deviation.exp() + 0.01
 
 class VERAGenerator(nn.Module):
   def __init__(self, generator, latent_shape=None):
@@ -29,13 +29,16 @@ class VERAGenerator(nn.Module):
     self.log_conditional_variance = nn.Parameter(
       torch.tensor(0.01).log()
     )
+    self.prior_mean = nn.Parameter(torch.zeros(self.latent_shape), requires_grad=False)
+    self.prior_var = nn.Parameter(torch.ones(self.latent_shape), requires_grad=False)
 
   @property
   def prior(self):
-    return Normal(
-      torch.zeros(self.latent_shape),
-      torch.ones(self.latent_shape)
-    )
+    return Normal(self.prior_mean, self.prior_var)
+
+  @property
+  def conditional_variance(self):
+    return self.log_conditional_variance.exp().clamp(0.01, 0.05)
 
   def sample(self, *args, sample_shape=None):
     sample_shape = sample_shape or []
@@ -44,21 +47,21 @@ class VERAGenerator(nn.Module):
     sample_shape = torch.Size(sample_shape)
     total = sample_shape.numel()
 
-    latents = self.prior.sample((total,))
+    latents = to_device(self.prior.sample((total,)), self.log_conditional_variance.device)
     result = self(latents, *args)
     result = result.view(*sample_shape, *result.shape[1:])
     latents = latents.view(*sample_shape, *latents.shape[1:])
     return latents, result
 
   def conditional(self, mean):
-    return Normal(mean, self.log_conditional_variance.exp())
+    return Normal(mean, self.conditional_variance)
 
   def forward(self, *args, **kwargs):
     return self.generator.forward(*args, **kwargs)
 
 class VERATraining(AbstractEnergyTraining):
   def __init__(self, score, generator, *args,
-               gradient_decay=0.1, hessian_decay=0.001, k=20,
+               gradient_decay=0.1, hessian_decay=0.001, decay=1.0, k=20,
                entropy_weight=100,
                latent_shape=64,
                integrator=None,
@@ -99,6 +102,7 @@ class VERATraining(AbstractEnergyTraining):
     self.entropy_weight = entropy_weight
     self.gradient_decay = gradient_decay
     self.hessian_decay = hessian_decay
+    self.decay = decay
     self.integrator = integrator
     self.checkpoint_names.update(self.get_netlist(self.generator_names))
 
@@ -112,8 +116,10 @@ class VERATraining(AbstractEnergyTraining):
 
   def run_posterior(self, data, args):
     latent, mean = self.generator.sample(*args, sample_shape=(self.batch_size,))
-    prior = self.generator.prior.log_prob(latent).sum(dim=1)
-    conditional = self.generator.conditional(mean).log_prob(data).flatten(start_dim=1).sum(dim=1)
+    post_latent = self.posterior.posterior(latent).rsample()
+    post_mean = self.generator(post_latent, *args)
+    prior = self.generator.prior.log_prob(post_latent).sum(dim=1)
+    conditional = self.generator.conditional(post_mean).log_prob(mean).flatten(start_dim=1).sum(dim=1)
     posterior_entropy = self.posterior.posterior(latent.detach()).entropy().sum(dim=1)
     joint_log_probability = prior + conditional
     return latent, mean, joint_log_probability, posterior_entropy
@@ -147,8 +153,10 @@ class VERATraining(AbstractEnergyTraining):
     return real_result, fake_result, grad_norm
 
   def energy_loss(self, real, fake, grad):
-    result = -real.mean() + fake.mean() + self.gradient_decay * grad.mean()
+    result = -real.mean() + fake.mean() + self.gradient_decay * grad.mean() + self.decay * ((real ** 2).mean() + (fake ** 2).mean())
     self.current_losses["energy"] = float(result)
+    self.current_losses["fake"] = float(fake.mean())
+    self.current_losses["real"] = float(real.mean())
     return result
 
   def energy_step(self, real, fake, args):
@@ -176,7 +184,7 @@ class VERATraining(AbstractEnergyTraining):
 
     # compute score function estimator:
     grad = fake[None] - new_fake.view(self.k, *fake.shape)
-    grad = grad / self.generator.log_conditional_variance.exp() ** 2
+    grad = grad / self.generator.conditional_variance ** 2
     grad = grad.flatten(start_dim=2)
     score = (weight[:, :, None] * grad).sum(dim=0).detach()
 
@@ -201,6 +209,7 @@ class VERATraining(AbstractEnergyTraining):
   def sample(self):
     batch = next(iter(self.train_data))
     _, *args = self.data_key(batch)
+    args = to_device(args, self.device)
     _, fake = self.generator.sample(*args, sample_shape=self.batch_size)
     improved = self.integrator.integrate(self.score, fake, *args).detach()
     return (fake, improved, *args)
@@ -208,14 +217,12 @@ class VERATraining(AbstractEnergyTraining):
   def each_step(self):
     super().each_step()
     if self.step_id % self.report_interval == 0 and self.step_id != 0:
-      data, *args = self.sample()
+      data, *args = detach(to_device(self.sample(), "cpu"))
       self.each_generate(data, *args)
 
   def each_generate(self, fake, improved, *args):
-    fake = fake - fake.min()
-    fake = fake / fake.max()
-    improved = improved - improved.min()
-    improved = improved / improved.max()
+    fake = fake.sigmoid()
+    improved = improved.sigmoid()
     self.writer.add_images("model", fake[:, None].repeat_interleave(3, dim=1), self.step_id)
     self.writer.add_images("energy", improved[:, None].repeat_interleave(3, dim=1), self.step_id)
 

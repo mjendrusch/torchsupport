@@ -8,7 +8,7 @@ from torch.nn import functional as func
 import torch.autograd as ag
 
 from torchsupport.modules.gradient import hard_one_hot
-from torchsupport.data.io import make_differentiable
+from torchsupport.data.io import make_differentiable, detach
 
 def clip_grad_by_norm(gradient, max_norm=0.01):
   norm = torch.norm(gradient)
@@ -30,15 +30,15 @@ class Langevin(nn.Module):
   def step(self, score, data, *args):
     make_differentiable(data)
     make_differentiable(args)
-    noised = ...
+    # data = ...
     if isinstance(data, (list, tuple)):
-      noised = [
+      data = [
         item + noise * torch.randn_like(item)
         for noise, item in zip(self.noise, data)
       ]
     else:
-      noised = data + self.noise * torch.randn_like(data)
-    energy = score(noised, *args)
+      data = data + self.noise * torch.randn_like(data)
+    energy = score(data, *args)
     if isinstance(energy, (list, tuple)):
       energy, *_ = energy
 
@@ -57,12 +57,16 @@ class Langevin(nn.Module):
         gradient = clip_grad_by_norm(gradient, self.max_norm)
       data = data - self.rate * gradient
       if self.clamp is not None:
-        data = data.clamp(*self.clamp)
+        if isinstance(self.clamp, (list, tuple)):
+          data = data.clamp(*self.clamp)
+        else:
+          data = self.clamp(data)
     return data
 
   def integrate(self, score, data, *args):
     for idx in range(self.steps):
       data = self.step(score, data, *args)
+      data = detach(data)
     return data
 
 class AugmentedLangevin(Langevin):
@@ -76,7 +80,8 @@ class AugmentedLangevin(Langevin):
     for idx in range(self.steps):
       last_step = idx == self.steps - 1
       if idx % self.transform_interval == 0 and not last_step:
-        data = self.transform(data)
+        with torch.no_grad():
+          data = self.transform(data)
       data = self.step(score, data, *args)
     return data
 

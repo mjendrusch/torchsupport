@@ -17,4 +17,10 @@ examples/raw
 examples/processed
 examples/flowers
 examples/cifar-10-batches-py
+examples/off-energy
+off-energy
 *.tar.gz
+awr-test*
+docs
+examples/*
+*.torch.old
