@@ -493,7 +493,7 @@ class SelfClassifierTraining(SimSiamTraining):
   def contrastive_loss(self, features):
     log_yx = features.log_softmax(dim=-1)
     p_xy = features.softmax(dim=1)
-    value = (p_xy[None, :] * log_yx[:, None]).sum(dim=-1).mean(dim=2)
+    value = (p_xy[None, :] * log_yx[:, None]).mean(dim=-1).sum(dim=2)
     value = value * (1 - torch.eye(value.size(0), device=value.device))
     value = value.sum(dim=(0, 1)) / (value.size(0) * (value.size(0) - 1))
     return -value.mean()
