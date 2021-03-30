@@ -505,6 +505,14 @@ class TwinTraining(SelfClassifierTraining):
     std = features.std(dim=1, keepdim=True)
     features = (features - mean) / std
     correlation = torch.einsum("ixj,kxl->ikjl", features, features) / features.size(1)
+
+    if self.step_id % self.report_interval == 0:
+      self.writer.add_image(
+        "correlation",
+        correlation.detach().cpu()[0, 1][None].repeat_interleave(3, dim=0),
+        self.step_id
+      )
+
     diag = torch.eye(correlation.size(-1), device=correlation.device)
     diag = diag[None, None, :, :]
     corr = ((correlation - diag) ** 2)
