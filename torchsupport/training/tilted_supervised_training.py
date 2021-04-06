@@ -95,7 +95,7 @@ class TiltedSupervisedTraining(MultistepTraining):
     else:
       # policy = policy[:, 0]
       reward = -self.loss(predictions, labels)
-      value = (policy.exp() * reward).mean().detach()
+      value = (reward).mean().detach()
       self.current_losses[f"value"] = float(value)
       advantage = 10 * (reward - value)
       total_loss = policy * advantage.exp().clamp(0, 20)

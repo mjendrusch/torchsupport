@@ -73,3 +73,27 @@ class VQ(nn.Module):
     one_hot = reshape(one_hot, shape)
     closest = reshape(closest, shape)
     return one_hot, closest
+
+class VectorQuantization(nn.Module):
+  def __init__(self, size, code_size=512, beta=0.25):
+    super().__init__()
+    self.beta = beta
+    self.codebook = nn.Embedding(code_size, size)
+    with torch.no_grad():
+      self.codebook.weight.uniform_(-1 / code_size, 1 / code_size)
+
+  def forward(self, inputs):
+    shape = inputs.shape
+    out = inputs.reshape(*shape[:2], -1).permute(2, 0, 1).reshape(-1, shape[1])
+    dist = ((out[:, None, :] - self.codebook.weight[None, :, :]) ** 2).sum(dim=-1)
+    indices = dist.argmin(dim=1)
+    closest = self.codebook(indices)
+    assignment = ((closest.detach() - out) ** 2).mean()
+    shift = ((out.detach() - closest) ** 2).mean()
+    loss = assignment + self.beta * shift
+    straight_through = replace_gradient(closest, out)
+    straight_through = straight_through.reshape(-1, shape[0], shape[1])
+    straight_through = straight_through.permute(1, 2, 0)
+    straight_through = straight_through.view(*shape)
+    indices = indices.reshape(-1, shape[0]).permute(1, 0).reshape(shape[0], *shape[2:])
+    return straight_through, indices, loss

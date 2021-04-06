@@ -224,10 +224,10 @@ class SupervisedTraining(Training):
       self.schedule = schedule
     self.losses = losses
     self.train_data = DataLoader(
-      train_data, batch_size=self.batch_size, num_workers=8, shuffle=True, drop_last=True
+      train_data, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True, drop_last=True
     )
     self.validate_data = DataLoader(
-      validate_data, batch_size=self.batch_size, num_workers=8, shuffle=True, drop_last=True
+      validate_data, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True, drop_last=True
     )
     self.valid_iter = iter(self.validate_data)
     self.net = net.to(self.device)

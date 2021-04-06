@@ -119,6 +119,99 @@ class AbstractContrastiveTraining(Training):
 
     return self.get_netlist(self.names)
 
+class MoCoTraining(AbstractContrastiveTraining):
+  def __init__(self, net, data, temperature=0.1, buffer_size=2048,
+               momentum=0.99, shuffle=True, **kwargs):
+    self.net = ...
+    super().__init__({
+      "net": net
+    }, data, **kwargs)
+    self.buffer_size = buffer_size
+    self.temperature = temperature
+    self.buffer = None
+    self.index = None
+    self.target = deepcopy(self.net)
+    self.momentum = momentum
+    self.requires_shuffle = shuffle
+
+  def similarity(self, x, y):
+    numerator = (x * y).sum(dim=-1)
+    nx = x.norm(dim=-1)
+    ny = y.norm(dim=-1)
+    denominator = nx * ny
+    return numerator / (denominator + 1e-6)
+
+  def update_buffer(self, data):
+    self.buffer[self.index:self.index + self.batch_size] = data
+    self.index += self.batch_size
+    self.index = self.index % self.buffer_size
+
+  def init_buffer(self):
+    diter = iter(self.train_data)
+    for _ in range(self.buffer_size // self.batch_size):
+      data = to_device(next(diter), self.device)
+      with torch.no_grad():
+        key = self.target(data[0]).cpu()
+      if self.buffer is None:
+        self.buffer = torch.zeros(self.buffer_size, key.size(1))
+        self.index = 0
+      self.update_buffer(key)
+
+  def momentum_update(self, target, source):
+    with torch.no_grad():
+      for t, s in zip(target.parameters(), source.parameters()):
+        t *= self.momentum
+        t += (1 - self.momentum) * s
+
+  def shuffle(self, data):
+    if self.requires_shuffle:
+      index = torch.randperm(self.batch_size, device=data.device)
+      data = data[index]
+      return data, index
+    return data, None
+
+  def unshuffle(self, data, index):
+    if self.requires_shuffle:
+      reindex = torch.arange(self.batch_size, dtype=torch.long, device=data.device)
+      reindex[index] = reindex.clone()
+      return data[reindex]
+    return data
+
+  def run_networks(self, data):
+    if self.buffer is None:
+      self.init_buffer()
+    key, query = data
+    query = self.net(query)
+    with torch.no_grad():
+      self.momentum_update(self.target, self.net)
+      key, index = self.shuffle(key)
+      key = self.target(key)
+      key = self.unshuffle(key, index)
+      negatives = to_device(self.buffer, self.device)
+      self.update_buffer(key.cpu())
+    positive = self.similarity(query, key)
+    negative = self.similarity(query[:, None, :], negatives[None, :, :])
+    return positive, negative
+
+  def contrastive_loss(self, positive, negative):
+    total = torch.cat((positive[:, None], negative), dim=1)
+    total = total / self.temperature
+    return -total.log_softmax(dim=1)[:, 0].mean()
+
+class EnergyMoCoTraining(MoCoTraining):
+  def __init__(self, net, data, alpha=0.3, positive_decay=0.1,
+               negative_decay=0.1, **kwargs):
+    super().__init__(net, data, **kwargs)
+    self.alpha = alpha
+    self.positive_decay = positive_decay
+    self.negative_decay = negative_decay
+
+  def contrastive_loss(self, positive, negative):
+    contrastive = positive.mean() - self.alpha * negative.mean()
+    regularization = self.positive_decay * (positive ** 2).mean()
+    regularization += self.negative_decay * (negative ** 2).mean()
+    return contrastive + regularization
+
 class SimCLRTraining(AbstractContrastiveTraining):
   def __init__(self, net, data, temperature=0.1, **kwargs):
     r"""Trains a network in a self-supervised manner following the method outlined
@@ -345,12 +438,19 @@ class SimSiamTraining(AbstractContrastiveTraining):
     y = y / y.norm(dim=2, keepdim=True)
     sim = (x[None, :] * y[:, None]).view(x.size(0), x.size(0), x.size(1), -1)
     sim = sim.sum(dim=-1)
-    sim = sim.view(-1, x.size(1)).mean(dim=0)
+    sim = sim * (1 - torch.eye(sim.size(0), device=sim.device)[:, :, None])
+    size = sim.size(0)
+    sim = sim.view(-1, x.size(1)).sum(dim=0) / (size * (size - 1))
     return sim
 
   def visualize(self, data):
-    self.writer.add_images("variant 1", data[0], self.step_id)
-    self.writer.add_images("variant 2", data[1], self.step_id)
+    v1 = data[0]
+    v2 = data[1]
+    if data[0].dim() > 4:
+      v1 = v1.view(-1, *v1.shape[-3:])
+      v2 = v2.view(-1, *v2.shape[-3:])
+    self.writer.add_images("variant 1", v1, self.step_id)
+    self.writer.add_images("variant 2", v2, self.step_id)
 
   def contrastive_step(self, data):
     super().contrastive_step(data)
@@ -382,6 +482,51 @@ class SimSiamTraining(AbstractContrastiveTraining):
     self.current_losses["std"] = float(norm_features)
     self.current_losses["contrastive"] = float(result)
     return result
+
+class SelfClassifierTraining(SimSiamTraining):
+  def __init__(self, net, data, **kwargs):
+    super().__init__(net, nn.Identity(), data, **kwargs)
+
+  def run_networks(self, data):
+    data = list(map(lambda x: x.unsqueeze(0), data))
+    inputs = torch.cat(data, dim=0).view(-1, *data[0].shape[2:])
+    features = self.net(inputs)
+    shape = features.shape[1:]
+    features = features.view(len(data), -1, *shape)
+    return (features,)
+
+  def contrastive_loss(self, features):
+    log_yx = features.log_softmax(dim=-1)
+    p_xy = features.softmax(dim=1)
+    value = (p_xy[None, :] * log_yx[:, None]).mean(dim=-1).sum(dim=2)
+    value = value * (1 - torch.eye(value.size(0), device=value.device))
+    value = value.sum(dim=(0, 1)) / (value.size(0) * (value.size(0) - 1))
+    return -value.mean()
+
+class TwinTraining(SelfClassifierTraining):
+  redundancy_weight = 5e-3
+  def contrastive_loss(self, features):
+    mean = features.mean(dim=1, keepdim=True)
+    std = features.std(dim=1, keepdim=True)
+    features = (features - mean) / std
+    correlation = torch.einsum("ixj,kxl->ikjl", features, features) / features.size(1)
+
+    if self.step_id % self.report_interval == 0:
+      val = correlation.detach().cpu()[0, 1]
+      val = ((val + 1) / 2).clamp(0, 1)
+      self.writer.add_image(
+        "correlation",
+        val[None].repeat_interleave(3, dim=0),
+        self.step_id
+      )
+
+    diag = torch.eye(correlation.size(-1), device=correlation.device)
+    diag = diag[None, None, :, :]
+    corr = ((correlation - diag) ** 2)
+    corr = corr * (diag + self.redundancy_weight * (1 - diag))
+    loss = corr.sum(dim=(2, 3))
+    loss = loss * (1 - torch.eye(loss.size(0), device=loss.device))
+    return loss.mean()
 
 class ClassifierSimSiamTraining(SimSiamTraining):
   def __init__(self, *args, hard=False, **kwargs):
