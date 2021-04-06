@@ -24,7 +24,7 @@ def _discriminator_layer(in_channels, out_channels, kernel_size, activation):
   return nn.Sequential(
     nn.Conv2d(
       in_channels, out_channels, kernel_size,
-      padding=kernel_size // 2, stride=2
+      padding=(kernel_size - 1) // 2, stride=2
     ),
     nn.BatchNorm2d(out_channels),
     activation
@@ -92,4 +92,22 @@ class DCGANDiscriminator(nn.Module):
     out = self.preprocess(inputs)
     for block in self.blocks:
       out = block(out)
+    return out
+
+class DCGANPatchDiscriminator(DCGANDiscriminator):
+  def __init__(self, in_size=3, base_channels=64, channel_factors=None,
+               kernel_size=5, activation=None):
+    super().__init__(
+      in_size=in_size,
+      base_channels=base_channels,
+      channel_factors=channel_factors,
+      kernel_size=kernel_size,
+      activation=activation
+    )
+    self.predict = nn.Conv2d(base_channels * channel_factors[-1], 1, 1)
+
+  def forward(self, inputs):
+    out = super().forward(inputs)
+    out = self.predict(out)
+    out = out.reshape(out.size(0), 1, -1).permute(2, 0, 1).reshape(-1, out.size(1))
     return out
