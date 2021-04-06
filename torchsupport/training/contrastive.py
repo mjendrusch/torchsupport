@@ -444,8 +444,13 @@ class SimSiamTraining(AbstractContrastiveTraining):
     return sim
 
   def visualize(self, data):
-    self.writer.add_images("variant 1", data[0], self.step_id)
-    self.writer.add_images("variant 2", data[1], self.step_id)
+    v1 = data[0]
+    v2 = data[1]
+    if data[0].dim() > 4:
+      v1 = v1.view(-1, *v1.shape[-3:])
+      v2 = v2.view(-1, *v2.shape[-3:])
+    self.writer.add_images("variant 1", v1, self.step_id)
+    self.writer.add_images("variant 2", v2, self.step_id)
 
   def contrastive_step(self, data):
     super().contrastive_step(data)
@@ -507,9 +512,11 @@ class TwinTraining(SelfClassifierTraining):
     correlation = torch.einsum("ixj,kxl->ikjl", features, features) / features.size(1)
 
     if self.step_id % self.report_interval == 0:
+      val = correlation.detach().cpu()[0, 1]
+      val = ((val + 1) / 2).clamp(0, 1)
       self.writer.add_image(
         "correlation",
-        correlation.detach().cpu()[0, 1][None].repeat_interleave(3, dim=0),
+        val[None].repeat_interleave(3, dim=0),
         self.step_id
       )
 

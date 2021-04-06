@@ -172,7 +172,7 @@ class Generator(nn.Module):
     self.prior = prior
     self.bottom_up = bottom_up
     self.decoder = decoder
-    self.scale = scale
+    self.scale = self.bottom_up.scale
     self.temp = temp
 
   def forward(self, batch_size, temp=1.0):
@@ -234,4 +234,5 @@ class DeepDecoder(nn.Module):
 
   def forward(self, dists, other):
     results, out = other
+    print(results[-1].shape)
     return Normal(self.block(results[-1]), self.logvar.exp())
