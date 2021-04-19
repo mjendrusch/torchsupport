@@ -100,7 +100,7 @@ class FullyConnectedConstant(ConstantStructure):
       0, 0,
       structure_connections
     )
-  
+
   @classmethod
   def collate(cls, structures):
     return structures[0].update_to(
