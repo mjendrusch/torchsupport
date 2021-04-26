@@ -4,7 +4,7 @@ from torch.distributions.kl import register_kl
 
 from torchsupport.data.match import Matchable, match
 
-class DistributionList(Matchable, Distribution):
+class DistributionList(Distribution):
   has_rsample = True
   def __init__(self, items):
     self.items = items
@@ -19,7 +19,9 @@ class DistributionList(Matchable, Distribution):
   def log_prob(self, value):
     log_prob = 0.0
     for dist, val in zip(self.items, value):
-      log_prob = log_prob + dist.log_prob(val)
+      current = dist.log_prob(val)
+      current = current.view(current.size(0), -1).sum(dim=1)
+      log_prob = log_prob + current
     return log_prob
 
   def sample(self, sample_shape=torch.Size()):
