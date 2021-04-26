@@ -291,7 +291,7 @@ class EnergyTraining(AbstractEnergyTraining):
         device=source.device
       )
       diff = (source[:, None] - target[None, :])
-      diff = diff.view(*diff.shape[:2], -1)
+      diff = diff.reshape(*diff.shape[:2], -1)
       diff = diff.norm(dim=-1)
       diff[ind, ind] = diff.max().detach()
       result = diff.min(dim=1)[0]
