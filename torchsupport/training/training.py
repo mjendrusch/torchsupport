@@ -31,6 +31,7 @@ class Training(object):
                max_steps=int(1e7),
                batch_size=128,
                num_workers=8,
+               prefetch_factor=2,
                device="cpu",
                path_prefix=".",
                network_name="network",
@@ -42,6 +43,7 @@ class Training(object):
     self.max_steps = max_steps
     self.batch_size = batch_size
     self.num_workers = num_workers
+    self.prefetch_factor = prefetch_factor
     self.device = device
     self.path_prefix = path_prefix
     self.network_name = network_name
@@ -224,12 +226,17 @@ class SupervisedTraining(Training):
       self.schedule = schedule
     self.losses = losses
     self.train_data = DataLoader(
-      train_data, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True, drop_last=True
+      train_data, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True, drop_last=True,
+      prefetch_factor=self.prefetch_factor
     )
-    self.validate_data = DataLoader(
-      validate_data, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True, drop_last=True
-    )
-    self.valid_iter = iter(self.validate_data)
+    self.valid_iter = None
+    if validate_data is not None:
+      self.validate_data = DataLoader(
+        validate_data, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True, drop_last=True,
+        prefetch_factor=self.prefetch_factor
+      )
+      self.valid_iter = iter(self.validate_data)
+    
     self.net = net.to(self.device)
 
     self.checkpoint_names = dict(checkpoint=self.net)
@@ -330,14 +337,15 @@ class SupervisedTraining(Training):
     self.writer.add_scalar(f"validation loss total", sum(self.validation_losses), self.step_id)
 
   def run_report(self):
-    vdata = None
-    try:
-      vdata = next(self.valid_iter)
-    except StopIteration:
-      self.valid_iter = iter(self.validate_data)
-      vdata = next(self.valid_iter)
-    vdata = to_device(vdata, self.device)
-    self.validate(vdata)
+    if self.valid_iter is not None:
+      vdata = None
+      try:
+        vdata = next(self.valid_iter)
+      except StopIteration:
+        self.valid_iter = iter(self.validate_data)
+        vdata = next(self.valid_iter)
+      vdata = to_device(vdata, self.device)
+      self.validate(vdata)
 
   def train(self):
     for epoch_id in range(self.max_epochs):
