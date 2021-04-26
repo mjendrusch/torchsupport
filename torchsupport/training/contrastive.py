@@ -104,13 +104,14 @@ class AbstractContrastiveTraining(Training):
 
   def train(self):
     """Runs contrastive training until the maximum number of epochs is reached."""
+    self.train_data = None
+    self.train_data = DataLoader(
+      self.data, batch_size=self.batch_size, num_workers=self.num_workers,
+      shuffle=True, drop_last=True, prefetch_factor=self.prefetch_factor,
+      persistent_workers=True
+    )
     for epoch_id in range(self.max_epochs):
       self.epoch_id = epoch_id
-      self.train_data = None
-      self.train_data = DataLoader(
-        self.data, batch_size=self.batch_size, num_workers=self.num_workers,
-        shuffle=True, drop_last=True
-      )
 
       for data in self.train_data:
         self.step(data)
