@@ -22,7 +22,8 @@ def cross_attention(query, key, value, target_mask=None, source_mask=None, mask=
       mask = mask * available_mask
     dot = mask * dot - (1 - mask) * 1e6
     amap = dot.softmax(dim=-1) * mask
-  amap = dot.softmax(dim=-1)
+  else:
+    amap = dot.softmax(dim=-1)
 
   return torch.einsum("ihkl,ihvl->ihvk", amap, value)
 
@@ -86,6 +87,7 @@ class ReZeroCrossAttention(nn.Module):
     self.zero = ReZero(size)
 
   def forward(self, target, source, target_mask=None, source_mask=None, mask=None):
+    source = (source - source.mean(dim=1, keepdim=True)) / (source.std(dim=1, keepdim=True) + 1e-6)
     update = self.attention(
       target, source,
       target_mask=target_mask,
@@ -112,6 +114,9 @@ class SimplexAttention(nn.Module):
     self.zero = ReZero(2 * size)
 
   def forward(self, target, source, target_mask=None, source_mask=None, mask=None):
+    original = target
+    target = (target - target.mean(dim=1, keepdim=True)) / (target.std(dim=1, keepdim=True) + 1e-6)
+    source = (source - source.mean(dim=1, keepdim=True)) / (source.std(dim=1, keepdim=True) + 1e-6)
     attention = self.cross_attention(
       target, source,
       target_mask=target_mask,
@@ -120,7 +125,7 @@ class SimplexAttention(nn.Module):
     )
     attention = self.zero(torch.zeros_like(attention), attention)
     scale, bias = attention.chunk(2, dim=1)
-    return (1 + scale) * target + bias
+    return (1 + scale) * original + bias
 
 class DuplexAttention(nn.Module):
   def __init__(self, size=128, heads=8):
