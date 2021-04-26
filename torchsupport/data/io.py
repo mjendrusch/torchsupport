@@ -1,5 +1,6 @@
 import ctypes
 from copy import deepcopy
+from functools import partial
 
 from skimage import io
 import torch
@@ -105,6 +106,14 @@ def netread(network, path):
         print("Unexpected OSError. Aborting ...")
         raise e
 
+MOVE_REGISTRY = {}
+def _move_extension_aux(function, kind=None):
+  MOVE_REGISTRY[kind] = function
+  return function
+
+def move_extension(kind):
+  return partial(_move_extension_aux, kind=kind)
+
 class DeviceMovable():
   def move_to(self, device):
     raise NotImplementedError("Abstract.")
@@ -132,6 +141,8 @@ def to_device(data, device):
     }
   if isinstance(data, DeviceMovable):
     return data.move_to(device)
+  if type(data) in MOVE_REGISTRY:
+    return MOVE_REGISTRY[type(data)](data, device)
   return data
 
 class _MemoDictDetach(dict):

@@ -1,8 +1,20 @@
 # Adapted from PyTorch:
+from functools import partial
 
 import torch
 from torch.utils.data import DataLoader as TorchDataLoader
 from torch.nn.parallel.scatter_gather import Gather
+
+from torchsupport.data.io import to_device
+
+COLLATE_REGISTRY = {}
+
+def _collate_extension_aux(function, kind=None):
+  COLLATE_REGISTRY[kind] = function
+  return function
+
+def collate_extension(kind):
+  return partial(_collate_extension_aux, kind=kind)
 
 class Collatable():
   @classmethod
@@ -44,6 +56,8 @@ def default_collate(batch):
     return [default_collate(samples) for samples in transposed]
   elif isinstance(elem, Collatable):
     return Collatable.cat(batch)
+  elif elem_type in COLLATE_REGISTRY:
+    return COLLATE_REGISTRY[elem_type](batch)
   elif elem is None:
     return None
   else:
@@ -65,6 +79,9 @@ def gather_collated(outputs, target_device, dim=0):
     if isinstance(out, Collatable):
       device_code = "cpu" if target_device == -1 else f"cuda:{target_device}"
       return type(out).collate([output.move_to(device_code) for output in outputs])
+    if type(out) in COLLATE_REGISTRY:
+      device_code = "cpu" if target_device == -1 else f"cuda:{target_device}"
+      return COLLATE_REGISTRY[type(out)]([to_device(output, device_code) for output in outputs])
     return type(out)(map(gather_map, zip(*outputs)))
 
   try:
@@ -75,9 +92,11 @@ def gather_collated(outputs, target_device, dim=0):
 def DataLoader(dataset, batch_size=1, shuffle=False, sampler=None,
                batch_sampler=None, num_workers=0, collate_fn=default_collate,
                pin_memory=False, drop_last=False, timeout=0,
-               worker_init_fn=None):
+               worker_init_fn=None, prefetch_factor=2, persistent_workers=False):
   return TorchDataLoader(dataset, batch_size=batch_size, shuffle=shuffle,
                          sampler=sampler, batch_sampler=batch_sampler,
                          num_workers=num_workers, collate_fn=collate_fn,
                          pin_memory=pin_memory, drop_last=drop_last,
-                         timeout=timeout, worker_init_fn=worker_init_fn)
+                         timeout=timeout, worker_init_fn=worker_init_fn,
+                         prefetch_factor=prefetch_factor,
+                         persistent_workers=persistent_workers)
