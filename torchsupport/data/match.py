@@ -53,7 +53,7 @@ def match(p, q):
         sample = p.rsample()
         log_p = p.log_prob(sample)
         log_q = q.log_prob(sample)
-        return (log_p - log_q).mean(dim=0).sum()
+        return (log_p.mean(dim=0).sum() - log_q.mean(dim=0).sum())
     else:
       return -p.log_prob(q).mean(dim=0).sum()
   if isinstance(q, Distribution):
@@ -67,7 +67,7 @@ def match_l1(x, y):
   return match_lp(x, y, p=1)
 
 def match_bce(x, y):
-  result = func.binary_cross_entropy_with_logits(y, x, reduction="none")
+  result = func.binary_cross_entropy_with_logits(x, y, reduction="none")
   if result.dim() > 1:
     result = result.view(x.size(0), -1).sum(dim=1)
     result = result.mean(dim=0)
