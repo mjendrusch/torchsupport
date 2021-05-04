@@ -92,6 +92,7 @@ class LSDTraining(AbstractEnergyTraining):
   def critic_loss(self, data, score, critic):
     result = self.energy_loss(data, score, critic)
     l2_loss = (critic.view(critic.size(0), -1) ** 2).sum(dim=-1).mean()
+    self.current_losses["critic penalty"] = float(l2_loss)
     return -result + self.decay * l2_loss
 
   def energy_loss(self, data, score, critic):
@@ -99,12 +100,14 @@ class LSDTraining(AbstractEnergyTraining):
     critic = critic.view(critic.size(0), -1)
     vectors = self.noise_vectors(critic)
     grad_score = ag.grad(
-      score, data,
-      grad_outputs=torch.ones_like(score),
-      create_graph=True
+      score.sum(), data,
+      #grad_outputs=torch.ones_like(score),
+      create_graph=True,
+      retain_graph=True
     )[0].view(score.size(0), -1)
     jacobian_v = ag.grad(
-      (critic * vectors).mean(dim=0).sum(), data, create_graph=True
+      critic, data, grad_outputs=vectors,
+      create_graph=True, retain_graph=True
     )[0].view(score.size(0), -1)
     v_jacobian_v = (vectors * jacobian_v).sum(dim=-1)
     jacobian_term = v_jacobian_v
@@ -117,7 +120,7 @@ class LSDTraining(AbstractEnergyTraining):
     self.current_losses["critic"] = float(critic_term.mean())
     self.current_losses["penalty"] = float(penalty_term.mean())
 
-    return (jacobian_term + critic_term).mean()
+    return (jacobian_term + critic_term).mean()# + 0.01 * penalty_term
 
   def run_energy(self, data):
     data, *args = self.data_key(data)
