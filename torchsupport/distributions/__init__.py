@@ -4,6 +4,7 @@ from torchsupport.distributions.mixture import Mixture
 from torchsupport.distributions.von_mises import VonMises
 from torchsupport.distributions.standard import StandardNormal
 from torchsupport.distributions.structured import DistributionList
+from torchsupport.distributions.vae_distribution import VAEDistribution
 # from torchsupport.distributions.modifiers import fixed, hardened
 from torchsupport.distributions.kl_divergence import kl_relaxed_one_hot_categorical
 
