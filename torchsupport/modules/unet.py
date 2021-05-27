@@ -50,7 +50,6 @@ class LightResUNetBlock(NestedModule):
     self.downscale = downscale
     self.into_preprocess = nn.Conv2d(in_size, hidden_size, 1)
     self.into_postprocess = nn.Conv2d(hidden_size, out_size, 1)
-    self.into_bn = nn.InstanceNorm2d(in_size)
     self.into_blocks = nn.ModuleList([
       nn.Conv2d(
         hidden_size,
@@ -67,7 +66,6 @@ class LightResUNetBlock(NestedModule):
     self.outof_preprocess = nn.Conv2d(
       out_size + hidden_size, hidden_size, 1
     )
-    self.outof_bn = nn.InstanceNorm2d(out_size + hidden_size)
     self.outof_postprocess = nn.Conv2d(hidden_size, in_size, 1)
     self.outof_blocks = nn.ModuleList([
       nn.Conv2d(
@@ -84,7 +82,7 @@ class LightResUNetBlock(NestedModule):
     ])
 
   def enter(self, inputs, *args, **kwargs):
-    out = self.activation(self.into_preprocess(self.into_bn(inputs)))
+    out = self.activation(self.into_preprocess(inputs))
     for zero, block in zip(self.into_zeros, self.into_blocks):
       this_out = out
       if self.cond:
@@ -105,7 +103,7 @@ class LightResUNetBlock(NestedModule):
   def exit(self, inputs, skip, *args, **kwargs):
     if self.downscale != 1:
       inputs = func.interpolate(inputs, scale_factor=self.downscale, mode="bilinear")
-    out = self.activation(self.outof_preprocess(self.outof_bn(torch.cat((inputs, skip), dim=1))))
+    out = self.activation(self.outof_preprocess(torch.cat((inputs, skip), dim=1)))
     for zero, block in zip(self.outof_zeros, self.outof_blocks):
       this_out = out
       if self.cond:
@@ -165,11 +163,12 @@ class LightUNetBackbone(nn.Module):
 class ResSubblock(nn.Module):
   def __init__(self, in_size=64, out_size=64, cond_size=None,
                kernel_size=3, dilation=1, padding=None,
-               activation=None, norm=None):
+               activation=None, norm=None, cond_norm=False):
     super().__init__()
     padding = padding or (kernel_size // 2 * dilation)
     self.cond = None
-    self.norm = norm or (lambda x: nn.Identity())
+    self.cond_norm = cond_norm
+    norm = norm or (lambda x: nn.Identity())
     self.activation = activation or func.relu
     if cond_size:
       self.cond = nn.Linear(cond_size, out_size)
@@ -179,18 +178,29 @@ class ResSubblock(nn.Module):
     ])
     self.project = nn.Conv2d(in_size, out_size, 1, bias=False)
     self.zero = ReZero(out_size)
-    self.norms = nn.ModuleList([
-      self.norm(in_size),
-      self.norm(out_size)
-    ])
+    if cond_norm:
+      self.norms = nn.ModuleList([
+        norm(in_size, cond_size),
+        norm(out_size, cond_size)
+      ])
+    else:
+      self.norms = nn.ModuleList([
+        norm(in_size),
+        norm(out_size)
+      ])
+
+  def norm(self, idx, x, cond):
+    if self.cond_norm:
+      return self.norms[idx](x, cond)
+    return self.norms[idx](x)
 
   def forward(self, inputs, cond=None):
     out = inputs
-    out = self.blocks[0](self.activation(self.norms[0](out)))  
+    out = self.blocks[0](self.activation(self.norm(0, out, cond)))  
     if cond is not None:
       out = out + self.cond(cond)[:, :, None, None]
     out = func.dropout(
-      self.activation(self.norms[1](out)),
+      self.activation(self.norm(1, out, cond)),
       0.1, training=self.training
     )
     out = self.blocks[1](out)
