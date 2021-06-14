@@ -57,17 +57,9 @@ class TrainingLoop(Loop):
     self.setup()
     for idx in range(self.ctx.step_id, self.num_steps):
       self.ctx.step_id = idx
-      self.setup()
       for step in self.run:
         step()
       self.log()
       self.checkpoint()
       self.save()
     self.teardown()
-
-if __name__ == "__main__":
-  loop = TrainingLoop()
-  loop.add(first=SequentialStep(), every=10, num_steps=1) \
-      .add(second=SequentialStep(), every=1, num_steps=1) \
-      .add(third=SequentialStep(), every=5, num_steps=10)
-  loop.setup <<= Step(lambda ctx: ctx)

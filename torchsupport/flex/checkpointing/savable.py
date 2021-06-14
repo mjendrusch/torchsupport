@@ -38,3 +38,6 @@ class Savable:
 
 class SaveStateError(Exception):
   pass
+
+def is_savable(x):
+  return isinstance(x, Savable) or (type(x) in SAVABLE_EXTENSION)

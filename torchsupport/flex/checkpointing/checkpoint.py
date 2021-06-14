@@ -15,6 +15,12 @@ class Checkpoint:
     self.checkpoint_names.update(kwargs)
     self.save_names.update(kwargs)
 
+  def remove_checkpoint(self, *names):
+    for name in names:
+      if name in self.checkpoint_names:
+        del self.checkpoint_names[name]
+        del self.save_names[name]
+
   def add_save(self, **kwargs):
     self.save_names.update(kwargs)
 

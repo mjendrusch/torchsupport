@@ -1,4 +1,5 @@
-from torchsupport.flex.checkpointing.savable import Savable
+import torch.nn as nn
+from torchsupport.flex.checkpointing.savable import is_savable, Savable
 from torchsupport.flex.checkpointing.checkpoint import Checkpoint
 from torchsupport.flex.step.training_loop import TrainingLoop
 from torchsupport.flex.log.tensorboard_logger import TensorboardLogger
@@ -65,8 +66,29 @@ class OptimizationContext(Context):
       log_value = float(value)
       self.log(**{key: log_value})
 
+class RedirectContext(OptimizationContext):
+  def __init__(self):
+    super().__init__()
+    self.loss_store = {}
+
+  @property
+  def loss(self):
+    result = self.loss_store
+    self.loss_store = {}
+    return result
+
+  def argmin(self, **kwargs):
+    for key, value in kwargs.items():
+      value = value.mean()
+      self.loss_store[key] = value
+
+  def argmax(self, **kwargs):
+    for key, value in kwargs.items():
+      value = value.mean()
+      self.loss_store[key] = -value
+
 class TrainingContext(OptimizationContext, Savable):
-  def __init__(self, path,
+  def __init__(self, path=".",
                max_steps=int(1e7),
                batch_size=128,
                num_workers=8,
@@ -90,6 +112,7 @@ class TrainingContext(OptimizationContext, Savable):
     self.logger = logger(self.path)
     self.loop = TrainingLoop(num_steps=self.max_steps, ctx=self)
     self.loop.name = None
+    self.checkpoint.add_save(loop=self.loop)
 
     self.save_interval = save_interval
     self.save_time = None
@@ -103,6 +126,29 @@ class TrainingContext(OptimizationContext, Savable):
 
   def add(self, *args, **kwargs):
     self.loop.add(*args, **kwargs)
+
+  def try_add_checkpoint(self, name, value):
+    if isinstance(value, nn.Module):
+      self.checkpoint.add_checkpoint(**{name: value})
+    elif is_savable(value):
+      self.checkpoint.add_save(**{name: value})
+
+  def register(self, **kwargs):
+    for name, value in kwargs.items():
+      self.try_add_checkpoint(name, value)
+      if hasattr(value, "ctx"):
+        value.ctx = self
+      setattr(self, name, value)
+
+  def get_step(self, name, base=True, index=0):
+    confstep = getattr(self.loop, name)
+    if base:
+      if index is None:
+        index = slice(None)
+      step = confstep.run[index]
+    else:
+      step = confstep
+    return step
 
   def write(self, data, name):
     data[name] = {"step_id": self.step_id}
