@@ -63,5 +63,7 @@ class NamedTuple:
       for key in self.dict
     )
 
+namespace = NamedTuple
+
 def namedtuple(name, fields):
   return CheckArgs(name, fields)
