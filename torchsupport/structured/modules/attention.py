@@ -6,9 +6,7 @@ import torch.nn.functional as func
 
 from torchsupport.modules.rezero import ReZero
 
-def cross_attention(query, key, value, target_mask=None, source_mask=None, mask=None):
-  dot = torch.einsum("ihjk,ihjl->ihkl", query, key) / math.sqrt(key.size(2))
-
+def attention_mask(target_mask=None, source_mask=None, mask=None):
   # mask softmax:
   if (target_mask is not None) or (source_mask is not None) or (mask is not None):
     if source_mask is None:
@@ -20,18 +18,46 @@ def cross_attention(query, key, value, target_mask=None, source_mask=None, mask=
       mask = available_mask
     else:
       mask = mask * available_mask
+  return mask
+
+def cross_attention(query, key, value, target_mask=None, source_mask=None, mask=None):
+  dot = torch.einsum("ihjk,ihjl->ihkl", query, key) / math.sqrt(key.size(2))
+  mask = attention_mask(target_mask, source_mask, mask)
+  if mask is not None:
     dot = mask * dot - (1 - mask) * 1e6
     amap = dot.softmax(dim=-1) * mask
   else:
     amap = dot.softmax(dim=-1)
+  return torch.einsum("ihkl,ihvl->ihvk", amap, value)
 
+def cross_low_rank_mvp(query, key, value, target_mask=None, source_mask=None, mask=None):
+  matrix = torch.einsum("ihjk,ihjl->ihkl", query, key) / math.sqrt(key.size(2))
+  mask = attention_mask(target_mask, source_mask, mask)
+  if mask is not None:
+    matrix = mask * matrix
+  matrix = matrix / matrix.size(-1)
+  return torch.einsum("ihkl,ihvl->ihvk", matrix, value)
+
+def cross_gated_mvp(query, key, value, target_mask=None, source_mask=None, mask=None):
+  dot = -2 * torch.einsum("ihjk,ihjl->ihkl", query, key) / math.sqrt(key.size(2))
+  q2 = query.norm(dim=2) ** 2
+  k2 = key.norm(dim=2) ** 2
+  dot = dot + q2[:, :, :, None] + k2[:, :, None, :]
+  dot = -dot
+  mask = attention_mask(target_mask, source_mask, mask)
+  if mask is not None:
+    dot = mask * dot - (1 - mask) * 1e6
+    amap = dot.softmax(dim=-1) * mask
+  else:
+    amap = dot.softmax(dim=-1)
   return torch.einsum("ihkl,ihvl->ihvk", amap, value)
 
 class RawCrossAttention(nn.Module):
-  def __init__(self, size=128, heads=8):
+  def __init__(self, size=128, heads=8, attention=cross_attention):
     super().__init__()
     self.heads = heads
     self.size = size
+    self.attention = attention
     self.query = nn.Conv1d(size, size, 1)
     self.key = nn.Conv1d(size, size, 1)
     self.value = nn.Conv1d(size, size, 1)
@@ -43,7 +69,7 @@ class RawCrossAttention(nn.Module):
     query = query.view(query.size(0), self.heads, -1, query.size(2))
     key = key.view(key.size(0), self.heads, -1, key.size(2))
     value = value.view(value.size(0), self.heads, -1, value.size(2))
-    result = cross_attention(
+    result = self.attention(
       query, key, value,
       target_mask=target_mask,
       source_mask=source_mask,
@@ -52,8 +78,8 @@ class RawCrossAttention(nn.Module):
     return result.reshape(result.size(0), -1, result.size(-1))
 
 class CrossAttention(RawCrossAttention):
-  def __init__(self, size=128, out_size=None, heads=8):
-    super().__init__(size=size, heads=heads)
+  def __init__(self, size=128, out_size=None, heads=8, attention=cross_attention):
+    super().__init__(size=size, heads=heads, attention=attention)
     out_size = out_size or size
     self.output = nn.Conv1d(size, out_size, 1, bias=False)
 
@@ -79,10 +105,10 @@ class SelfAttention(CrossAttention):
     )
 
 class ReZeroCrossAttention(nn.Module):
-  def __init__(self, size=128, heads=8):
+  def __init__(self, size=128, heads=8, attention=cross_attention):
     super().__init__()
     self.attention = CrossAttention(
-      size=size, out_size=size, heads=heads
+      size=size, out_size=size, heads=heads, attention=attention
     )
     self.zero = ReZero(size)
 
@@ -106,10 +132,10 @@ class ReZeroSelfAttention(ReZeroCrossAttention):
     )
 
 class SimplexAttention(nn.Module):
-  def __init__(self, size=128, heads=8):
+  def __init__(self, size=128, heads=8, attention=cross_attention):
     super().__init__()
     self.cross_attention = CrossAttention(
-      size=size, out_size=2 * size, heads=heads
+      size=size, out_size=2 * size, heads=heads, attention=attention
     )
     self.zero = ReZero(2 * size)
 
@@ -125,14 +151,14 @@ class SimplexAttention(nn.Module):
     )
     attention = self.zero(torch.zeros_like(attention), attention)
     scale, bias = attention.chunk(2, dim=1)
-    return (1 + scale) * original + bias
+    return (1 + scale) * target + bias
 
 class DuplexAttention(nn.Module):
-  def __init__(self, size=128, heads=8):
+  def __init__(self, size=128, heads=8, attention=cross_attention):
     super().__init__()
     self.heads = heads
     self.cross_attention = CrossAttention(
-      size=size, out_size=2 * size, heads=heads
+      size=size, out_size=2 * size, heads=heads, attention=attention
     )
     self.output = nn.Conv1d(size, 2 * size, 1, bias=False)
     self.zero = ReZero(2 * size)
@@ -161,4 +187,5 @@ class DuplexAttention(nn.Module):
       attention = attention * target_mask
     attention = self.zero(torch.zeros_like(attention), attention)
     scale, bias = attention.chunk(2, dim=1)
+    target = (target - target.mean(dim=1, keepdim=True)) / (target.std(dim=1, keepdim=True) + 1e-6)
     return (1 + scale) * target + bias
