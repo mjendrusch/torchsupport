@@ -27,7 +27,7 @@ class Langevin(nn.Module):
     self.max_norm = max_norm
     self.clamp = clamp
 
-  def step(self, score, data, *args):
+  def step(self, score, data, *args, diffable=True):
     make_differentiable(data)
     make_differentiable(args)
     # data = ...
@@ -42,7 +42,7 @@ class Langevin(nn.Module):
     if isinstance(energy, (list, tuple)):
       energy, *_ = energy
 
-    gradient = ag.grad(energy, data, torch.ones_like(energy))
+    gradient = ag.grad(energy, data, torch.ones_like(energy), create_graph=diffable)
     if isinstance(data, (list, tuple)):
       data = list(data)
       for idx, (rate, clamp, gradval) in enumerate(zip(
@@ -65,7 +65,7 @@ class Langevin(nn.Module):
 
   def integrate(self, score, data, *args):
     for idx in range(self.steps):
-      data = self.step(score, data, *args)
+      data = self.step(score, data, *args, diffable=False)
       data = detach(data)
     return data
 
@@ -82,7 +82,8 @@ class AugmentedLangevin(Langevin):
       if idx % self.transform_interval == 0 and not last_step:
         with torch.no_grad():
           data = self.transform(data)
-      data = self.step(score, data, *args)
+      data = self.step(score, data, *args, diffable=False)
+      #data = detach(data)
     return data
 
 class PackedLangevin(Langevin):
