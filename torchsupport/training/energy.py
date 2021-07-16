@@ -273,9 +273,8 @@ class EnergyTraining(AbstractEnergyTraining):
     data = detach(self.integrator.integrate(self.score, data, *args))
     self.score.train()
     detached = to_device(data, "cpu")
-    make_differentiable(args, toggle=False)
+    args = detach(args)
     update = self.decompose_batch(detached, *args)
-    make_differentiable(update, toggle=False)
     self.buffer.update(update)
 
     return to_device((detached, *args), self.device)
