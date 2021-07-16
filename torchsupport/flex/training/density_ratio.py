@@ -37,12 +37,13 @@ def base_dre_training(energy, base, data, train_base=True,
 def telescoping_density_ratio_training(energy, base, data, mixing=None,
                                        optimizer_kwargs=None,
                                        telescoping_step=tdre_step,
+                                       verbose=True,
                                        **kwargs):
   opt = filter_kwargs(kwargs, ctx=base_dre_training)
   ctx = base_dre_training(energy, base, data, **opt.ctx)
 
   ctx.add(tdre_step=UpdateStep(
-    partial(telescoping_step, ctx.energy, ctx.base, ctx.data, mixing=mixing),
+    partial(telescoping_step, ctx.energy, ctx.base, ctx.data, mixing=mixing, verbose=verbose),
     Update([ctx.energy], optimizer=ctx.optimizer, **(optimizer_kwargs or {})),
     ctx=ctx
   ))

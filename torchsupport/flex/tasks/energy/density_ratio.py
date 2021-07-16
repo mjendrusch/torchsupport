@@ -144,12 +144,13 @@ def run_tdre(energy, base, data, args, mixing=None):
     real=real, fake=fake, levels=levels, level_losses=level_losses
   )
 
-def tdre_step(energy, base, data, mixing=None, ctx=None):
+def tdre_step(energy, base, data, mixing=None, verbose=True, ctx=None):
   data, condition = data.sample(ctx.batch_size)
   loss, args = run_tdre(energy, base, data, condition, mixing=mixing)
   ctx.argmin(density_ratio_loss=loss)
-  log_levels(
-    "level loss", args.level_losses, args.levels, ctx=ctx)
+  if verbose:
+    log_levels(
+      "level loss", args.level_losses, args.levels, ctx=ctx)
   return args
 
 def run_tnce(energy, base, data, args, mixing=None,
@@ -173,13 +174,14 @@ def run_tnce(energy, base, data, args, mixing=None,
 
 def tnce_step(energy, base, data, mixing=None,
               noise_contrastive=probability_surface_estimation,
-              ctx=None):
+              verbose=True, ctx=None):
   data, condition = data.sample(ctx.batch_size)
   loss, args = run_tnce(
     energy, base, data, condition,
     mixing=mixing, noise_contrastive=noise_contrastive
   )
   ctx.argmin(density_ratio_loss=loss)
-  log_levels(
-    "level loss", args.level_losses, args.real_levels, ctx=ctx)
+  if verbose:
+    log_levels(
+      "level loss", args.level_losses, args.real_levels, ctx=ctx)
   return args
