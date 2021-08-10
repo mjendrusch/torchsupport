@@ -349,7 +349,6 @@ class SupervisedTraining(Training):
 
   def train(self):
     for epoch_id in range(self.max_epochs):
-      self.epoch_id = epoch_id
       for data in self.train_data:
         data = to_device(data, self.device)
         self.step(data)
@@ -357,6 +356,7 @@ class SupervisedTraining(Training):
         self.step_id += 1
       self.schedule_step()
       self.each_epoch()
+      self.epoch_id += 1
     return self.net
 
 class MaskedSupervisedTraining(SupervisedTraining):

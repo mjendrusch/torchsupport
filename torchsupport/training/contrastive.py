@@ -111,12 +111,11 @@ class AbstractContrastiveTraining(Training):
       persistent_workers=True
     )
     for epoch_id in range(self.max_epochs):
-      self.epoch_id = epoch_id
-
       for data in self.train_data:
         self.step(data)
         self.log()
         self.step_id += 1
+      self.epoch_id += 1
 
     return self.get_netlist(self.names)
 

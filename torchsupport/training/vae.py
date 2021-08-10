@@ -178,7 +178,6 @@ class AbstractVAETraining(Training):
   def train(self):
     """Trains a VAE until the maximum number of epochs is reached."""
     for epoch_id in range(self.max_epochs):
-      self.epoch_id = epoch_id
       self.train_data = None
       self.train_data = DataLoader(
         self.data, batch_size=self.batch_size, num_workers=8,
@@ -188,6 +187,7 @@ class AbstractVAETraining(Training):
         self.step(data)
         self.log()
         self.step_id += 1
+      self.epoch_id += 1
 
     netlist = self.get_netlist(self.network_names)
 
@@ -910,7 +910,6 @@ class LaggingInference(ABC):
     new_mi = 0
     self.step_id = 0
     for epoch_id in range(self.max_epochs):
-      self.epoch_id = epoch_id
       self.train_data = None
       self.train_data = DataLoader(
         self.data, batch_size=self.batch_size, num_workers=8,
@@ -926,6 +925,7 @@ class LaggingInference(ABC):
       valid_data = DataLoader(self.valid, batch_size=self.batch_size, shuffle=True)
       new_mi = self.compute_mi(next(iter(valid_data)))
       aggressive = new_mi > old_mi
+      self.epoch_id += 1
 
     netlist = [
       getattr(self, name)

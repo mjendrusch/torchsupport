@@ -189,7 +189,6 @@ class AbstractGANTraining(Training):
   def train(self):
     """Trains a GAN until the maximum number of epochs is reached."""
     for epoch_id in range(self.max_epochs):
-      self.epoch_id = epoch_id
       self.train_data = None
       self.train_data = DataLoader(
         self.data, batch_size=self.batch_size, num_workers=self.num_workers,
@@ -204,6 +203,7 @@ class AbstractGANTraining(Training):
         self.step(data)
         self.log()
         self.step_id += 1
+      self.epoch_id += 1
 
     generators = [
       getattr(self, name)
