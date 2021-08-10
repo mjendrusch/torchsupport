@@ -1,7 +1,7 @@
 from functools import partial
-from torchsupport.modules.backbones.diffusion.unet import DiffusionUNetBackbone, DiffusionUNetBackbone2
+from torchsupport.modules.backbones.diffusion.unet import DiffusionUNetBackbone, DiffusionUNetBackbone2, ExternalAttentionBlock, AttentionBlock
 from torchsupport.flex.tasks.energy.score_matching import linear_noise
-from torchsupport.flex.tasks.energy.relaxed_score_matching import NormalNoise
+from torchsupport.flex.tasks.energy.relaxed_score_matching import NormalNoise, TruncatedNormalNoise, VPNormalNoise
 from torchsupport.flex.training.score_matching import relaxed_score_matching_training
 from torchsupport.data.namedtuple import namespace
 
@@ -17,6 +17,7 @@ from torchvision.transforms import ToTensor
 from torchsupport.modules import ReZero
 from torchsupport.training.samplers import Langevin
 from torchsupport.utils.argparse import parse_options
+from torchsupport.structured.modules.attention import cross_attention, cross_low_rank_mvp, cross_gated_mvp
 from torchsupport.flex.log.log_types import LogImage
 from torchsupport.flex.context.context import TrainingContext
 from torchsupport.flex.data_distributions.data_distribution import DataDistribution
@@ -30,13 +31,15 @@ def valid_callback(args, ctx: TrainingContext=None):
       ctx.log(**{f"classified {idx}": LogImage(positive)})
 
 def generate_step(energy, integrator: Langevin=None, ctx=None):
-  sample = 5 * torch.randn(ctx.batch_size, 3, 32, 32, device=ctx.device)
+  sample = 1 * torch.randn(ctx.batch_size, 3, 32, 32, device=ctx.device)
   levels = torch.arange(0.0, 1.0, 0.01, device=ctx.device)
+  sigma = 0.01 * torch.ones(1, device=ctx.device)
   for level in reversed(levels):
     this_level = level * torch.ones(sample.size(0), device=sample.device)
     sample = integrator.integrate(
       ConditionalEnergy(energy, sample, shift=0.025), sample, this_level, None
     )
+    sample = sample / (1 - sigma[0] ** 2).sqrt()
   result = ((sample + 1) / 2).clamp(0, 1)
   ctx.log(samples=LogImage(result))
 
@@ -46,7 +49,7 @@ class CIFAR10Dataset(Dataset):
 
   def __getitem__(self, index):
     data, _ = self.data[index]
-    data = data + torch.randn_like(data) / 255
+    data = (255 * data + torch.rand_like(data)) / 256
     return 2 * data - 1, []
 
   def __len__(self):
@@ -149,30 +152,71 @@ class Energy(nn.Module):
 class UNetEnergy(nn.Module):
   def __init__(self):
     super().__init__()
-    self.project_in = nn.Conv2d(3, 32, 3, padding=1)
+    size = 128
+    self.project_in = nn.Conv2d(3, size, 3, padding=1)
     self.unet = DiffusionUNetBackbone2(
-      base=32, factors=[
-        [1, 2, 2],
-        [2, 4, 4],
-        [4, 8, 8]
-      ], attention_levels=[1, 2],
-      cond_size=128,
-      dropout=0.0, norm=False
+      base=size, factors=[
+        [1, 1, 2],
+        [2, 2, 2],
+        [2, 2, 2]
+      ], attention_levels=[],
+      cond_size=4 * size,
+      dropout=0.1, norm=True,
+      middle_attention=False,
+      kernel=cross_low_rank_mvp,
+      attention_block=AttentionBlock
     )
-    self.out = nn.Conv2d(32, 32, 3, padding=1)
+    self.out = nn.Conv2d(size, 3, 3, padding=1)
+    #with torch.no_grad():
+    #  for param in self.out.parameters():
+    #    param.zero_()
+
+  def forward(self, inputs, levels, *args):
+    #sigmas = 0.05 + levels * (10 - 0.05)
+    #inputs = (1 / (sigmas + 1))[:, None, None, None] * inputs
+    out = self.project_in(inputs)
+    unet = self.out(func.silu(self.unet(out, levels)))
+    #out = inputs - unet
+    out = ((inputs - unet).view(out.size(0), -1) ** 2).sum(dim=1, keepdim=True)
+    quadratic = torch.einsum("bchw,bchw->b", out, out)[:, None]
+    factor = 1 / (1e-3 + levels * (5 - 1e-3))
+    return -quadratic * factor
+
+class AdaptedUNetEnergy(nn.Module):
+  def __init__(self):
+    super().__init__()
+    size = 128
+    self.project_in = nn.Conv2d(3, size, 3, padding=1)
+    self.unet = DiffusionUNetBackbone2(
+      base=size, factors=[
+        [1, 1, 2],
+        [2, 2, 2],
+        [2, 2, 2]
+      ], attention_levels=[1, 2],
+      cond_size=4 * size,
+      dropout=0.1, norm=True,
+      middle_attention=True,
+      kernel=cross_attention,
+      attention_block=AttentionBlock
+    )
+    self.out = nn.Conv2d(size, 3, 3, padding=1)
     with torch.no_grad():
       for param in self.out.parameters():
         param.zero_()
-    self.zero = ReZero(32)
-    self.linear = nn.Linear(32, 1)
+    self.factor = nn.Parameter(torch.zeros(1, requires_grad=True))
 
   def forward(self, inputs, levels, *args):
+    #sigmas = 0.05 + levels * (10 - 0.05)
+    #inputs = (1 / (sigmas + 1))[:, None, None, None] * inputs
     out = self.project_in(inputs)
     unet = self.out(func.silu(self.unet(out, levels)))
-    # unet = self.zero(torch.zeros_like(unet), unet)
-    quadratic = torch.einsum("bchw,bchw->b", unet, out)[:, None]
-    linear = self.linear(func.silu(unet).mean(dim=(2, 3)))
-    return quadratic# + linear
+    #unet = unet + inputs # ensures same init as score matching unet!
+    out = inputs - unet
+    #quadratic = ((inputs - unet).view(out.size(0), -1) ** 2).sum(dim=1, keepdim=True)
+    quadratic = torch.einsum("bchw,bchw->b", out, out)[:, None] / 3072
+    factor = 1 / (2 * (1e-3 + levels * (5 - 1e-3)) ** 2)
+    result = -quadratic# * factor
+    return result * self.factor[0].exp()
 
 class TotalEnergy(nn.Module):
   def __init__(self, energy, levels):
@@ -196,19 +240,45 @@ class ConditionalEnergy(nn.Module):
 
   def forward(self, data, level, *args):
     raw_energy = self.energy(data, level)
-    dist = Normal(self.origin, self.shift)
-    cond = dist.log_prob(data)
-    cond = cond.view(cond.size(0), -1).mean(dim=1, keepdim=True)
-    return raw_energy + cond
+    #dist = Normal(self.origin, self.shift)
+    #cond = dist.log_prob(data)
+    #cond = cond.view(cond.size(0), -1).mean(dim=1, keepdim=True)
+    return raw_energy# + cond
+
+def scale_level(t):
+  dd = 32 * 32 * 3
+  sigma = 1e-3 + t * (5.0 - 1e-3)
+  eps = 0.001 * sigma
+  sigma2 = sigma ** 2
+  eps2 = eps ** 2
+  sigma4 = sigma2 ** 2
+  factor = 4 * sigma4 / ((3 * dd * eps2 + dd * (dd - 1) * eps2 + 4 * dd * sigma2) * eps2)
+  #factor = sigma4 / (dd * eps2)
+  #factor = sigma2 / (dd * eps2)
+  return torch.ones_like(sigma2)# * torch.ones_like(factor)
+
+def grad_action(params):
+  with torch.no_grad():
+    bad = False
+    for param in params:
+      if torch.isnan(param.grad).any():
+        bad = True
+        break
+    if bad:
+      for param in params:
+        param.grad.zero_()
+    else:
+      torch.nn.utils.clip_grad_norm_(params, 5.0)
 
 if __name__ == "__main__":
   opt = parse_options(
     "CIFAR10 EBM using RSM in flex.",
-    path="flexamples/cifar10-rsm-u-19",
+    path="/g/korbel/mjendrusch/runs/experimental/cifar10-rsm-exp-14-VP",
     device="cuda:0",
-    batch_size=32,
+    batch_size=128,
     max_epochs=1000,
-    report_interval=1000
+    report_interval=1000,
+    checkpoint_interval=50000,
   )
 
   cifar10 = CIFAR10("examples/", download=False, transform=ToTensor())
@@ -218,21 +288,26 @@ if __name__ == "__main__":
     device=opt.device
   )
 
-  energy = UNetEnergy().to(opt.device)
-  print(energy)
+  energy = AdaptedUNetEnergy().to(opt.device)
 
   training = relaxed_score_matching_training(
     energy, data,
-    optimizer_kwargs=dict(lr=1e-4),
-    level_weight=lambda t: (1e-3 + t * (5.0 - 1e-3)) ** 2,
-    level_distribution=NormalNoise(lambda t: 1e-3 + t * (5.0 - 1e-3)),
-    noise_distribution=NormalNoise(lambda t: 0.01 * (1e-3 + t * (5.0 - 1e-3))),
-    loss_scale=1000,
+    optimizer=torch.optim.Adam,
+    optimizer_kwargs=dict(lr=2e-4),
+    level_weight=scale_level,
+    level_distribution=VPNormalNoise(lambda t: 1e-3 + t * (1.0 - 1e-3)),
+    noise_distribution=VPNormalNoise(lambda t: 1e-2 * (1e-3 + t * (1.0 - 1e-3))), # TruncatedNormalNoise(lambda t: 0.01 * torch.ones_like(t))
+    loss_scale=3072,
+    ema_weight=0.9999,
     path=opt.path,
     device=opt.device,
     batch_size=opt.batch_size,
     max_epochs=opt.max_epochs,
-    report_interval=opt.report_interval
+    report_interval=opt.report_interval,
+    checkpoint_interval=opt.checkpoint_interval
+  )
+  training.get_step("tdre_step").extend_update(
+    gradient_action=grad_action
   )
 
   # add generating images every few steps:

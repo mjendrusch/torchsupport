@@ -44,6 +44,10 @@ class UpdateStep(Step):
     super().__init__(run, ctx=ctx)
     self.update = update
 
+  def extend_update(self, **kwargs):
+    for name, value in kwargs.items():
+      setattr(self.update, name, value)
+
   def write(self, data, name):
     super().write(data, name)
     if is_savable(self.update):

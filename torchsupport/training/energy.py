@@ -345,7 +345,7 @@ class EnergyTraining(AbstractEnergyTraining):
     if self.maximum_entropy:
       # Sampler entropy:
       compare_update = fake_update
-      compare_target = to_device(self.data_key(self.buffer.sample(100))[0], compare_update.device)
+      compare_target = to_device(self.data_key(self.buffer.sample(self.batch_size))[0], compare_update.device)
       if hasattr(self.score, "embed"):
         compare_update = self.target_score.embedding(compare_update)
         compare_target = self.target_score.embedding(compare_target)

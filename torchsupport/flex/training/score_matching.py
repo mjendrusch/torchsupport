@@ -3,7 +3,9 @@ from functools import partial
 from torchsupport.flex.tasks.energy.score_matching import linear_noise
 
 import torch
-from torchsupport.flex.tasks.energy.relaxed_score_matching import NormalNoise, relaxed_score_matching_step
+from torchsupport.flex.tasks.energy.relaxed_score_matching import (
+  NormalNoise, relaxed_score_matching_step, cnce_step, recovery_likelihood_step
+)
 
 from torchsupport.data.io import to_device
 from torchsupport.flex.step.step import UpdateStep
@@ -54,6 +56,54 @@ def relaxed_score_matching_training(energy, data,
       level_distribution=level_distribution,
       noise_distribution=noise_distribution,
       loss_scale=loss_scale
+    ),
+    Update([ctx.energy], optimizer=ctx.optimizer, **(optimizer_kwargs or {})),
+    ctx=ctx
+  ))
+  ctx.add(ema_step=partial(_ema_step, ema_weight=ema_weight, ctx=ctx))
+
+  return ctx
+
+def cnce_training(energy, data,
+                  optimizer_kwargs=None,
+                  level_distribution=NormalNoise(linear_noise(1e-3, 10.0)),
+                  noise_distribution=NormalNoise(1e-3),
+                  ema_weight=0.999,
+                  **kwargs):
+  opt = filter_kwargs(kwargs, ctx=base_sm_training)
+  ctx = base_sm_training(energy, data, **opt.ctx)
+
+  ctx.add(tdre_step=UpdateStep(
+    partial(
+      cnce_step, ctx.energy, ctx.data,
+      level_distribution=level_distribution,
+      noise_distribution=noise_distribution,
+    ),
+    Update([ctx.energy], optimizer=ctx.optimizer, **(optimizer_kwargs or {})),
+    ctx=ctx
+  ))
+  ctx.add(ema_step=partial(_ema_step, ema_weight=ema_weight, ctx=ctx))
+
+  return ctx
+
+def recovery_likelihood_training(energy, data,
+                                 optimizer_kwargs=None,
+                                 level_weight=1.0,
+                                 loss_scale=1.0,
+                                 level_distribution=NormalNoise(linear_noise(1e-3, 10.0)),
+                                 noise_distribution=NormalNoise(1e-3),
+                                 ema_weight=0.999,
+                                 **kwargs):
+  opt = filter_kwargs(kwargs, ctx=base_sm_training)
+  ctx = base_sm_training(energy, data, **opt.ctx)
+
+  ctx.add(recovery_likelihood_step=UpdateStep(
+    partial(
+      recovery_likelihood_step, ctx.energy, ctx.data,
+      level_weight=level_weight,
+      loss_scale=loss_scale,
+      level_distribution=level_distribution,
+      noise_distribution=noise_distribution,
     ),
     Update([ctx.energy], optimizer=ctx.optimizer, **(optimizer_kwargs or {})),
     ctx=ctx

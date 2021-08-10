@@ -1,4 +1,9 @@
 from functools import partial
+from torchsupport.modules.backbones.diffusion.unet import DiffusionUNetBackbone, DiffusionUNetBackbone2, ExternalAttentionBlock, AttentionBlock
+from torchsupport.flex.tasks.energy.score_matching import linear_noise
+from torchsupport.flex.tasks.energy.relaxed_score_matching import NormalNoise, TruncatedNormalNoise
+from torchsupport.flex.tasks.energy.density_ratio import direct_mixing, noise_contrastive_estimation, probability_surface_estimation, random_dim_mixing, tdre_mixing, tnce_step, independent_mixing, vp_mixing, tdre_step
+from torchsupport.flex.training.density_ratio import telescoping_density_ratio_training
 from torchsupport.data.namedtuple import namespace
 
 import torch
@@ -13,11 +18,10 @@ from torchvision.transforms import ToTensor
 from torchsupport.modules import ReZero
 from torchsupport.training.samplers import Langevin
 from torchsupport.utils.argparse import parse_options
+from torchsupport.structured.modules.attention import cross_attention, cross_low_rank_mvp, cross_gated_mvp
 from torchsupport.flex.log.log_types import LogImage
 from torchsupport.flex.context.context import TrainingContext
 from torchsupport.flex.data_distributions.data_distribution import DataDistribution
-from torchsupport.flex.tasks.energy.density_ratio import direct_mixing, noise_contrastive_estimation, probability_surface_estimation, random_dim_mixing, tdre_mixing, tdre_step, tnce_step, independent_mixing, vp_mixing
-from torchsupport.flex.training.density_ratio import telescoping_density_ratio_training
 
 def valid_callback(args, ctx: TrainingContext=None):
   ctx.log(images=LogImage(args.sample))
@@ -27,9 +31,9 @@ def valid_callback(args, ctx: TrainingContext=None):
     if positive.size(0) != 0:
       ctx.log(**{f"classified {idx}": LogImage(positive)})
 
-def generate_step(energy, base, integrator: Langevin=None, ctx=None):
-  sample = base.sample(ctx.batch_size)
-  levels = torch.arange(0.0, 1.0, 0.01, device=opt.device)
+def generate_step(energy, integrator: Langevin=None, ctx=None):
+  sample = 1 * torch.randn(ctx.batch_size, 3, 32, 32, device=ctx.device)
+  levels = torch.arange(0.0, 1.0, 0.01, device=ctx.device)
   for level in reversed(levels):
     this_level = level * torch.ones(sample.size(0), device=sample.device)
     sample = integrator.integrate(
@@ -44,7 +48,7 @@ class CIFAR10Dataset(Dataset):
 
   def __getitem__(self, index):
     data, _ = self.data[index]
-    data = data + torch.randn_like(data) / 255
+    data = (255 * data + torch.rand_like(data)) / 256
     return 2 * data - 1, []
 
   def __len__(self):
@@ -115,9 +119,8 @@ class ResBlock(nn.Module):
     return self.zero(inputs, out)
 
 class Energy(nn.Module):
-  def __init__(self, base):
+  def __init__(self):
     super().__init__()
-    self.base = base
     self.conv = nn.ModuleList([
       nn.Conv2d(3, 32, 3, padding=1),
       nn.Conv2d(32, 64, 3, padding=1),
@@ -131,7 +134,7 @@ class Energy(nn.Module):
       ResBlock(256),
     ])
     self.W = nn.Linear(256, 256)
-    self.Z = nn.Sequential(SineEmbedding(256), nn.Linear(256, 1))
+    self.b = nn.Linear(256, 1)
 
   def forward(self, inputs, levels, *args):
     out = inputs
@@ -143,18 +146,70 @@ class Energy(nn.Module):
     features = features.view(features.size(0), -1)
     quadratic = (features * self.W(features)).sum(dim=1, keepdim=True)
     linear = self.b(features)
-    return quadratic + self.Z(levels)
+    return quadratic + linear
 
-class OffsetEnergy(nn.Module):
-  def __init__(self, energy, shift=0.01):
+class UNetEnergy(nn.Module):
+  def __init__(self):
     super().__init__()
-    self.energy = energy
-    self.shift = shift
+    size = 128
+    self.project_in = nn.Conv2d(3, size, 3, padding=1)
+    self.unet = DiffusionUNetBackbone2(
+      base=size, factors=[
+        [1, 1, 2],
+        [2, 2, 2],
+        [2, 2, 2]
+      ], attention_levels=[],
+      cond_size=4 * size,
+      dropout=0.1, norm=True,
+      middle_attention=False,
+      kernel=cross_low_rank_mvp,
+      attention_block=AttentionBlock
+    )
+    self.out = nn.Conv2d(size, 3, 3, padding=1)
+    #with torch.no_grad():
+    #  for param in self.out.parameters():
+    #    param.zero_()
 
   def forward(self, inputs, levels, *args):
-    fake = self.energy(inputs, levels + self.shift, *args)
-    real = self.energy(inputs, levels, *args)
-    return real - fake
+    #sigmas = 0.05 + levels * (10 - 0.05)
+    #inputs = (1 / (sigmas + 1))[:, None, None, None] * inputs
+    levels = 30 * levels
+    out = self.project_in(inputs)
+    unet = self.out(func.silu(self.unet(out, levels)))
+    #out = inputs - unet
+    out = ((inputs - unet).view(out.size(0), -1) ** 2).sum(dim=1, keepdim=True)
+    quadratic = torch.einsum("bchw,bchw->b", out, out)[:, None]
+    factor = 1 / (1e-3 + levels * (5 - 1e-3))
+    return -quadratic * factor
+
+class AdaptedUNetEnergy(nn.Module):
+  def __init__(self):
+    super().__init__()
+    size = 128
+    self.project_in = nn.Conv2d(3, size, 3, padding=1)
+    self.unet = DiffusionUNetBackbone2(
+      base=size, factors=[
+        [1, 1, 2],
+        [2, 2, 2],
+        [2, 2, 2]
+      ], attention_levels=[1, 2],
+      cond_size=4 * size,
+      dropout=0.1, norm=True,
+      middle_attention=True,
+      kernel=cross_attention,
+      attention_block=AttentionBlock
+    )
+    self.out = nn.Conv2d(size, 3, 3, padding=1)
+    self.time = SineEmbedding(512, depth=2)
+    self.Z = nn.Linear(512, 1)
+    self.factor = nn.Linear(512, 1)
+
+  def forward(self, inputs, levels, *args):
+    out = self.project_in(inputs)
+    unet = self.out(func.silu(self.unet(out, levels)))
+    quadratic = torch.einsum("bchw,bchw->b", unet, inputs)[:, None]
+    time = self.time(levels)
+    return func.softplus(self.factor(time)) * quadratic + self.Z(time)
 
 class TotalEnergy(nn.Module):
   def __init__(self, energy, levels):
@@ -178,19 +233,41 @@ class ConditionalEnergy(nn.Module):
 
   def forward(self, data, level, *args):
     raw_energy = self.energy(data, level)
-    dist = Normal(self.origin, self.shift)
-    cond = dist.log_prob(data)
-    cond = cond.view(cond.size(0), -1).mean(dim=1, keepdim=True)
-    return raw_energy + cond
+    #dist = Normal(self.origin, self.shift)
+    #cond = dist.log_prob(data)
+    #cond = cond.view(cond.size(0), -1).mean(dim=1, keepdim=True)
+    return raw_energy# + cond
+
+class EnergyRatio(nn.Module):
+  def __init__(self, energy, shift=1e-3):
+    super().__init__()
+    self.energy = energy
+    self.shift = shift
+
+  def forward(self, data, level, *args):
+    return self.energy(data, level, *args) - self.energy(data, level + self.shift, *args)
+
+def scale_level(t):
+  dd = 32 * 32 * 3
+  sigma = 1e-3 + t * (5.0 - 1e-3)
+  eps = 0.001 * sigma
+  sigma2 = sigma ** 2
+  eps2 = eps ** 2
+  sigma4 = sigma2 ** 2
+  factor = 4 * sigma4 / ((3 * dd * eps2 + dd * (dd - 1) * eps2 + 4 * dd * sigma2) * eps2)
+  #factor = sigma4 / (dd * eps2)
+  #factor = sigma2 / (dd * eps2)
+  return factor
 
 if __name__ == "__main__":
   opt = parse_options(
-    "CIFAR10 EBM using TNCE in flex.",
-    path="/g/korbel/mjendrusch/runs/experimental/cifar10-tdre-1",
+    "CIFAR10 EBM using RSM in flex.",
+    path="/g/korbel/mjendrusch/runs/experimental/cifar10-tnce-1-ratio",
     device="cuda:0",
     batch_size=128,
     max_epochs=1000,
-    report_interval=1000
+    report_interval=1000,
+    checkpoint_interval=50000,
   )
 
   cifar10 = CIFAR10("examples/", download=False, transform=ToTensor())
@@ -200,21 +277,21 @@ if __name__ == "__main__":
     device=opt.device
   )
 
+  energy = AdaptedUNetEnergy().to(opt.device)
+  ratio = EnergyRatio(energy, shift=1e-2)
   base = Base().to(opt.device)
-  energy = Energy(base).to(opt.device)
-
-  levels = torch.arange(0.0, 1.0, 0.01, device=opt.device)
 
   training = telescoping_density_ratio_training(
     energy, base, data,
     mixing=partial(
       independent_mixing,
-      mixing=tdre_mixing,
-      levels=levels
+      mixing=direct_mixing,
+      levels=torch.arange(0.0, 1.0, 1e-2, device=opt.device)
     ),
-    optimizer_kwargs=dict(lr=1e-4),
+    optimizer_kwargs=dict(lr=1e-3),
     telescoping_step=tdre_step,
     train_base=False,
+    verbose=False,
     path=opt.path,
     device=opt.device,
     batch_size=opt.batch_size,
@@ -230,16 +307,12 @@ if __name__ == "__main__":
   )
   training.add(
     generate_step=partial(
-      generate_step, energy=energy,
-      base=base, integrator=integrator,
+      generate_step, energy=training.energy,
+      integrator=integrator,
       ctx=training
     ),
     every=opt.report_interval
   )
-  # training.get_step("tdre_step").extend(
-  #   lambda args, ctx=None:
-  #     ctx.log(real_images=LogImage(args.real_data.clamp(0, 1)))
-  # )
 
   training.load()
   training.train()
