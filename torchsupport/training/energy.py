@@ -129,7 +129,6 @@ class AbstractEnergyTraining(Training):
   def train(self):
     """Trains an EBM until the maximum number of epochs is reached."""
     for epoch_id in range(self.max_epochs):
-      self.epoch_id = epoch_id
       self.train_data = None
       self.train_data = DataLoader(
         self.data, batch_size=self.batch_size, num_workers=self.num_workers,
@@ -140,6 +139,7 @@ class AbstractEnergyTraining(Training):
         self.step(data)
         self.log()
         self.step_id += 1
+      self.epoch_id += 1
 
     scores = [
       getattr(self, name)

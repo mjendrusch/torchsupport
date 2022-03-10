@@ -171,7 +171,6 @@ class ClusteringTraining(Training):
 
   def train(self):
     for epoch_id in range(self.max_epochs):
-      self.epoch_id = epoch_id
       embedding = self.embed_all()
       weights, labels, centers = self.cluster(embedding)
 
@@ -187,6 +186,7 @@ class ClusteringTraining(Training):
         self.step(data, label, centers)
         self.log()
         self.step_id += 1
+      self.epoch_id += 1
 
     return self.net
 
@@ -319,8 +319,6 @@ class ClusterAETraining(ClusteringTraining):
 
   def train(self):
     for epoch_id in range(self.max_epochs):
-      self.epoch_id = epoch_id
-
       self.train_data = None
       self.train_data = DataLoader(
         self.data, batch_size=self.batch_size, num_workers=8, shuffle=True
@@ -333,6 +331,7 @@ class ClusterAETraining(ClusteringTraining):
 
       self.each_cluster()
       self.alpha *= float(np.power(2.0, (-(np.log(epoch_id + 1) ** 2))))
+      self.epoch_id += 1
 
     return self.net
 
@@ -451,8 +450,6 @@ class DEPICTTraining(ClusteringTraining):
     self.data.labels[expectation.argmax(dim=1)] = 1
 
     for epoch_id in range(self.max_epochs):
-      self.epoch_id = epoch_id
-
       self.train_data = None
       self.train_data = DataLoader(
         self.data, batch_size=self.batch_size, num_workers=8,
@@ -470,6 +467,7 @@ class DEPICTTraining(ClusteringTraining):
         labels.numpy()
       )
       self.data.labels = expectation.to("cpu").squeeze()
+      self.epoch_id += 1
 
     return self.net
 
@@ -532,7 +530,6 @@ class HierarchicalClusteringTraining(ClusteringTraining):
 
   def train(self):
     for epoch_id in range(self.max_epochs):
-      self.epoch_id = epoch_id
       embedding = self.embed_all()
 
       label_hierarchy = []
@@ -556,6 +553,7 @@ class HierarchicalClusteringTraining(ClusteringTraining):
           self.step(data, label, center_hierarchy)
           self.log()
           self.step_id += 1
+      self.epoch_id += 1
 
     return self.net
 
