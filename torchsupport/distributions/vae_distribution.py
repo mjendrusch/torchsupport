@@ -10,9 +10,9 @@ class VAEDistribution(nn.Module, Distribution):
     self.prior = prior
 
   def forward(self, inputs):
-    q = self.encode(inputs)
+    q = self.encoder(inputs)
     sample = q.rsample()
-    d = self.decode(sample)
+    d = self.decoder(sample)
     rec = d.log_prob(inputs).view(inputs.size(0), -1).sum(dim=1, keepdim=True)
     log_p = self.prior.log_prob(sample).view(inputs.size(0), -1)
     log_q = q.log_prob(sample).view(inputs.size(0), -1)
@@ -24,7 +24,7 @@ class VAEDistribution(nn.Module, Distribution):
 
   def rsample(self, sample_shape=torch.Size()):
     prior = self.prior.rsample(sample_shape=sample_shape)
-    decoded = self.decode(prior)
+    decoded = self.decoder(prior)
     return decoded.rsample()
 
   def sample(self, sample_shape=torch.Size()):

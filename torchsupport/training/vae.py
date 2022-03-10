@@ -128,7 +128,7 @@ class AbstractVAETraining(Training):
       for param in val.parameters()
     ]
     gn = nn.utils.clip_grad_norm_(parameters, self.gradient_clip)
-    print(gn)
+    self.current_losses["gradient norm"] = float(gn)
     if (not torch.isnan(gn).any()) and (gn < self.gradient_skip).all():
       self.optimizer.step()
     self.each_step()
@@ -261,9 +261,9 @@ class VAETraining(AbstractVAETraining):
 
   def loss(self, posterior, prior, prior_target, reconstruction, target, args):
     ce = self.reconstruction_loss(reconstruction, target)
-    kld = self.divergence_loss(posterior, prior_target)
+    kld = self.divergence_loss(posterior, prior)#_target)
     kld_prior = self.divergence_loss(detach(posterior), prior)
-    loss_val = self.reconstruction_weight * ce + self.divergence_weight * (kld - kld.detach() + kld_prior)
+    loss_val = self.reconstruction_weight * ce + self.divergence_weight * (kld)# - kld.detach() + kld_prior)
     self.current_losses["reconstruction-log-likelihood"] = float(ce)
     self.current_losses["kullback-leibler-divergence-prior"] = float(kld_prior)
     self.current_losses["kullback-leibler-divergence"] = float(kld)
@@ -276,7 +276,7 @@ class VAETraining(AbstractVAETraining):
     posterior, *other = self.encoder(data, *args)
     prior = self.prior(*other, *args)
     with torch.no_grad():
-      prior_target = self.prior(*other, *args)
+      prior_target = self.prior_target(*other, *args)
     sample = self.sample(posterior)
     reconstruction = self.decoder(sample, *other, *args)
     return posterior, prior, prior_target, reconstruction, data, args
@@ -316,6 +316,38 @@ class VAETraining(AbstractVAETraining):
       self.writer.add_images("generated", self.shape_adjust(generated), self.step_id)
     self.writer.add_images("target", self.shape_adjust(target), self.step_id)
     self.writer.add_images("reconstruction", self.shape_adjust(self.display(reconstruction)), self.step_id)
+
+class ConsistentVAETraining(VAETraining):
+  """Standard VAE training setup."""
+  def __init__(self, encoder, decoder, prior, data,
+               consistency_penalty=1.0,
+               consistent_latent=lambda x: x,
+               **kwargs):
+    super().__init__(encoder, decoder, prior, data, **kwargs)
+    self.consistency_penalty = consistency_penalty
+    self.consistent_latent = consistent_latent
+
+  def run_networks(self, data, *args):
+    original = super().run_networks(data[0], *args)
+    transformed = super().run_networks(data[1], *args)
+    return original, transformed
+
+  def loss(self, original, transformed):
+    transformed_kl = super().loss(*transformed)
+    original_kl = super().loss(*original)
+    kl_loss = (original_kl + transformed_kl) / 2
+    consistency_loss = match(
+      self.consistent_latent(transformed[0]),
+      self.consistent_latent(original[0])
+    )
+    rev_consistency_loss = match(
+      self.consistent_latent(original[0]),
+      self.consistent_latent(transformed[0])
+    )
+    return kl_loss + self.consistency_penalty * (consistency_loss + rev_consistency_loss) / 2
+
+  def each_generate(self, original, transformed):
+      return super().each_generate(*original)
 
 class AETraining(AbstractVAETraining):
   """Plain autoencoder training setup."""
